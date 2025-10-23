@@ -500,26 +500,21 @@ export default function WeeklyCalendar() {
     const { session, startTime, duration, position, totalOverlaps } = calClass;
     
     // Calculate position - increased slot height to 100px per 30min for maximum visibility
-    const top = ((startTime - (startHour * 60)) / 30) * 100; // 100px per 30min slot for MUCH better visibility
-    const height = Math.max((duration / 30) * 100, 120); // Minimum 120px height - very generous
-    // Use pixel-based positioning for consistent width - cards will be MUCH wider
-    const cardPadding = 4; // Small padding from edges
-    const gapBetweenCards = 3; // Tiny gap when overlapping
-    const availableWidth = `calc(100% - ${cardPadding * 2}px)`;
+    const top = ((startTime - (startHour * 60)) / 30) * 100; // 100px per 30min slot
+    const height = Math.max((duration / 30) * 100, 120); // Minimum 120px height
     
+    // SIMPLIFIED width calculation - cards take almost full width
     let width: string;
     let left: string;
     
     if (totalOverlaps > 1) {
-      // When overlapping, distribute width with minimal gaps
-      const widthPerCard = `calc((100% - ${cardPadding * 2 + gapBetweenCards * (totalOverlaps - 1)}px) / ${totalOverlaps})`;
-      const leftOffset = `calc(${cardPadding}px + (${position} * ((100% - ${cardPadding * 2}px) / ${totalOverlaps} + ${gapBetweenCards}px)))`;
-      width = widthPerCard;
-      left = leftOffset;
+      // Overlapping: divide width equally with small gap
+      width = `calc(${100 / totalOverlaps}% - 6px)`;
+      left = `calc(${position * (100 / totalOverlaps)}% + 3px)`;
     } else {
-      // Single card takes nearly full width
-      width = availableWidth;
-      left = `${cardPadding}px`;
+      // Single card: take full width minus small margins
+      width = 'calc(100% - 6px)';
+      left = '3px';
     }
     
     // Color based on status and fill rate - VIBRANT SOLID COLORS
@@ -563,7 +558,7 @@ export default function WeeklyCalendar() {
           width,
           left,
         }}
-        className={`${bgColor} ${borderColor} ${textColor} ${shadowColor} border-l-[4px] rounded-xl shadow-lg p-4 cursor-pointer hover:shadow-2xl hover:scale-105 hover:z-20 transition-all duration-200`}
+        className={`${bgColor} ${borderColor} ${textColor} ${shadowColor} border-l-[5px] rounded-xl shadow-xl p-5 cursor-pointer hover:shadow-2xl hover:scale-105 hover:z-20 transition-all duration-200`}
         onMouseEnter={() => setHoveredClass(session)}
         onMouseLeave={() => setHoveredClass(null)}
         onClick={() => {
@@ -580,23 +575,23 @@ export default function WeeklyCalendar() {
         }}
       >
         <div className="flex flex-col h-full justify-between gap-2">
-          <div>
-            <div className="font-black text-lg leading-tight mb-2 line-clamp-2 drop-shadow-sm">{session.Class}</div>
-            <div className="text-base font-semibold opacity-95 truncate mb-1.5">
-              <span className="mr-1">👤</span>
+          <div className="space-y-1">
+            <div className="font-black text-xl leading-tight mb-2 line-clamp-2 drop-shadow-sm break-words">{session.Class}</div>
+            <div className="text-lg font-bold opacity-95 truncate">
+              <span className="mr-1.5">👤</span>
               {session.Trainer}
             </div>
-            <div className="text-sm font-medium opacity-90 truncate">
-              <span className="mr-1">📍</span>
+            <div className="text-base font-semibold opacity-90 truncate">
+              <span className="mr-1.5">📍</span>
               {session.Location}
             </div>
           </div>
-          <div className="flex items-center justify-between text-sm mt-auto pt-2 border-t border-white/30">
-            <span className="font-semibold opacity-95">
+          <div className="flex items-center justify-between text-base mt-auto pt-2 border-t-2 border-white/30">
+            <span className="font-bold opacity-95 text-lg">
               {session.Time.substring(0, 5)}
             </span>
             {session.CheckedIn !== undefined && (
-              <span className="font-black px-3 py-1.5 bg-white/90 text-gray-900 rounded-lg text-base shadow-md">
+              <span className="font-black px-3 py-1.5 bg-white/95 text-gray-900 rounded-lg text-lg shadow-md">
                 {session.CheckedIn}/{session.Capacity}
               </span>
             )}
@@ -852,7 +847,7 @@ export default function WeeklyCalendar() {
 
           {/* Days Grid */}
           <div className="flex-1 overflow-x-auto">
-            <div className="grid grid-cols-7 min-w-[1400px]">
+            <div className="grid grid-cols-7 min-w-[1800px]">
               {/* Day Headers */}
               {weekDays.map((day, idx) => {
                 const isToday = isSameDay(day, new Date());
