@@ -534,63 +534,83 @@ const renderClassBlock = (calClass: CalendarClass) => {
   const top = ((startTime - (startHour * 60)) / 30) * timeSlotHeight;
   const height = Math.max((duration / 30) * timeSlotHeight, 120); // Minimum 120px height
   
-  // FIXED: Better width calculation for overlapping classes
-  let width: string;
-  let left: string;
+  // Calculate card dimensions for overlapping classes
+  // Make overlapping cards wide and short (stacked vertically) instead of tall and narrow (side by side)
+  const cardHeight = totalOverlaps > 1 
+    ? Math.max(80, height / totalOverlaps - 4) // Divide height among overlapping cards, minimum 80px
+    : height;
   
-  if (totalOverlaps > 1) {
-    const overlapWidth = 100 / totalOverlaps;
-    // INCREASED: Cards are now wider when collapsed
-    width = `calc(${overlapWidth}% - 6px)`;
-    left = `calc(${position * overlapWidth}% + 3px)`;
-  } else {
-    width = 'calc(100% - 12px)';
-    left = '6px';
-  }
+  const cardTop = totalOverlaps > 1 
+    ? top + (position * (height / totalOverlaps)) // Stack vertically
+    : top;
   
-  // Color based on status and fill rate
-  const isActive = session.Status === 'Active';
-  const fillRate = session.FillRate || (session.Capacity > 0 ? (session.CheckedIn / session.Capacity) * 100 : 0);
+  const width = 'calc(100% - 12px)'; // Always full width
+  const left = '6px'; // Always centered
   
-  let bgColor = 'bg-gray-400';
-  let borderColor = 'border-gray-700';
-  let textColor = 'text-white';
-  
-  if (isActive) {
-    if (fillRate >= 80) {
-      bgColor = 'bg-gradient-to-br from-emerald-500 to-green-600';
-      borderColor = 'border-emerald-700';
-    } else if (fillRate >= 50) {
-      bgColor = 'bg-gradient-to-br from-blue-500 to-indigo-600';
-      borderColor = 'border-blue-700';
-    } else {
-      bgColor = 'bg-gradient-to-br from-amber-500 to-orange-600';
-      borderColor = 'border-amber-700';
+  // Generate unique color for each class format using hash
+  const getClassColor = (className: string) => {
+    let hash = 0;
+    for (let i = 0; i < className.length; i++) {
+      hash = className.charCodeAt(i) + ((hash << 5) - hash);
     }
-  }
+    
+    const colors = [
+      { bg: 'bg-rose-500', border: 'border-t-rose-600', text: 'text-white' },
+      { bg: 'bg-pink-500', border: 'border-t-pink-600', text: 'text-white' },
+      { bg: 'bg-fuchsia-500', border: 'border-t-fuchsia-600', text: 'text-white' },
+      { bg: 'bg-purple-500', border: 'border-t-purple-600', text: 'text-white' },
+      { bg: 'bg-violet-500', border: 'border-t-violet-600', text: 'text-white' },
+      { bg: 'bg-indigo-500', border: 'border-t-indigo-600', text: 'text-white' },
+      { bg: 'bg-blue-500', border: 'border-t-blue-600', text: 'text-white' },
+      { bg: 'bg-sky-500', border: 'border-t-sky-600', text: 'text-white' },
+      { bg: 'bg-cyan-500', border: 'border-t-cyan-600', text: 'text-white' },
+      { bg: 'bg-teal-500', border: 'border-t-teal-600', text: 'text-white' },
+      { bg: 'bg-emerald-500', border: 'border-t-emerald-600', text: 'text-white' },
+      { bg: 'bg-green-500', border: 'border-t-green-600', text: 'text-white' },
+      { bg: 'bg-lime-500', border: 'border-t-lime-600', text: 'text-white' },
+      { bg: 'bg-yellow-500', border: 'border-t-yellow-600', text: 'text-gray-900' },
+      { bg: 'bg-amber-500', border: 'border-t-amber-600', text: 'text-white' },
+      { bg: 'bg-orange-500', border: 'border-t-orange-600', text: 'text-white' },
+      { bg: 'bg-red-500', border: 'border-t-red-600', text: 'text-white' },
+    ];
+    
+    return colors[Math.abs(hash) % colors.length];
+  };
+  
+  const isActive = session.Status === 'Active';
+  const classColor = getClassColor(session.Class);
+  
+  let bgColor = isActive ? classColor.bg : 'bg-gray-400';
+  let borderColor = isActive ? classColor.border : 'border-t-gray-600';
+  let textColor = isActive ? classColor.text : 'text-white';
   
   return (
     <motion.div
       key={`${session.Date}-${session.Time}-${session.Class}-${session.Trainer}`}
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.95 }}
+      initial={{ opacity: 0, y: 20, scale: 0.9 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -20, scale: 0.9 }}
       whileHover={{ 
-        scale: 1.08,
-        width: totalOverlaps > 1 ? 'calc(100% - 12px)' : undefined,
-        left: totalOverlaps > 1 ? '6px' : undefined,
+        scale: 1.03,
         zIndex: 50,
-        transition: { duration: 0.2 }
+        y: -4,
+        height: totalOverlaps > 1 ? `${height}px` : undefined, // Expand to full height on hover if overlapping
+        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.4)',
+        transition: { 
+          type: "spring",
+          stiffness: 400,
+          damping: 25
+        }
       }}
       style={{
         position: 'absolute',
-        top: `${top}px`,
-        height: `${height}px`,
+        top: `${cardTop}px`,
+        height: `${cardHeight}px`,
         width,
         left,
         zIndex: 10 + position,
       }}
-      className={`${bgColor} ${borderColor} ${textColor} border-l-[5px] rounded-xl shadow-xl p-4 cursor-pointer hover:shadow-2xl transition-shadow duration-200`}
+      className={`${bgColor} ${borderColor} ${textColor} border-4 border-white border-t-8 rounded-xl shadow-lg p-3 cursor-pointer backdrop-blur-sm overflow-hidden`}
       onMouseEnter={() => setHoveredClass(session)}
       onMouseLeave={() => setHoveredClass(null)}
       onClick={() => {
@@ -605,25 +625,23 @@ const renderClassBlock = (calClass: CalendarClass) => {
         setShowDrilldown(true);
       }}
     >
-      {/* SIMPLIFIED content to ensure it's visible */}
+      {/* Wide and short layout - optimized for horizontal space */}
       <div className="flex flex-col h-full justify-between">
-        <div className="flex-1">
-          <div className="font-bold text-sm leading-tight mb-1 line-clamp-2 break-words">
+        <div className="flex items-center justify-between gap-2 min-h-0">
+          <div className="font-bold text-base leading-tight truncate flex-1">
             {session.Class || 'Unnamed Class'}
           </div>
-          <div className="text-xs opacity-90 truncate">
-            {session.Trainer || 'No Trainer'}
+          <div className="text-sm font-semibold whitespace-nowrap opacity-90">
+            {session.CheckedIn || 0}/{session.Capacity || 0}
           </div>
         </div>
-        <div className="flex items-center justify-between text-xs mt-1 pt-1 border-t border-white/30">
-          <span className="font-semibold opacity-90">
-            {session.Time ? session.Time.substring(0, 5) : 'No Time'}
-          </span>
-          {session.CheckedIn !== undefined && session.Capacity !== undefined && (
-            <span className="font-bold px-1.5 py-0.5 bg-white/20 rounded text-xs">
-              {session.CheckedIn}/{session.Capacity}
-            </span>
-          )}
+        <div className="flex items-center justify-between gap-2 mt-1">
+          <div className="text-sm truncate flex-1">
+            👤 {session.Trainer || 'No Trainer'}
+          </div>
+          <div className="text-sm whitespace-nowrap">
+            🕐 {session.Time ? session.Time.substring(0, 5) : 'No Time'}
+          </div>
         </div>
       </div>
     </motion.div>
