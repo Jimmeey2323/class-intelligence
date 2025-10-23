@@ -540,8 +540,9 @@ const renderClassBlock = (calClass: CalendarClass) => {
   
   if (totalOverlaps > 1) {
     const overlapWidth = 100 / totalOverlaps;
-    width = `calc(${overlapWidth}% - 8px)`;
-    left = `calc(${position * overlapWidth}% + 4px)`;
+    // INCREASED: Cards are now wider when collapsed
+    width = `calc(${overlapWidth}% - 6px)`;
+    left = `calc(${position * overlapWidth}% + 3px)`;
   } else {
     width = 'calc(100% - 12px)';
     left = '6px';
@@ -574,15 +575,22 @@ const renderClassBlock = (calClass: CalendarClass) => {
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95 }}
+      whileHover={{ 
+        scale: 1.08,
+        width: totalOverlaps > 1 ? 'calc(100% - 12px)' : undefined,
+        left: totalOverlaps > 1 ? '6px' : undefined,
+        zIndex: 50,
+        transition: { duration: 0.2 }
+      }}
       style={{
         position: 'absolute',
         top: `${top}px`,
         height: `${height}px`,
         width,
         left,
-        zIndex: 10 + position, // Ensure overlapping classes stack properly
+        zIndex: 10 + position,
       }}
-      className={`${bgColor} ${borderColor} ${textColor} border-l-[5px] rounded-xl shadow-lg p-3 cursor-pointer hover:shadow-xl hover:scale-105 hover:z-30 transition-all duration-200 min-h-0 overflow-hidden`}
+      className={`${bgColor} ${borderColor} ${textColor} border-l-[5px] rounded-xl shadow-xl p-4 cursor-pointer hover:shadow-2xl transition-shadow duration-200`}
       onMouseEnter={() => setHoveredClass(session)}
       onMouseLeave={() => setHoveredClass(null)}
       onClick={() => {
