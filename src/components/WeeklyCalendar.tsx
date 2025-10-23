@@ -220,26 +220,47 @@ export default function WeeklyCalendar() {
     
     console.log('🔍 Skip reasons:', skipReasons);
 
-    // Calculate overlaps for each day
+    // Calculate overlaps for each day - FIXED ALGORITHM
     for (let day = 0; day < 7; day++) {
       const dayClasses = classes.filter(c => c.dayIndex === day).sort((a, b) => a.startTime - b.startTime);
       
+      // Create overlap groups
+      const overlapGroups: CalendarClass[][] = [];
+      
       for (let i = 0; i < dayClasses.length; i++) {
         const current = dayClasses[i];
-        const overlapping = [current];
+        let addedToGroup = false;
         
-        for (let j = i + 1; j < dayClasses.length; j++) {
-          const next = dayClasses[j];
-          if (next.startTime < current.startTime + current.duration) {
-            overlapping.push(next);
+        // Check if this class overlaps with any existing group
+        for (const group of overlapGroups) {
+          const overlapsWithGroup = group.some(cls => {
+            const clsEnd = cls.startTime + cls.duration;
+            const currentEnd = current.startTime + current.duration;
+            // Check if they overlap: current starts before cls ends AND cls starts before current ends
+            return current.startTime < clsEnd && cls.startTime < currentEnd;
+          });
+          
+          if (overlapsWithGroup) {
+            group.push(current);
+            addedToGroup = true;
+            break;
           }
         }
         
-        overlapping.forEach((cls, idx) => {
-          cls.position = idx;
-          cls.totalOverlaps = Math.max(cls.totalOverlaps, overlapping.length);
-        });
+        // If not added to any group, create new group
+        if (!addedToGroup) {
+          overlapGroups.push([current]);
+        }
       }
+      
+      // Now assign positions within each overlap group
+      overlapGroups.forEach(group => {
+        const totalOverlaps = group.length;
+        group.forEach((cls, idx) => {
+          cls.position = idx;
+          cls.totalOverlaps = totalOverlaps;
+        });
+      });
     }
 
     console.log('📅 Calendar classes created:', classes.length);
@@ -495,111 +516,111 @@ export default function WeeklyCalendar() {
     );
   };
 
-  // Render class block
-  const renderClassBlock = (calClass: CalendarClass) => {
-    const { session, startTime, duration, position, totalOverlaps } = calClass;
-    
-    // Calculate position - increased slot height to 100px per 30min for maximum visibility
-    const top = ((startTime - (startHour * 60)) / 30) * 100; // 100px per 30min slot
-    const height = Math.max((duration / 30) * 100, 120); // Minimum 120px height
-    
-    // SIMPLIFIED width calculation - cards take almost full width
-    let width: string;
-    let left: string;
-    
-    if (totalOverlaps > 1) {
-      // Overlapping: divide width equally with small gap
-      width = `calc(${100 / totalOverlaps}% - 6px)`;
-      left = `calc(${position * (100 / totalOverlaps)}% + 3px)`;
+  // Replace the renderClassBlock function with this improved version:
+const renderClassBlock = (calClass: CalendarClass) => {
+  const { session, startTime, duration, position, totalOverlaps } = calClass;
+  
+  console.log('🎯 Rendering class:', {
+    class: session.Class,
+    dayIndex: calClass.dayIndex,
+    startTime,
+    duration,
+    position,
+    totalOverlaps
+  });
+  
+  // Calculate position - ensure proper positioning
+  const timeSlotHeight = 100; // px per 30min slot
+  const top = ((startTime - (startHour * 60)) / 30) * timeSlotHeight;
+  const height = Math.max((duration / 30) * timeSlotHeight, 120); // Minimum 120px height
+  
+  // FIXED: Better width calculation for overlapping classes
+  let width: string;
+  let left: string;
+  
+  if (totalOverlaps > 1) {
+    const overlapWidth = 100 / totalOverlaps;
+    width = `calc(${overlapWidth}% - 8px)`;
+    left = `calc(${position * overlapWidth}% + 4px)`;
+  } else {
+    width = 'calc(100% - 12px)';
+    left = '6px';
+  }
+  
+  // Color based on status and fill rate
+  const isActive = session.Status === 'Active';
+  const fillRate = session.FillRate || (session.Capacity > 0 ? (session.CheckedIn / session.Capacity) * 100 : 0);
+  
+  let bgColor = 'bg-gray-400';
+  let borderColor = 'border-gray-700';
+  let textColor = 'text-white';
+  
+  if (isActive) {
+    if (fillRate >= 80) {
+      bgColor = 'bg-gradient-to-br from-emerald-500 to-green-600';
+      borderColor = 'border-emerald-700';
+    } else if (fillRate >= 50) {
+      bgColor = 'bg-gradient-to-br from-blue-500 to-indigo-600';
+      borderColor = 'border-blue-700';
     } else {
-      // Single card: take full width minus small margins
-      width = 'calc(100% - 6px)';
-      left = '3px';
+      bgColor = 'bg-gradient-to-br from-amber-500 to-orange-600';
+      borderColor = 'border-amber-700';
     }
-    
-    // Color based on status and fill rate - VIBRANT SOLID COLORS
-    const isActive = session.Status === 'Active';
-    const fillRate = session.FillRate || 0;
-    
-    let bgColor = 'bg-gray-400';
-    let borderColor = 'border-gray-700';
-    let textColor = 'text-white';
-    let shadowColor = 'shadow-gray-400';
-    
-    if (isActive) {
-      if (fillRate >= 80) {
-        bgColor = 'bg-gradient-to-br from-emerald-500 to-green-600';
-        borderColor = 'border-emerald-700';
-        textColor = 'text-white';
-        shadowColor = 'shadow-emerald-400';
-      } else if (fillRate >= 50) {
-        bgColor = 'bg-gradient-to-br from-blue-500 to-indigo-600';
-        borderColor = 'border-blue-700';
-        textColor = 'text-white';
-        shadowColor = 'shadow-blue-400';
-      } else {
-        bgColor = 'bg-gradient-to-br from-amber-500 to-orange-600';
-        borderColor = 'border-amber-700';
-        textColor = 'text-white';
-        shadowColor = 'shadow-amber-400';
-      }
-    }
-    
-    return (
-      <motion.div
-        key={`${session.Date}-${session.Time}-${session.Class}-${session.Trainer}`}
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        style={{
-          position: 'absolute',
-          top: `${top}px`,
-          height: `${height}px`,
-          width,
-          left,
-        }}
-        className={`${bgColor} ${borderColor} ${textColor} ${shadowColor} border-l-[5px] rounded-xl shadow-xl p-5 cursor-pointer hover:shadow-2xl hover:scale-105 hover:z-20 transition-all duration-200`}
-        onMouseEnter={() => setHoveredClass(session)}
-        onMouseLeave={() => setHoveredClass(null)}
-        onClick={() => {
-          // Filter for historic data matching class name, day, time, and location
-          const relatedSessions = rawData.filter(s => 
-            s.Class === session.Class && 
-            s.Day === session.Day && 
-            s.Time === session.Time && 
-            s.Location === session.Location
-          );
-          setDrilldownData(relatedSessions);
-          setDrilldownTitle(`${session.Class} - ${session.Day} at ${session.Time} (${session.Location})`);
-          setShowDrilldown(true);
-        }}
-      >
-        <div className="flex flex-col h-full justify-between gap-2">
-          <div className="space-y-1">
-            <div className="font-black text-xl leading-tight mb-2 line-clamp-2 drop-shadow-sm break-words">{session.Class}</div>
-            <div className="text-lg font-bold opacity-95 truncate">
-              <span className="mr-1.5">👤</span>
-              {session.Trainer}
-            </div>
-            <div className="text-base font-semibold opacity-90 truncate">
-              <span className="mr-1.5">📍</span>
-              {session.Location}
-            </div>
+  }
+  
+  return (
+    <motion.div
+      key={`${session.Date}-${session.Time}-${session.Class}-${session.Trainer}`}
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      style={{
+        position: 'absolute',
+        top: `${top}px`,
+        height: `${height}px`,
+        width,
+        left,
+        zIndex: 10 + position, // Ensure overlapping classes stack properly
+      }}
+      className={`${bgColor} ${borderColor} ${textColor} border-l-[5px] rounded-xl shadow-lg p-3 cursor-pointer hover:shadow-xl hover:scale-105 hover:z-30 transition-all duration-200 min-h-0 overflow-hidden`}
+      onMouseEnter={() => setHoveredClass(session)}
+      onMouseLeave={() => setHoveredClass(null)}
+      onClick={() => {
+        const relatedSessions = rawData.filter(s => 
+          s.Class === session.Class && 
+          s.Day === session.Day && 
+          s.Time === session.Time && 
+          s.Location === session.Location
+        );
+        setDrilldownData(relatedSessions);
+        setDrilldownTitle(`${session.Class} - ${session.Day} at ${session.Time} (${session.Location})`);
+        setShowDrilldown(true);
+      }}
+    >
+      {/* SIMPLIFIED content to ensure it's visible */}
+      <div className="flex flex-col h-full justify-between">
+        <div className="flex-1">
+          <div className="font-bold text-sm leading-tight mb-1 line-clamp-2 break-words">
+            {session.Class || 'Unnamed Class'}
           </div>
-          <div className="flex items-center justify-between text-base mt-auto pt-2 border-t-2 border-white/30">
-            <span className="font-bold opacity-95 text-lg">
-              {session.Time.substring(0, 5)}
-            </span>
-            {session.CheckedIn !== undefined && (
-              <span className="font-black px-3 py-1.5 bg-white/95 text-gray-900 rounded-lg text-lg shadow-md">
-                {session.CheckedIn}/{session.Capacity}
-              </span>
-            )}
+          <div className="text-xs opacity-90 truncate">
+            {session.Trainer || 'No Trainer'}
           </div>
         </div>
-      </motion.div>
-    );
-  };
+        <div className="flex items-center justify-between text-xs mt-1 pt-1 border-t border-white/30">
+          <span className="font-semibold opacity-90">
+            {session.Time ? session.Time.substring(0, 5) : 'No Time'}
+          </span>
+          {session.CheckedIn !== undefined && session.Capacity !== undefined && (
+            <span className="font-bold px-1.5 py-0.5 bg-white/20 rounded text-xs">
+              {session.CheckedIn}/{session.Capacity}
+            </span>
+          )}
+        </div>
+      </div>
+    </motion.div>
+  );
+};
 
   return (
     <div className="space-y-6">
