@@ -536,16 +536,17 @@ const renderClassBlock = (calClass: CalendarClass) => {
   
   // Calculate card dimensions for overlapping classes
   // Make overlapping cards wide and short (stacked vertically) instead of tall and narrow (side by side)
+  // Occupy full width and height to maximize visibility
   const cardHeight = totalOverlaps > 1 
-    ? Math.max(80, height / totalOverlaps - 4) // Divide height among overlapping cards, minimum 80px
+    ? Math.max(70, (height / totalOverlaps) - 2) // Divide height among overlapping cards, minimal gap
     : height;
   
   const cardTop = totalOverlaps > 1 
     ? top + (position * (height / totalOverlaps)) // Stack vertically
     : top;
   
-  const width = 'calc(100% - 12px)'; // Always full width
-  const left = '6px'; // Always centered
+  const width = '100%'; // Full column width
+  const left = '0'; // No offset, occupy full width
   
   // Generate unique color for each class format using hash
   const getClassColor = (className: string) => {
@@ -610,7 +611,7 @@ const renderClassBlock = (calClass: CalendarClass) => {
         left,
         zIndex: 10 + position,
       }}
-      className={`${bgColor} ${borderColor} ${textColor} border-4 border-white border-t-8 rounded-xl shadow-lg p-3 cursor-pointer backdrop-blur-sm overflow-hidden`}
+      className={`${bgColor} ${borderColor} ${textColor} border-2 border-white border-t-4 rounded-lg shadow-lg p-2 cursor-pointer backdrop-blur-sm overflow-hidden`}
       onMouseEnter={() => setHoveredClass(session)}
       onMouseLeave={() => setHoveredClass(null)}
       onClick={() => {
@@ -625,21 +626,21 @@ const renderClassBlock = (calClass: CalendarClass) => {
         setShowDrilldown(true);
       }}
     >
-      {/* Wide and short layout - optimized for horizontal space */}
+      {/* Wide and short layout - optimized for horizontal space, full width/height */}
       <div className="flex flex-col h-full justify-between">
-        <div className="flex items-center justify-between gap-2 min-h-0">
-          <div className="font-bold text-base leading-tight truncate flex-1">
+        <div className="flex items-center justify-between gap-1.5 min-h-0">
+          <div className="font-bold text-sm leading-tight truncate flex-1">
             {session.Class || 'Unnamed Class'}
           </div>
-          <div className="text-sm font-semibold whitespace-nowrap opacity-90">
+          <div className="text-xs font-semibold whitespace-nowrap opacity-90 bg-white/20 px-1.5 py-0.5 rounded">
             {session.CheckedIn || 0}/{session.Capacity || 0}
           </div>
         </div>
-        <div className="flex items-center justify-between gap-2 mt-1">
-          <div className="text-sm truncate flex-1">
+        <div className="flex items-center justify-between gap-1.5">
+          <div className="text-xs truncate flex-1">
             👤 {session.Trainer || 'No Trainer'}
           </div>
-          <div className="text-sm whitespace-nowrap">
+          <div className="text-xs whitespace-nowrap font-medium">
             🕐 {session.Time ? session.Time.substring(0, 5) : 'No Time'}
           </div>
         </div>
