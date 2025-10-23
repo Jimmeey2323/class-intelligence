@@ -242,7 +242,7 @@ export function FormatIntelligence() {
         // Only track changes for active slots
         if (!isSlotActive) return;
         
-        const [dayOfWeek, timeSlot, location] = slotKey.split('|');
+        const [dayOfWeek, timeSlot] = slotKey.split('|');
         
         for (let i = 1; i < sortedSlotSessions.length; i++) {
           const prev = sortedSlotSessions[i - 1];
