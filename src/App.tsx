@@ -7,9 +7,11 @@ import Rankings from './components/Rankings';
 import MetricsCardsEnhanced from './components/MetricsCardsEnhanced';
 import { FormatIntelligence } from './components/FormatIntelligence';
 import WeeklyCalendar from './components/WeeklyCalendar';
-import { LayoutDashboard, TrendingUp, Calendar } from 'lucide-react';
+import AIInsights from './components/AIInsights';
+import SmartScheduling from './components/SmartScheduling';
+import { LayoutDashboard, TrendingUp, Calendar, Brain, Zap } from 'lucide-react';
 
-type ViewTab = 'dashboard' | 'formats' | 'calendar';
+type ViewTab = 'dashboard' | 'formats' | 'calendar' | 'ai-insights' | 'smart-scheduling';
 
 function App() {
   const { rawData } = useDashboardStore();
@@ -31,8 +33,12 @@ function App() {
             <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-900 via-blue-700 to-blue-500 bg-clip-text text-transparent">
               Class Intelligence Dashboard
             </h1>
-            <p className="text-gray-600 mt-1">
+            <p className="text-gray-600 mt-1 flex items-center gap-2">
               Comprehensive analytics for your fitness studio operations
+              <span className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-purple-100 to-purple-200 text-purple-700 rounded-full text-xs font-semibold">
+                <Brain className="w-3 h-3" />
+                AI Powered
+              </span>
             </p>
           </div>
         </div>
@@ -81,6 +87,28 @@ function App() {
             <Calendar className="w-5 h-5" />
             Weekly Calendar
           </button>
+          <button
+            onClick={() => setActiveView('ai-insights')}
+            className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
+              activeView === 'ai-insights'
+                ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <Brain className="w-5 h-5" />
+            AI Insights
+          </button>
+          <button
+            onClick={() => setActiveView('smart-scheduling')}
+            className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
+              activeView === 'smart-scheduling'
+                ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <Zap className="w-5 h-5" />
+            Smart Scheduling
+          </button>
         </div>
       )}
 
@@ -112,6 +140,16 @@ function App() {
       {/* Weekly Calendar View */}
       {hasData && activeView === 'calendar' && (
         <WeeklyCalendar />
+      )}
+
+      {/* AI Insights View */}
+      {hasData && activeView === 'ai-insights' && (
+        <AIInsights />
+      )}
+
+      {/* Smart Scheduling View */}
+      {hasData && activeView === 'smart-scheduling' && (
+        <SmartScheduling />
       )}
 
       {/* Footer */}

@@ -5,6 +5,7 @@ import { formatNumber, formatCurrency, formatPercentage, calculateMetrics } from
 import { TrendingUp, TrendingDown, Award, BarChart3, Search } from 'lucide-react';
 import { generateCompositeKey, parseCompositeKey } from '../utils/cleaners';
 import { motion } from 'framer-motion';
+import EnhancedDrilldownModal from './EnhancedDrilldownModal';
 
 type RankingMetric = 'classAvg' | 'fillRate' | 'totalRevenue' | 'consistencyScore' | 'totalCancellations' | 'totalBooked' | 'classes' | 'compositeScore';
 
@@ -34,9 +35,20 @@ export default function Rankings() {
   const [bottomMetric, setBottomMetric] = useState<RankingMetric>('classAvg');
   const [topCount, setTopCount] = useState(10);
   const [bottomCount, setBottomCount] = useState(10);
+  
+  // Modal state
+  const [drilldownData, setDrilldownData] = useState<SessionData[]>([]);
+  const [drilldownTitle, setDrilldownTitle] = useState('');
+  const [isDrilldownOpen, setIsDrilldownOpen] = useState(false);
 
   // Use filtered data directly
   const rawData = filteredData;
+
+  const handleCardClick = (group: RankingGroup) => {
+    setDrilldownData(group.sessions);
+    setDrilldownTitle(`${group.className} - ${group.day} at ${group.time} (${group.location})`);
+    setIsDrilldownOpen(true);
+  };
 
   if (rawData.length === 0) return null;
 
@@ -171,6 +183,7 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
   const metricOptions: RankingMetric[] = ['classAvg', 'fillRate', 'totalRevenue', 'consistencyScore', 'compositeScore'];
 
   return (
+    <>
     <div className="space-y-6">
       {/* Filter Controls */}
       <motion.div 
@@ -303,7 +316,8 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
-                className="flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-green-300 hover:shadow-md transition-all"
+                onClick={() => handleCardClick(group)}
+                className="flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-green-300 hover:shadow-md transition-all cursor-pointer"
               >
                 <div className="flex items-center justify-center min-w-[32px] h-8 rounded-lg bg-gradient-to-br from-green-100 to-green-200 text-green-700 font-bold text-sm">
                   {index + 1}
@@ -400,7 +414,8 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
                 initial={{ opacity: 0, x: 10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
-                className="flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-orange-300 hover:shadow-md transition-all"
+                onClick={() => handleCardClick(group)}
+                className="flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-orange-300 hover:shadow-md transition-all cursor-pointer"
               >
                 <div className="flex items-center justify-center min-w-[32px] h-8 rounded-lg bg-gradient-to-br from-orange-100 to-orange-200 text-orange-700 font-bold text-sm">
                   {index + 1}
@@ -447,5 +462,13 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
         </motion.div>
       </div>
     </div>
-  );
+
+    {/* Enhanced Drilldown Modal */}
+    <EnhancedDrilldownModal
+      isOpen={isDrilldownOpen}
+      onClose={() => setIsDrilldownOpen(false)}
+      sessions={drilldownData}
+      title={drilldownTitle}
+    />
+  </>);
 }

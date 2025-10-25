@@ -10,9 +10,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@headlessui/react": "^1.7.18",
     "@tanstack/react-table": "^8.11.6",
     "@tanstack/react-virtual": "^3.0.1",
+    "@types/react-datepicker": "^7.0.0",
     "date-fns": "^3.0.6",
     "framer-motion": "^11.0.3",
     "fuse.js": "^7.0.0",
@@ -21,6 +23,7 @@
     "lucide-react": "^0.309.0",
     "papaparse": "^5.4.1",
     "react": "^18.2.0",
+    "react-datepicker": "^8.8.0",
     "react-dom": "^18.2.0",
     "recharts": "^2.10.4",
     "xlsx": "^0.18.5",

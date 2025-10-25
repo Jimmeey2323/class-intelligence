@@ -250,12 +250,12 @@ export function FormatIntelligence() {
             });
           }
           
-          // TIME CHANGE: Same day/location/trainer/class, different time (>1 hour)
+          // TIME CHANGE: Same day/location/trainer/class, different time (>15 minutes)
           if (prev.Time !== curr.Time && 
               prev.Trainer === curr.Trainer && 
               prev.Class === curr.Class) {
             const hourDiff = getHourDifference(prev.Time, curr.Time);
-            if (hourDiff > 1) {
+            if (hourDiff > 0.25) { // 15+ minute changes
               const sessionsBefore = sortedSlotSessions.slice(Math.max(0, i - 5), i);
               const sessionsAfter = sortedSlotSessions.slice(i, Math.min(i + 5, sortedSlotSessions.length));
               const beforeAvg = sessionsBefore.reduce((sum, s) => sum + s.CheckedIn, 0) / sessionsBefore.length;

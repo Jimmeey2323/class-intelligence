@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { DashboardState, SessionData, FilterState, ViewMode, GroupBy, AdditionalView, ColumnWidthSettings } from '../types';
-import { subMonths, startOfMonth, endOfMonth } from 'date-fns';
+import { subMonths, startOfMonth } from 'date-fns';
 import { groupData } from '../utils/calculations';
 
 // Load column widths from localStorage
@@ -23,17 +23,21 @@ const saveColumnWidths = (widths: ColumnWidthSettings) => {
 };
 
 const getDefaultFilters = (): FilterState => {
-  const lastMonth = subMonths(new Date(), 1);
+  const today = new Date();
+  const previousMonth = subMonths(today, 1);
   return {
-    dateFrom: startOfMonth(lastMonth),
-    dateTo: endOfMonth(lastMonth),
+    dateFrom: startOfMonth(previousMonth),
+    dateTo: today, // Set to today as the latest available date
     trainers: [],
     locations: [],
     classTypes: [],
     classes: [],
-    minCheckins: 0,
+    minCheckins: 1, // Set to 1 as default
+    minClasses: 2, // Set to 2 as default
     searchQuery: '',
     statusFilter: 'all',
+    excludeHostedClasses: true, // Default to exclude hosted classes
+    includeTrainer: true, // Default to include trainer
   };
 };
 

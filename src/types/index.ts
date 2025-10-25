@@ -97,6 +97,8 @@ export interface FilterState {
   minClasses?: number;
   searchQuery: string;
   statusFilter?: 'all' | 'active' | 'inactive';
+  excludeHostedClasses?: boolean;
+  includeTrainer?: boolean;
 }
 
 // View modes

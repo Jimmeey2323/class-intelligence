@@ -2,6 +2,8 @@ import { ChevronDown, ChevronUp, Calendar, Users, MapPin, Layers, Activity } fro
 import { useDashboardStore } from '../store/dashboardStore';
 import { getUniqueValues } from '../utils/calculations';
 import { format } from 'date-fns';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
 
 export default function FilterSection() {
   const { filters, setFilters, isFilterCollapsed, toggleFilterCollapse, rawData } = useDashboardStore();
@@ -37,31 +39,47 @@ export default function FilterSection() {
       {/* Filter Content */}
       {!isFilterCollapsed && (
         <div className="p-6 pt-0 space-y-6">
-          {/* Date Range */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-                <Calendar className="w-4 h-4 text-blue-600" />
-                From Date
-              </label>
-              <input
-                type="date"
-                value={format(filters.dateFrom, 'yyyy-MM-dd')}
-                onChange={(e) => setFilters({ dateFrom: new Date(e.target.value) })}
-                className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
-              />
-            </div>
-            <div>
-              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-                <Calendar className="w-4 h-4 text-blue-600" />
-                To Date
-              </label>
-              <input
-                type="date"
-                value={format(filters.dateTo, 'yyyy-MM-dd')}
-                onChange={(e) => setFilters({ dateTo: new Date(e.target.value) })}
-                className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
-              />
+          {/* Advanced Date Range */}
+          <div className="space-y-4">
+            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+              <Calendar className="w-4 h-4 text-blue-600" />
+              Date Range (Week-aware: Monday to Sunday)
+            </label>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs text-gray-600 mb-1 block">From Date</label>
+                <DatePicker
+                  selected={filters.dateFrom}
+                  onChange={(date) => date && setFilters({ dateFrom: date })}
+                  selectsStart
+                  startDate={filters.dateFrom}
+                  endDate={filters.dateTo}
+                  maxDate={new Date()}
+                  dateFormat="MMM dd, yyyy"
+                  placeholderText="Select start date"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  calendarStartDay={1}
+                  showWeekNumbers
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-600 mb-1 block">To Date</label>
+                <DatePicker
+                  selected={filters.dateTo}
+                  onChange={(date) => date && setFilters({ dateTo: date })}
+                  selectsEnd
+                  startDate={filters.dateFrom}
+                  endDate={filters.dateTo}
+                  minDate={filters.dateFrom}
+                  maxDate={new Date()}
+                  dateFormat="MMM dd, yyyy"
+                  placeholderText="Select end date"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  calendarStartDay={1}
+                  showWeekNumbers
+                />
+              </div>
             </div>
           </div>
 
@@ -227,7 +245,7 @@ export default function FilterSection() {
             </div>
             <div>
               <label className="text-sm font-semibold text-gray-700 mb-2 block">
-                Minimum Check-ins (for grouped view)
+                Minimum Check-ins
               </label>
               <input
                 type="number"
@@ -237,22 +255,69 @@ export default function FilterSection() {
                 className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
               />
             </div>
+            <div>
+              <label className="text-sm font-semibold text-gray-700 mb-2 block">
+                Minimum Classes
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={filters.minClasses || 0}
+                onChange={(e) => setFilters({ minClasses: parseInt(e.target.value) || 0 })}
+                className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+              />
+            </div>
+          </div>
+
+          {/* Toggle Options */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="excludeHosted"
+                checked={filters.excludeHostedClasses || false}
+                onChange={(e) => setFilters({ excludeHostedClasses: e.target.checked })}
+                className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+              />
+              <label htmlFor="excludeHosted" className="text-sm font-medium text-gray-700">
+                Exclude Hosted Classes
+              </label>
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="includeTrainer"
+                checked={filters.includeTrainer || false}
+                onChange={(e) => setFilters({ includeTrainer: e.target.checked })}
+                className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+              />
+              <label htmlFor="includeTrainer" className="text-sm font-medium text-gray-700">
+                Include Trainer Data
+              </label>
+            </div>
           </div>
 
           {/* Reset Button */}
           <div className="flex justify-end">
             <button
-              onClick={() =>
+              onClick={() => {
+                const today = new Date();
+                const previousMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
                 setFilters({
+                  dateFrom: previousMonth,
+                  dateTo: today,
                   trainers: [],
                   locations: [],
                   classTypes: [],
                   classes: [],
                   searchQuery: '',
-                  minCheckins: 0,
+                  minCheckins: 1,
+                  minClasses: 2,
                   statusFilter: 'all',
-                })
-              }
+                  excludeHostedClasses: true,
+                  includeTrainer: true,
+                });
+              }}
               className="px-6 py-2 rounded-xl bg-gradient-to-r from-gray-100 to-gray-200 hover:from-gray-200 hover:to-gray-300 text-gray-700 font-semibold transition-all hover:shadow-md"
             >
               Reset Filters

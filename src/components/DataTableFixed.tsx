@@ -446,6 +446,7 @@ export default function DataTable() {
         header: '#',
         size: columnWidths['rank'] || 70,
         enableResizing: true,
+        sortingFn: 'basic', // Enable proper numeric sorting
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
@@ -587,6 +588,7 @@ export default function DataTable() {
         header: 'Class Avg',
         size: columnWidths['classAvg'] || 110,
         enableResizing: true,
+        sortingFn: 'basic',
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
@@ -604,6 +606,7 @@ export default function DataTable() {
         header: 'Fill Rate',
         size: columnWidths['fillRate'] || 105,
         enableResizing: true,
+        sortingFn: 'basic',
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
@@ -651,6 +654,7 @@ export default function DataTable() {
         header: 'Revenue',
         size: columnWidths['totalRevenue'] || 120,
         enableResizing: true,
+        sortingFn: 'basic',
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
@@ -713,6 +717,7 @@ export default function DataTable() {
         header: 'Composite Score',
         size: columnWidths['compositeScore'] || 140,
         enableResizing: true,
+        sortingFn: 'basic',
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
