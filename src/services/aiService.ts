@@ -1,9 +1,9 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { SessionData } from '../types';
 
-// Auto-loaded API key - Note: This appears to be an OpenRouter key, not a Google AI key
-const API_KEY = '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';
-const USE_MOCK_AI = true; // Enable mock AI responses while API key issues are resolved
+// Load API key from environment variables
+const API_KEY = import.meta.env.VITE_GOOGLE_AI_API_KEY;
+const USE_MOCK_AI = import.meta.env.VITE_USE_MOCK_AI === 'true';
 
 class AIService {
   private genAI: GoogleGenerativeAI | null = null;
@@ -11,9 +11,18 @@ class AIService {
 
   constructor() {
     try {
+      console.log('AI Service initialized with:', {
+        hasApiKey: !!API_KEY,
+        apiKeyLength: API_KEY?.length || 0,
+        useMockAI: USE_MOCK_AI
+      });
+      
       if (!USE_MOCK_AI && API_KEY && API_KEY.length > 20) {
         this.genAI = new GoogleGenerativeAI(API_KEY);
-        this.model = this.genAI.getGenerativeModel({ model: 'gemini-pro' }); // Using gemini-pro as fallback
+        this.model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+        console.log('Google AI initialized successfully');
+      } else {
+        console.log('Using mock AI responses');
       }
     } catch (error) {
       console.warn('Failed to initialize Gemini AI, using mock responses:', error);

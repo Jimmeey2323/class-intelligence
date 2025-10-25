@@ -52,12 +52,38 @@ cd "Planning & Schedulling"
 npm install
 ```
 
-3. Start the development server:
+3. Set up environment variables:
+```bash
+cp .env.example .env
+```
+Edit `.env` file and add your Google AI API key:
+```
+VITE_GOOGLE_AI_API_KEY=your_google_ai_api_key_here
+VITE_USE_MOCK_AI=false
+```
+
+4. Start the development server:
 ```bash
 npm run dev
 ```
 
-4. Open your browser to `http://localhost:5173`
+5. Open your browser to `http://localhost:5173`
+
+## Environment Variables
+
+The application uses the following environment variables:
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `VITE_GOOGLE_AI_API_KEY` | Google AI API key for AI-powered insights | - | No (uses mock data) |
+| `VITE_USE_MOCK_AI` | Whether to use mock AI responses instead of real API | `true` | No |
+
+### Getting an API Key
+
+1. Visit [Google AI Studio](https://makersuite.google.com/app/apikey)
+2. Create a new API key
+3. Copy the key to your `.env` file
+4. Set `VITE_USE_MOCK_AI=false` to enable real AI insights
 
 ### Build for Production
 
