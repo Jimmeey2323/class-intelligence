@@ -22,9 +22,9 @@ export default function FilterSection() {
           <div className="p-2 rounded-xl gradient-blue">
             <Layers className="w-5 h-5 text-white" />
           </div>
-          <h2 className="text-xl font-bold text-gray-800">Filters</h2>
+          <h2 className="text-xl font-bold text-gray-800">Global Filters</h2>
           <span className="text-sm text-gray-500">
-            ({Object.values(filters).filter((v) => v && (Array.isArray(v) ? v.length > 0 : true)).length} active)
+            ({Object.values(filters).filter((v) => v && (Array.isArray(v) ? v.length > 0 : true)).length} active • applies to all tabs)
           </span>
         </div>
         {isFilterCollapsed ? (
@@ -71,96 +71,140 @@ export default function FilterSection() {
             <div>
               <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
                 <Users className="w-4 h-4 text-blue-600" />
-                Trainers
+                Trainers ({filters.trainers.length} selected)
               </label>
-              <select
-                multiple
-                value={filters.trainers}
-                onChange={(e) =>
-                  setFilters({
-                    trainers: Array.from(e.target.selectedOptions, (option) => option.value),
-                  })
-                }
-                className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all min-h-[100px]"
-              >
+              <div className="border border-gray-300 rounded-xl max-h-[150px] overflow-y-auto bg-white">
                 {trainers.map((trainer) => (
-                  <option key={trainer} value={trainer}>
+                  <div
+                    key={trainer}
+                    onClick={() => {
+                      const isSelected = filters.trainers.includes(trainer);
+                      if (isSelected) {
+                        setFilters({ trainers: filters.trainers.filter(t => t !== trainer) });
+                      } else {
+                        setFilters({ trainers: [...filters.trainers, trainer] });
+                      }
+                    }}
+                    className={`px-4 py-2 cursor-pointer hover:bg-blue-50 transition-colors border-b border-gray-100 last:border-b-0 flex items-center gap-2 ${
+                      filters.trainers.includes(trainer) ? 'bg-blue-100 text-blue-800' : 'text-gray-700'
+                    }`}
+                  >
+                    <div className={`w-4 h-4 rounded border-2 flex items-center justify-center ${
+                      filters.trainers.includes(trainer) ? 'bg-blue-500 border-blue-500' : 'border-gray-300'
+                    }`}>
+                      {filters.trainers.includes(trainer) && (
+                        <div className="w-2 h-2 bg-white rounded-sm"></div>
+                      )}
+                    </div>
                     {trainer}
-                  </option>
+                  </div>
                 ))}
-              </select>
+              </div>
             </div>
 
             {/* Locations */}
             <div>
               <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
                 <MapPin className="w-4 h-4 text-blue-600" />
-                Locations
+                Locations ({filters.locations.length} selected)
               </label>
-              <select
-                multiple
-                value={filters.locations}
-                onChange={(e) =>
-                  setFilters({
-                    locations: Array.from(e.target.selectedOptions, (option) => option.value),
-                  })
-                }
-                className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all min-h-[100px]"
-              >
+              <div className="border border-gray-300 rounded-xl max-h-[150px] overflow-y-auto bg-white">
                 {locations.map((location) => (
-                  <option key={location} value={location}>
+                  <div
+                    key={location}
+                    onClick={() => {
+                      const isSelected = filters.locations.includes(location);
+                      if (isSelected) {
+                        setFilters({ locations: filters.locations.filter(l => l !== location) });
+                      } else {
+                        setFilters({ locations: [...filters.locations, location] });
+                      }
+                    }}
+                    className={`px-4 py-2 cursor-pointer hover:bg-blue-50 transition-colors border-b border-gray-100 last:border-b-0 flex items-center gap-2 ${
+                      filters.locations.includes(location) ? 'bg-blue-100 text-blue-800' : 'text-gray-700'
+                    }`}
+                  >
+                    <div className={`w-4 h-4 rounded border-2 flex items-center justify-center ${
+                      filters.locations.includes(location) ? 'bg-blue-500 border-blue-500' : 'border-gray-300'
+                    }`}>
+                      {filters.locations.includes(location) && (
+                        <div className="w-2 h-2 bg-white rounded-sm"></div>
+                      )}
+                    </div>
                     {location}
-                  </option>
+                  </div>
                 ))}
-              </select>
+              </div>
             </div>
 
             {/* Class Types */}
             <div>
               <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
                 <Layers className="w-4 h-4 text-blue-600" />
-                Class Types
+                Class Types ({filters.classTypes.length} selected)
               </label>
-              <select
-                multiple
-                value={filters.classTypes}
-                onChange={(e) =>
-                  setFilters({
-                    classTypes: Array.from(e.target.selectedOptions, (option) => option.value),
-                  })
-                }
-                className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all min-h-[100px]"
-              >
+              <div className="border border-gray-300 rounded-xl max-h-[150px] overflow-y-auto bg-white">
                 {classTypes.map((type) => (
-                  <option key={type} value={type}>
+                  <div
+                    key={type}
+                    onClick={() => {
+                      const isSelected = filters.classTypes.includes(type);
+                      if (isSelected) {
+                        setFilters({ classTypes: filters.classTypes.filter(t => t !== type) });
+                      } else {
+                        setFilters({ classTypes: [...filters.classTypes, type] });
+                      }
+                    }}
+                    className={`px-4 py-2 cursor-pointer hover:bg-blue-50 transition-colors border-b border-gray-100 last:border-b-0 flex items-center gap-2 ${
+                      filters.classTypes.includes(type) ? 'bg-blue-100 text-blue-800' : 'text-gray-700'
+                    }`}
+                  >
+                    <div className={`w-4 h-4 rounded border-2 flex items-center justify-center ${
+                      filters.classTypes.includes(type) ? 'bg-blue-500 border-blue-500' : 'border-gray-300'
+                    }`}>
+                      {filters.classTypes.includes(type) && (
+                        <div className="w-2 h-2 bg-white rounded-sm"></div>
+                      )}
+                    </div>
                     {type}
-                  </option>
+                  </div>
                 ))}
-              </select>
+              </div>
             </div>
 
             {/* Classes */}
             <div>
               <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
                 <Layers className="w-4 h-4 text-blue-600" />
-                Classes
+                Classes ({filters.classes.length} selected)
               </label>
-              <select
-                multiple
-                value={filters.classes}
-                onChange={(e) =>
-                  setFilters({
-                    classes: Array.from(e.target.selectedOptions, (option) => option.value),
-                  })
-                }
-                className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all min-h-[100px]"
-              >
+              <div className="border border-gray-300 rounded-xl max-h-[150px] overflow-y-auto bg-white">
                 {classes.map((cls) => (
-                  <option key={cls} value={cls}>
+                  <div
+                    key={cls}
+                    onClick={() => {
+                      const isSelected = filters.classes.includes(cls);
+                      if (isSelected) {
+                        setFilters({ classes: filters.classes.filter(c => c !== cls) });
+                      } else {
+                        setFilters({ classes: [...filters.classes, cls] });
+                      }
+                    }}
+                    className={`px-4 py-2 cursor-pointer hover:bg-blue-50 transition-colors border-b border-gray-100 last:border-b-0 flex items-center gap-2 ${
+                      filters.classes.includes(cls) ? 'bg-blue-100 text-blue-800' : 'text-gray-700'
+                    }`}
+                  >
+                    <div className={`w-4 h-4 rounded border-2 flex items-center justify-center ${
+                      filters.classes.includes(cls) ? 'bg-blue-500 border-blue-500' : 'border-gray-300'
+                    }`}>
+                      {filters.classes.includes(cls) && (
+                        <div className="w-2 h-2 bg-white rounded-sm"></div>
+                      )}
+                    </div>
                     {cls}
-                  </option>
+                  </div>
                 ))}
-              </select>
+              </div>
             </div>
           </div>
 

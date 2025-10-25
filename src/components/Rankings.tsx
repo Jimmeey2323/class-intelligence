@@ -6,7 +6,7 @@ import { TrendingUp, TrendingDown, Award, BarChart3, Search } from 'lucide-react
 import { generateCompositeKey, parseCompositeKey } from '../utils/cleaners';
 import { motion } from 'framer-motion';
 
-type RankingMetric = 'classAvg' | 'fillRate' | 'totalRevenue' | 'consistencyScore' | 'totalCancellations' | 'totalBooked' | 'classes';
+type RankingMetric = 'classAvg' | 'fillRate' | 'totalRevenue' | 'consistencyScore' | 'totalCancellations' | 'totalBooked' | 'classes' | 'compositeScore';
 
 interface RankingGroup {
   key: string;
@@ -113,6 +113,8 @@ export default function Rankings() {
         return 'Total Booked';
       case 'classes':
         return 'Classes';
+      case 'compositeScore':
+        return 'Composite Score';
     }
   };
 
@@ -130,7 +132,25 @@ export default function Rankings() {
         return formatNumber(value);
       case 'consistencyScore':
         return formatPercentage(value);
+      case 'compositeScore':
+        return formatNumber(value, 1);
     }
+  };
+
+  const getTooltipContent = (metric: RankingMetric, group: RankingGroup): string => {
+    if (metric === 'compositeScore') {
+      const attendanceScore = Math.min(group.metrics.classAvg * 5, 100);
+      const fillRateScore = Math.min(group.metrics.fillRate, 100);
+      const sessionScore = Math.min(group.metrics.classes * 2, 100);
+      
+      return `Composite Score Calculation:
+• Attendance Score: ${formatNumber(attendanceScore, 1)} (${formatNumber(group.metrics.classAvg, 1)} avg × 5, capped at 100) × 40% = ${formatNumber(attendanceScore * 0.4, 1)}
+• Fill Rate Score: ${formatNumber(fillRateScore, 1)} (${formatPercentage(group.metrics.fillRate)}) × 35% = ${formatNumber(fillRateScore * 0.35, 1)}
+• Session Score: ${formatNumber(sessionScore, 1)} (${group.metrics.classes} sessions × 2, capped at 100) × 25% = ${formatNumber(sessionScore * 0.25, 1)}
+
+Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
+    }
+    return '';
   };
 
   const getTopPerformers = (metric: RankingMetric, count: number): RankingGroup[] => {
@@ -148,7 +168,7 @@ export default function Rankings() {
   const topPerformers = getTopPerformers(topMetric, topCount);
   const bottomPerformers = getBottomPerformers(bottomMetric, bottomCount);
 
-  const metricOptions: RankingMetric[] = ['classAvg', 'fillRate', 'totalRevenue', 'consistencyScore'];
+  const metricOptions: RankingMetric[] = ['classAvg', 'fillRate', 'totalRevenue', 'consistencyScore', 'compositeScore'];
 
   return (
     <div className="space-y-6">
@@ -310,9 +330,19 @@ export default function Rankings() {
                 </div>
                 <div className="flex items-center gap-2">
                   <TrendingUp className="w-4 h-4 text-green-500" />
-                  <span className="font-bold text-gray-900 text-sm">
-                    {formatMetricValue(topMetric, group.metrics[topMetric])}
-                  </span>
+                  <div className="relative group">
+                    <span className="font-bold text-gray-900 text-sm cursor-help">
+                      {formatMetricValue(topMetric, group.metrics[topMetric])}
+                    </span>
+                    {topMetric === 'compositeScore' && (
+                      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
+                        <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-pre-line shadow-lg max-w-sm">
+                          {getTooltipContent(topMetric, group)}
+                          <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </motion.div>
             ))}
@@ -397,9 +427,19 @@ export default function Rankings() {
                 </div>
                 <div className="flex items-center gap-2">
                   <TrendingDown className="w-4 h-4 text-orange-500" />
-                  <span className="font-bold text-gray-900 text-sm">
-                    {formatMetricValue(bottomMetric, group.metrics[bottomMetric])}
-                  </span>
+                  <div className="relative group">
+                    <span className="font-bold text-gray-900 text-sm cursor-help">
+                      {formatMetricValue(bottomMetric, group.metrics[bottomMetric])}
+                    </span>
+                    {bottomMetric === 'compositeScore' && (
+                      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
+                        <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-pre-line shadow-lg max-w-sm">
+                          {getTooltipContent(bottomMetric, group)}
+                          <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </motion.div>
             ))}

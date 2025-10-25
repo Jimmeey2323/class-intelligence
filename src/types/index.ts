@@ -56,6 +56,7 @@ export interface CalculatedMetrics {
   totalWaitlisted: number;
   status: 'Active' | 'Inactive';
   mostRecentDate?: Date;
+  compositeScore: number;
 }
 
 // Grouped row data

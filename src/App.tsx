@@ -85,13 +85,16 @@ function App() {
       )}
 
       {/* Main Dashboard */}
+            {/* Global Filter Section - applies to all tabs */}
+      {hasData && (
+        <FilterSection />
+      )}
+
+      {/* Main Dashboard View */}
       {hasData && activeView === 'dashboard' && (
         <div className="space-y-8">
           {/* Metrics Cards */}
           <MetricsCardsEnhanced />
-
-          {/* Filter Section */}
-          <FilterSection />
 
           {/* Rankings */}
           <Rankings />

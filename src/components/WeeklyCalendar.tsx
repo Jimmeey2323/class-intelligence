@@ -17,9 +17,9 @@ interface CalendarClass {
 }
 
 export default function WeeklyCalendar() {
-  const { rawData, setRawData } = useDashboardStore();
+  const { filteredData, rawData, setRawData } = useDashboardStore();
   
-  console.log('📊 WeeklyCalendar rawData count:', rawData.length);
+  console.log('📊 WeeklyCalendar filteredData count:', filteredData.length);
   
   // State
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -47,41 +47,54 @@ export default function WeeklyCalendar() {
     return { hour, minute, label: `${hour % 12 || 12}:${minute.toString().padStart(2, '0')} ${hour >= 12 ? 'PM' : 'AM'}` };
   });
 
-  // Get unique values for filters
-  const { locations, types, statuses } = useMemo(() => {
-    const locs = new Set<string>();
-    const typs = new Set<string>();
-    const stats = new Set<string>();
-    
-    rawData.forEach(session => {
-      if (session.Location) locs.add(session.Location);
-      if (session.Type) typs.add(session.Type);
-      if (session.Status) stats.add(session.Status);
+    // Get unique values for filters
+  const allLocations = useMemo(() => {
+    const locations = new Set<string>();
+    filteredData.forEach(session => {
+      if (session.Location) {
+        locations.add(session.Location);
+      }
     });
-    
-    return {
-      locations: Array.from(locs).sort(),
-      types: Array.from(typs).sort(),
-      statuses: Array.from(stats).sort(),
-    };
-  }, [rawData]);
+    return Array.from(locations).sort();
+  }, [filteredData]);
 
   // Week days for current selection
   const weekDays = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => addDays(selectedWeekStart, i));
   }, [selectedWeekStart]);
 
+  // Get unique values for local filters
+  const allTypes = useMemo(() => {
+    const types = new Set<string>();
+    filteredData.forEach(session => {
+      if (session.Type) {
+        types.add(session.Type);
+      }
+    });
+    return Array.from(types).sort();
+  }, [filteredData]);
+
+  const allStatuses = useMemo(() => {
+    const statuses = new Set<string>();
+    filteredData.forEach(session => {
+      if (session.Status) {
+        statuses.add(session.Status);
+      }
+    });
+    return Array.from(statuses).sort();
+  }, [filteredData]);
+
   // Filter and organize classes
   const calendarClasses = useMemo(() => {
     console.log('🔍 Calendar Debug:', {
-      totalSessions: rawData.length,
+      totalSessions: filteredData.length,
       weekDays: weekDays.map(d => format(d, 'yyyy-MM-dd')),
-      sampleSessionDate: rawData[0]?.Date,
-      sampleSessionTime: rawData[0]?.Time,
+      sampleSessionDate: filteredData[0]?.Date,
+      sampleSessionTime: filteredData[0]?.Time,
     });
     
-    // Apply filters
-    let filtered = rawData.filter(session => {
+    // Apply local filters (global filters already applied in store)
+    let filtered = filteredData.filter(session => {
       // Date filter
       if (!session.Date) return false;
       
@@ -274,7 +287,7 @@ export default function WeeklyCalendar() {
     }
 
     return classes;
-  }, [rawData, weekDays, selectedLocations, selectedStatuses, selectedTypes, startDate, endDate]);
+  }, [filteredData, weekDays, selectedLocations, selectedStatuses, selectedTypes, startDate, endDate]);
 
   // Navigation
   const goToPreviousWeek = () => {
@@ -615,7 +628,7 @@ const renderClassBlock = (calClass: CalendarClass) => {
       onMouseEnter={() => setHoveredClass(session)}
       onMouseLeave={() => setHoveredClass(null)}
       onClick={() => {
-        const relatedSessions = rawData.filter(s => 
+        const relatedSessions = filteredData.filter(s => 
           s.Class === session.Class && 
           s.Day === session.Day && 
           s.Time === session.Time && 
@@ -774,11 +787,11 @@ const renderClassBlock = (calClass: CalendarClass) => {
               </div>
 
               {/* Location Filters */}
-              {locations.length > 0 && (
+              {allLocations.length > 0 && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Locations</label>
                   <div className="flex flex-wrap gap-2">
-                    {locations.map(location => (
+                    {allLocations.map((location: string) => (
                       <button
                         key={location}
                         onClick={() => toggleLocation(location)}
@@ -797,11 +810,11 @@ const renderClassBlock = (calClass: CalendarClass) => {
               )}
 
               {/* Type Filters */}
-              {types.length > 0 && (
+              {allTypes.length > 0 && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Class Types</label>
                   <div className="flex flex-wrap gap-2">
-                    {types.map(type => (
+                    {allTypes.map((type: string) => (
                       <button
                         key={type}
                         onClick={() => toggleType(type)}
@@ -819,11 +832,11 @@ const renderClassBlock = (calClass: CalendarClass) => {
               )}
 
               {/* Status Filters */}
-              {statuses.length > 0 && (
+              {allStatuses.length > 0 && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
                   <div className="flex flex-wrap gap-2">
-                    {statuses.map(status => (
+                    {allStatuses.map((status: string) => (
                       <button
                         key={status}
                         onClick={() => toggleStatus(status)}
@@ -850,7 +863,7 @@ const renderClassBlock = (calClass: CalendarClass) => {
       </div>
 
       {/* Empty State */}
-      {rawData.length === 0 && (
+      {filteredData.length === 0 && (
         <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-xl border border-white/50 p-12 text-center">
           <CalendarIcon className="w-16 h-16 text-gray-300 mx-auto mb-4" />
           <h3 className="text-xl font-bold text-gray-700 mb-2">No Data Loaded</h3>
@@ -859,7 +872,7 @@ const renderClassBlock = (calClass: CalendarClass) => {
       )}
 
       {/* No Classes This Week */}
-      {rawData.length > 0 && calendarClasses.length === 0 && (
+      {filteredData.length > 0 && calendarClasses.length === 0 && (
         <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-xl border border-white/50 p-12 text-center">
           <CalendarIcon className="w-16 h-16 text-yellow-300 mx-auto mb-4" />
           <h3 className="text-xl font-bold text-gray-700 mb-2">No Classes Found</h3>

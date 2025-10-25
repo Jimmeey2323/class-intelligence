@@ -81,6 +81,9 @@ export function calculateMetrics(sessions: SessionData[], allRawSessions?: Sessi
   const daysSinceLastClass = (new Date().getTime() - mostRecentDate.getTime()) / (1000 * 60 * 60 * 24);
   const status = daysSinceLastClass <= 8 ? 'Active' : 'Inactive';
   
+  // Calculate composite score (weighted combination of key metrics)
+  const compositeScore = calculateCompositeScore(classAvg, fillRate, totalClasses);
+
   return {
     classes: totalClasses,
     emptyClasses,
@@ -105,6 +108,7 @@ export function calculateMetrics(sessions: SessionData[], allRawSessions?: Sessi
     totalWaitlisted,
     status,
     mostRecentDate,
+    compositeScore,
   };
 }
 
@@ -334,6 +338,25 @@ export function getUniqueValues(sessions: SessionData[], field: keyof SessionDat
     if (value) values.add(value);
   });
   return Array.from(values).sort();
+}
+
+/**
+ * Calculate composite score based on attendance, fill rate, and number of sessions
+ * @param classAvg - Average attendance per class
+ * @param fillRate - Fill rate percentage (0-100)
+ * @param totalSessions - Total number of sessions
+ * @returns Composite score (0-100)
+ */
+export function calculateCompositeScore(classAvg: number, fillRate: number, totalSessions: number): number {
+  // Normalize metrics to 0-100 scale
+  const attendanceScore = Math.min(classAvg * 5, 100); // Assume 20 is excellent attendance
+  const fillRateScore = Math.min(fillRate, 100); // Already 0-100
+  const sessionScore = Math.min(totalSessions * 2, 100); // Assume 50 sessions is excellent
+  
+  // Weighted combination: 40% attendance, 35% fill rate, 25% sessions
+  const compositeScore = (attendanceScore * 0.4) + (fillRateScore * 0.35) + (sessionScore * 0.25);
+  
+  return Math.round(compositeScore * 100) / 100; // Round to 2 decimal places
 }
 
 /**

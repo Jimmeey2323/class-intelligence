@@ -23,8 +23,11 @@ import {
   Eye,
   Maximize2,
   Search,
+  Award,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
+
+type RankingMetric = 'classAvg' | 'fillRate' | 'totalRevenue' | 'consistencyScore' | 'totalCancellations' | 'totalBooked' | 'classes' | 'compositeScore';
 
 interface DrilldownModalProps {
   row: GroupedRow;
@@ -365,11 +368,45 @@ export default function DataTable() {
     toggleGroup,
     columnWidths,
     setColumnWidth,
+    setSorting,
   } = useDashboardStore();
 
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 50 });
   const [drilldownRow, setDrilldownRow] = useState<GroupedRow | null>(null);
   const [sorting, setSortingState] = useState<SortingState>([]);
+  const [rankingMetric, setRankingMetric] = useState<RankingMetric>('compositeScore');
+
+  // Helper function to get metric label
+  const getMetricLabel = (metric: RankingMetric): string => {
+    switch (metric) {
+      case 'classAvg':
+        return 'Class Avg';
+      case 'fillRate':
+        return 'Fill Rate';
+      case 'totalRevenue':
+        return 'Total Revenue';
+      case 'consistencyScore':
+        return 'Consistency';
+      case 'totalCancellations':
+        return 'Cancellations';
+      case 'totalBooked':
+        return 'Total Booked';
+      case 'classes':
+        return 'Classes';
+      case 'compositeScore':
+        return 'Composite Score';
+    }
+  };
+
+  const rankingOptions: RankingMetric[] = ['compositeScore', 'classAvg', 'fillRate', 'totalRevenue', 'consistencyScore'];
+
+  // Update store sorting when ranking metric changes
+  useEffect(() => {
+    if (viewMode === 'grouped') {
+      // Update the store's sorting instead of table sorting to preserve group structure
+      setSorting(rankingMetric, 'desc');
+    }
+  }, [rankingMetric, viewMode, setSorting]);
 
   // Column definitions with proper sizing
   const columns = useMemo<ColumnDef<SessionData | GroupedRow>[]>(() => {
@@ -589,7 +626,7 @@ export default function DataTable() {
       {
         accessorKey: 'cancellationRate',
         header: 'Cancel Rate',
-        size: columnWidths['cancellationRate'] || 120,
+        size: columnWidths['cancellationRate'] || 130,
         enableResizing: true,
         cell: ({ row }) => {
           const data = row.original;
@@ -633,7 +670,7 @@ export default function DataTable() {
       {
         accessorKey: 'revPerCheckin',
         header: 'Rev/Check-in',
-        size: columnWidths['revPerCheckin'] || 130,
+        size: columnWidths['revPerCheckin'] || 140,
         enableResizing: true,
         cell: ({ row }) => {
           const data = row.original;
@@ -656,7 +693,7 @@ export default function DataTable() {
       {
         accessorKey: 'consistencyScore',
         header: 'Consistency',
-        size: columnWidths['consistencyScore'] || 120,
+        size: columnWidths['consistencyScore'] || 140,
         enableResizing: true,
         cell: ({ row }) => {
           const data = row.original;
@@ -665,6 +702,37 @@ export default function DataTable() {
             return (
               <div className={`text-center font-semibold ${color}`}>
                 {formatPercentage(data.consistencyScore)}
+              </div>
+            );
+          }
+          return null;
+        },
+      },
+      {
+        accessorKey: 'compositeScore',
+        header: 'Composite Score',
+        size: columnWidths['compositeScore'] || 140,
+        enableResizing: true,
+        cell: ({ row }) => {
+          const data = row.original;
+          if ('isGroupRow' in data && data.isGroupRow) {
+            const score = data.compositeScore || 0;
+            const color = score >= 70 ? 'text-green-700' : score >= 50 ? 'text-yellow-700' : 'text-orange-700';
+            return (
+              <div className={`text-center font-bold ${color} relative group cursor-help`}>
+                {formatNumber(score, 1)}
+                {/* Tooltip for composite score calculation */}
+                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
+                  <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-pre-line shadow-lg max-w-sm">
+                    {`Composite Score Calculation:
+• Attendance Score: ${formatNumber(Math.min(data.classAvg * 5, 100), 1)} (${formatNumber(data.classAvg, 1)} avg × 5, capped at 100) × 40% = ${formatNumber(Math.min(data.classAvg * 5, 100) * 0.4, 1)}
+• Fill Rate Score: ${formatNumber(Math.min(data.fillRate, 100), 1)} (${formatPercentage(data.fillRate)}) × 35% = ${formatNumber(Math.min(data.fillRate, 100) * 0.35, 1)}
+• Session Score: ${formatNumber(Math.min(data.classes * 2, 100), 1)} (${data.classes} sessions × 2, capped at 100) × 25% = ${formatNumber(Math.min(data.classes * 2, 100) * 0.25, 1)}
+
+Total: ${formatNumber(score, 1)}`}
+                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
+                  </div>
+                </div>
               </div>
             );
           }
@@ -799,10 +867,10 @@ export default function DataTable() {
     data: tableData,
     columns,
     state: {
-      sorting,
+      sorting: viewMode === 'grouped' ? [] : sorting, // Disable table sorting for grouped mode
       pagination,
     },
-    onSortingChange: setSortingState,
+    onSortingChange: viewMode === 'grouped' ? undefined : setSortingState, // Disable sorting handler for grouped mode
     onPaginationChange: setPagination,
     onColumnSizingChange: (updater) => {
       if (typeof updater === 'function') {
@@ -816,6 +884,7 @@ export default function DataTable() {
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     manualPagination: viewMode === 'grouped',
+    manualSorting: viewMode === 'grouped', // Use manual sorting for grouped mode
     columnResizeMode: 'onChange',
     enableColumnResizing: true,
   });
@@ -900,6 +969,24 @@ export default function DataTable() {
             </select>
           )}
 
+          {/* Ranking Criteria Selector */}
+          {viewMode === 'grouped' && (
+            <div className="flex items-center gap-2">
+              <Award className="w-5 h-5 text-yellow-600" />
+              <select
+                value={rankingMetric}
+                onChange={(e) => setRankingMetric(e.target.value as RankingMetric)}
+                className="px-4 py-3 rounded-xl border-2 border-gray-300 focus:border-yellow-500 focus:ring-4 focus:ring-yellow-200 outline-none font-semibold transition-all bg-white shadow-sm"
+              >
+                {rankingOptions.map((metric) => (
+                  <option key={metric} value={metric}>
+                    Rank by {getMetricLabel(metric)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Export Button */}
           <button className="ml-auto px-6 py-3 rounded-xl bg-gradient-to-r from-green-600 to-green-700 text-white font-semibold hover:shadow-xl transition-all flex items-center gap-2 shadow-lg">
             <Download className="w-5 h-5" />
@@ -922,11 +1009,11 @@ export default function DataTable() {
                   {headerGroup.headers.map((header) => (
                     <th
                       key={header.id}
-                      style={{ width: `${header.getSize()}px` }}
-                      className="px-5 py-4 text-left text-xs font-bold text-white uppercase tracking-wider relative group border-r border-blue-700 last:border-r-0"
+                      style={{ width: `${header.getSize()}px`, minWidth: `${header.getSize()}px` }}
+                      className="px-3 py-3 text-left text-xs font-bold text-white uppercase tracking-wider relative group border-r border-blue-700 last:border-r-0"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="truncate">
+                        <span className="whitespace-nowrap min-w-0 flex-1">
                           {header.isPlaceholder
                             ? null
                             : flexRender(header.column.columnDef.header, header.getContext())}
@@ -963,6 +1050,7 @@ export default function DataTable() {
                 return (
                   <tr
                     key={row.id}
+                    style={{ height: '35px', maxHeight: '35px' }}
                     className={`transition-all ${
                       isGroupRow
                         ? 'bg-gradient-to-r from-gray-50 to-gray-100 hover:from-blue-50 hover:to-blue-100 font-semibold cursor-pointer'
@@ -977,8 +1065,8 @@ export default function DataTable() {
                     {row.getVisibleCells().map((cell) => (
                       <td
                         key={cell.id}
-                        style={{ width: `${cell.column.getSize()}px` }}
-                        className="px-5 py-4 text-sm border-r border-gray-100 last:border-r-0"
+                        style={{ width: `${cell.column.getSize()}px`, height: '35px', maxHeight: '35px' }}
+                        className="px-3 py-2 text-sm border-r border-gray-100 last:border-r-0 overflow-hidden"
                       >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
@@ -989,7 +1077,7 @@ export default function DataTable() {
             </tbody>
             {/* Totals Footer */}
             <tfoot className="bg-gradient-to-r from-gray-200 via-gray-300 to-gray-200">
-              <tr>
+              <tr style={{ height: '40px', maxHeight: '40px' }}>
                 {table.getHeaderGroups()[0].headers.map((header, idx) => {
                   const colId = header.id;
                   let content = null;
@@ -1006,8 +1094,8 @@ export default function DataTable() {
                   return (
                     <td
                       key={header.id}
-                      style={{ width: `${header.getSize()}px` }}
-                      className="px-5 py-4 text-sm border-r border-gray-400 last:border-r-0"
+                      style={{ width: `${header.getSize()}px`, height: '40px', maxHeight: '40px' }}
+                      className="px-3 py-2 text-sm border-r border-gray-400 last:border-r-0 overflow-hidden"
                     >
                       {content}
                     </td>

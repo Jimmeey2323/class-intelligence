@@ -23,6 +23,7 @@ import {
   MapPin,
   Calendar,
   Activity,
+  Settings,
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
 import { parseISO, format as formatDate, eachWeekOfInterval, isSameWeek } from 'date-fns';
@@ -85,70 +86,21 @@ interface TrainerMetric {
 }
 
 export function FormatIntelligence() {
-  const { rawData } = useDashboardStore();
+  const { filteredData } = useDashboardStore(); // Use global filtered data
   const [activeTab, setActiveTab] = useState<AnalysisTab>('overview');
   const [selectedFormat, setSelectedFormat] = useState<string>('all');
   const [drilldownChange, setDrilldownChange] = useState<ChangeDetection | null>(null);
   const [drilldownTrainer, setDrilldownTrainer] = useState<TrainerMetric | null>(null);
+  
+  // Keep Format Intelligence-specific filters local
   const [changeFilterType, setChangeFilterType] = useState<string>('all');
   const [changeSearchTerm, setChangeSearchTerm] = useState('');
   const [trainerFilterMinSessions, setTrainerFilterMinSessions] = useState(0);
   const [trainerSearchTerm, setTrainerSearchTerm] = useState('');
-  
-  // Format Intelligence independent filters
-  const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
-  const [selectedTrainers, setSelectedTrainers] = useState<string[]>([]);
-  const [selectedClassTypes, setSelectedClassTypes] = useState<string[]>([]);
-  const [dateFrom, setDateFrom] = useState<Date | null>(null);
-  const [dateTo, setDateTo] = useState<Date | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('active'); // Default to active only
   const [showPatternBreaksOnly, setShowPatternBreaksOnly] = useState(false);
 
-  // Get all unique values for filters
-  const allLocations = useMemo(() => {
-    const locations = new Set(rawData.map(s => s.Location));
-    return Array.from(locations).sort();
-  }, [rawData]);
-
-  const allTrainers = useMemo(() => {
-    const trainers = new Set(rawData.map(s => s.Trainer));
-    return Array.from(trainers).sort();
-  }, [rawData]);
-
-  const allClassTypes = useMemo(() => {
-    const types = new Set(rawData.map(s => s.Type));
-    return Array.from(types).sort();
-  }, [rawData]);
-
-  // Apply format intelligence independent filters (completely independent from main dashboard)
-  const formatFilteredData = useMemo(() => {
-    let data = rawData; // Start from raw data, not filtered data
-    
-    // Filter by location
-    if (selectedLocations.length > 0) {
-      data = data.filter(s => selectedLocations.includes(s.Location));
-    }
-    
-    // Filter by trainer
-    if (selectedTrainers.length > 0) {
-      data = data.filter(s => selectedTrainers.includes(s.Trainer));
-    }
-    
-    // Filter by class type
-    if (selectedClassTypes.length > 0) {
-      data = data.filter(s => selectedClassTypes.includes(s.Type));
-    }
-    
-    // Filter by date range
-    if (dateFrom) {
-      data = data.filter(s => new Date(s.Date) >= dateFrom);
-    }
-    if (dateTo) {
-      data = data.filter(s => new Date(s.Date) <= dateTo);
-    }
-    
-    return data;
-  }, [rawData, selectedLocations, selectedTrainers, selectedClassTypes, dateFrom, dateTo]);
+  // Use the global filtered data from the store
+  const formatFilteredData = filteredData;
 
   // Get all unique formats
   const allFormats = useMemo(() => {
@@ -428,13 +380,6 @@ export function FormatIntelligence() {
 
     let metrics = Array.from(metricsMap.values());
     
-    // Filter by status
-    if (statusFilter === 'active') {
-      metrics = metrics.filter(m => m.isActive);
-    } else if (statusFilter === 'inactive') {
-      metrics = metrics.filter(m => !m.isActive);
-    }
-    
     // Filter by pattern breaks
     if (showPatternBreaksOnly) {
       metrics = metrics.filter(m => m.hasPatternBreak || m.changes.length > 0);
@@ -453,7 +398,7 @@ export function FormatIntelligence() {
       // Then by total sessions
       return b.totalSessions - a.totalSessions;
     });
-  }, [formatFilteredData, allFormats, statusFilter, showPatternBreaksOnly]);
+  }, [formatFilteredData, showPatternBreaksOnly]);
 
   // Get weekly trend data for selected format
   const weeklyTrendData = useMemo<WeeklyData[]>(() => {
@@ -1604,121 +1549,22 @@ export function FormatIntelligence() {
         </button>
       </div>
 
-      {/* Format Intelligence Filters */}
+      {/* Format Intelligence-specific controls */}
       <div className="glass-card rounded-2xl p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="p-2 rounded-xl gradient-blue">
-            <Filter className="w-5 h-5 text-white" />
+            <Settings className="w-5 h-5 text-white" />
           </div>
-          <h3 className="text-lg font-bold text-gray-800">Format Intelligence Filters</h3>
+          <h3 className="text-lg font-bold text-gray-800">Analysis Settings</h3>
         </div>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Location Filter */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-              <MapPin className="w-4 h-4 text-blue-600" />
-              Locations
-            </label>
-            <select
-              multiple
-              value={selectedLocations}
-              onChange={(e) =>
-                setSelectedLocations(Array.from(e.target.selectedOptions, (option) => option.value))
-              }
-              className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all min-h-[100px]"
-            >
-              {allLocations.map((location) => (
-                <option key={location} value={location}>
-                  {location}
-                </option>
-              ))}
-            </select>
-            {selectedLocations.length > 0 && (
-              <button
-                onClick={() => setSelectedLocations([])}
-                className="mt-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
-              >
-                Clear ({selectedLocations.length})
-              </button>
-            )}
-          </div>
-
-          {/* Trainer Filter */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-              <Users className="w-4 h-4 text-blue-600" />
-              Trainers
-            </label>
-            <select
-              multiple
-              value={selectedTrainers}
-              onChange={(e) =>
-                setSelectedTrainers(Array.from(e.target.selectedOptions, (option) => option.value))
-              }
-              className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all min-h-[100px]"
-            >
-              {allTrainers.map((trainer) => (
-                <option key={trainer} value={trainer}>
-                  {trainer}
-                </option>
-              ))}
-            </select>
-            {selectedTrainers.length > 0 && (
-              <button
-                onClick={() => setSelectedTrainers([])}
-                className="mt-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
-              >
-                Clear ({selectedTrainers.length})
-              </button>
-            )}
-          </div>
-
-          {/* Class Type Filter */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-              <BarChart3 className="w-4 h-4 text-blue-600" />
-              Class Types
-            </label>
-            <select
-              multiple
-              value={selectedClassTypes}
-              onChange={(e) =>
-                setSelectedClassTypes(Array.from(e.target.selectedOptions, (option) => option.value))
-              }
-              className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all min-h-[100px]"
-            >
-              {allClassTypes.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </select>
-            {selectedClassTypes.length > 0 && (
-              <button
-                onClick={() => setSelectedClassTypes([])}
-                className="mt-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
-              >
-                Clear ({selectedClassTypes.length})
-              </button>
-            )}
-          </div>
-
-          {/* Status & Pattern Filters */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Pattern Breaks Filter */}
           <div>
             <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
               <Activity className="w-4 h-4 text-blue-600" />
-              Status & Patterns
+              Pattern Analysis
             </label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as 'all' | 'active' | 'inactive')}
-              className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all mb-2"
-            >
-              <option value="all">All Classes</option>
-              <option value="active">Active Only</option>
-              <option value="inactive">Inactive Only</option>
-            </select>
             <label className="flex items-center gap-2 p-3 bg-gradient-to-r from-orange-50 to-red-50 rounded-xl border border-orange-200 cursor-pointer hover:shadow-md transition-all">
               <input
                 type="checkbox"
@@ -1729,110 +1575,21 @@ export function FormatIntelligence() {
               <span className="text-sm font-semibold text-gray-800">Show Pattern Breaks & Changes Only</span>
             </label>
           </div>
-        </div>
 
-        {/* Date Range Row */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-
-          {/* Date From */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-              <Calendar className="w-4 h-4 text-blue-600" />
-              From Date
-            </label>
-            <input
-              type="date"
-              value={dateFrom ? formatDate(dateFrom, 'yyyy-MM-dd') : ''}
-              onChange={(e) => setDateFrom(e.target.value ? new Date(e.target.value) : null)}
-              className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
-            />
-            {dateFrom && (
-              <button
-                onClick={() => setDateFrom(null)}
-                className="mt-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-
-          {/* Date To */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-              <Calendar className="w-4 h-4 text-blue-600" />
-              To Date
-            </label>
-            <input
-              type="date"
-              value={dateTo ? formatDate(dateTo, 'yyyy-MM-dd') : ''}
-              onChange={(e) => setDateTo(e.target.value ? new Date(e.target.value) : null)}
-              className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
-            />
-            {dateTo && (
-              <button
-                onClick={() => setDateTo(null)}
-                className="mt-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-        </div>
-        
-        {/* Data Summary - Always Visible */}
-        <div className="mt-4 pt-4 border-t border-gray-200">
-          <div className="flex items-center justify-between">
-            <div className="space-y-1">
+          {/* Data Summary */}
+          <div className="flex items-center justify-end">
+            <div className="text-right">
               <p className="text-sm text-gray-600">
                 Analyzing{' '}
                 <span className="font-semibold text-blue-700">
                   {formatFilteredData.length.toLocaleString()}
                 </span>{' '}
-                sessions from{' '}
-                <span className="font-semibold text-gray-800">
-                  {rawData.length.toLocaleString()}
-                </span>{' '}
-                total
+                sessions
               </p>
-              {formatFilteredData.length > 0 && (() => {
-                const dates = formatFilteredData.map((s: SessionData) => new Date(s.Date).getTime());
-                const minDate = new Date(Math.min(...dates));
-                const maxDate = new Date(Math.max(...dates));
-                return (
-                  <p className="text-xs text-gray-500">
-                    Date range: {formatDate(minDate, 'dd MMM yyyy')} - {formatDate(maxDate, 'dd MMM yyyy')}
-                  </p>
-                );
-              })()}
-              <div className="flex items-center gap-2 flex-wrap mt-2">
-                {(selectedLocations.length > 0 || selectedTrainers.length > 0 || selectedClassTypes.length > 0 || dateFrom || dateTo) && (
-                  <p className="text-xs font-semibold text-blue-600">
-                    Active Filters: 
-                    {selectedLocations.length > 0 && <span className="ml-1 px-2 py-0.5 bg-blue-100 rounded">{selectedLocations.length} locations</span>}
-                    {selectedTrainers.length > 0 && <span className="ml-1 px-2 py-0.5 bg-purple-100 rounded">{selectedTrainers.length} trainers</span>}
-                    {selectedClassTypes.length > 0 && <span className="ml-1 px-2 py-0.5 bg-green-100 rounded">{selectedClassTypes.length} types</span>}
-                    {(dateFrom || dateTo) && <span className="ml-1 px-2 py-0.5 bg-orange-100 rounded">date range</span>}
-                  </p>
-                )}
-                {statusFilter === 'active' && <span className="text-xs px-2 py-0.5 bg-green-100 text-green-800 rounded font-medium">Active Classes Only</span>}
-                {statusFilter === 'inactive' && <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-800 rounded font-medium">Inactive Classes Only</span>}
-                {showPatternBreaksOnly && <span className="text-xs px-2 py-0.5 bg-red-100 text-red-800 rounded font-medium">Pattern Breaks Only</span>}
-              </div>
+              <p className="text-xs text-gray-500">
+                Use the global filters above to adjust data
+              </p>
             </div>
-            {(selectedLocations.length > 0 || selectedTrainers.length > 0 || selectedClassTypes.length > 0 || dateFrom || dateTo) && (
-              <button
-                onClick={() => {
-                  setSelectedLocations([]);
-                  setSelectedTrainers([]);
-                  setSelectedClassTypes([]);
-                  setDateFrom(null);
-                  setDateTo(null);
-                }}
-                className="text-sm text-blue-600 hover:text-blue-700 font-medium whitespace-nowrap"
-              >
-                Clear All Filters
-              </button>
-            )}
           </div>
         </div>
       </div>
