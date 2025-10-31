@@ -70,6 +70,36 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   sortDirection: 'desc',
   
   // Actions
+  // Calculate average check-ins for similar classes
+  getAverageCheckIns: (className: string, day: string, time: string, location: string) => {
+    const { rawData } = get();
+    
+    // Find similar classes (same class, day, time, location)
+    const similarClasses = rawData.filter(session => {
+      return session.Class === className &&
+             session.Day === day &&
+             session.Time === time &&
+             session.Location === location;
+    });
+    
+    if (similarClasses.length === 0) {
+      return null;
+    }
+    
+    const totalCheckIns = similarClasses.reduce((sum, session) => sum + (session.CheckedIn || 0), 0);
+    const avgCheckIns = totalCheckIns / similarClasses.length;
+    
+    return {
+      avgCheckIns: Math.round(avgCheckIns * 10) / 10,
+      totalSessions: similarClasses.length,
+      lastSessionDate: similarClasses
+        .map(s => s.Date)
+        .filter(Boolean)
+        .sort()
+        .pop() || '',
+    };
+  },
+
   setRawData: (data: SessionData[]) => {
     // Calculate Status and FillRate for each session
     const enrichedData = data.map(session => {

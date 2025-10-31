@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { SessionData } from '../types';
 import { format, startOfWeek, addDays, parseISO, isWithinInterval, isSameDay, addMonths, subMonths } from 'date-fns';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, MapPin, Filter, X, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, MapPin, Filter, X, Sparkles, Grid, List, BarChart3 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EnhancedDrilldownModal from './EnhancedDrilldownModal';
 import CreateClassModal from './CreateClassModal';
@@ -16,14 +16,16 @@ interface CalendarClass {
   totalOverlaps: number;
 }
 
+type ViewMode = 'grid' | 'horizontal' | 'analysis';
+
 export default function WeeklyCalendar() {
-  const { filteredData, rawData, setRawData } = useDashboardStore();
+  const { filteredData, rawData, setRawData, getAverageCheckIns } = useDashboardStore();
   
   console.log('📊 WeeklyCalendar filteredData count:', filteredData.length);
   
   // State
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [selectedWeekStart, setSelectedWeekStart] = useState(startOfWeek(new Date()));
+  const [selectedWeekStart, setSelectedWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
   const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>(['Active', 'Inactive']);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
@@ -37,6 +39,7 @@ export default function WeeklyCalendar() {
   const [showCreateClass, setShowCreateClass] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<{ day: Date; time: string } | null>(null);
   const [isAutoPopulating, setIsAutoPopulating] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('grid');
 
   // Time configuration: 7am - 10pm
   const startHour = 7;
@@ -58,7 +61,7 @@ export default function WeeklyCalendar() {
     return Array.from(locations).sort();
   }, [filteredData]);
 
-  // Week days for current selection
+  // Week days for current selection (Monday to Sunday)
   const weekDays = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => addDays(selectedWeekStart, i));
   }, [selectedWeekStart]);
@@ -84,17 +87,9 @@ export default function WeeklyCalendar() {
     return Array.from(statuses).sort();
   }, [filteredData]);
 
-  // Filter and organize classes
-  const calendarClasses = useMemo(() => {
-    console.log('🔍 Calendar Debug:', {
-      totalSessions: filteredData.length,
-      weekDays: weekDays.map(d => format(d, 'yyyy-MM-dd')),
-      sampleSessionDate: filteredData[0]?.Date,
-      sampleSessionTime: filteredData[0]?.Time,
-    });
-    
-    // Apply local filters (global filters already applied in store)
-    let filtered = filteredData.filter(session => {
+  // Apply local filters to get the final filtered dataset
+  const locallyFilteredData = useMemo(() => {
+    return filteredData.filter(session => {
       // Date filter
       if (!session.Date) return false;
       
@@ -134,6 +129,19 @@ export default function WeeklyCalendar() {
       
       return true;
     });
+  }, [filteredData, weekDays, selectedLocations, selectedStatuses, selectedTypes, startDate, endDate]);
+
+  // Filter and organize classes
+  const calendarClasses = useMemo(() => {
+    console.log('🔍 Calendar Debug:', {
+      totalSessions: filteredData.length,
+      weekDays: weekDays.map(d => format(d, 'yyyy-MM-dd')),
+      sampleSessionDate: filteredData[0]?.Date,
+      sampleSessionTime: filteredData[0]?.Time,
+    });
+    
+    // Use the locally filtered data
+    const filtered = locallyFilteredData;
 
     console.log('✅ Filtered sessions:', filtered.length);
     if (filtered.length > 0) {
@@ -287,7 +295,29 @@ export default function WeeklyCalendar() {
     }
 
     return classes;
-  }, [filteredData, weekDays, selectedLocations, selectedStatuses, selectedTypes, startDate, endDate]);
+  }, [locallyFilteredData, weekDays]);
+
+  // Calculate class format distribution for each day
+  const dailyFormatDistribution = useMemo(() => {
+    const distribution: Record<number, Record<string, number>> = {};
+    
+    // Initialize all days
+    for (let day = 0; day < 7; day++) {
+      distribution[day] = {};
+    }
+    
+    calendarClasses.forEach(calClass => {
+      const { session, dayIndex } = calClass;
+      const format = session.Class || 'Unknown';
+      
+      if (!distribution[dayIndex][format]) {
+        distribution[dayIndex][format] = 0;
+      }
+      distribution[dayIndex][format]++;
+    });
+    
+    return distribution;
+  }, [calendarClasses]);
 
   // Navigation
   const goToPreviousWeek = () => {
@@ -299,19 +329,19 @@ export default function WeeklyCalendar() {
   };
 
   const goToToday = () => {
-    setSelectedWeekStart(startOfWeek(new Date()));
+    setSelectedWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }));
   };
 
   const goToPreviousMonth = () => {
     const newMonth = subMonths(currentMonth, 1);
     setCurrentMonth(newMonth);
-    setSelectedWeekStart(startOfWeek(newMonth));
+    setSelectedWeekStart(startOfWeek(newMonth, { weekStartsOn: 1 }));
   };
 
   const goToNextMonth = () => {
     const newMonth = addMonths(currentMonth, 1);
     setCurrentMonth(newMonth);
-    setSelectedWeekStart(startOfWeek(newMonth));
+    setSelectedWeekStart(startOfWeek(newMonth, { weekStartsOn: 1 }));
   };
 
   // Auto-populate schedule with optimal classes and trainers
@@ -533,13 +563,22 @@ export default function WeeklyCalendar() {
 const renderClassBlock = (calClass: CalendarClass) => {
   const { session, startTime, duration, position, totalOverlaps } = calClass;
   
+  // Get average check-ins for similar classes
+  const avgData = getAverageCheckIns(
+    session.Class || '',
+    session.Day || '',
+    session.Time || '',
+    session.Location || ''
+  );
+  
   console.log('🎯 Rendering class:', {
     class: session.Class,
     dayIndex: calClass.dayIndex,
     startTime,
     duration,
     position,
-    totalOverlaps
+    totalOverlaps,
+    avgCheckIns: avgData?.avgCheckIns
   });
   
   // Calculate position - ensure proper positioning
@@ -628,12 +667,31 @@ const renderClassBlock = (calClass: CalendarClass) => {
       onMouseEnter={() => setHoveredClass(session)}
       onMouseLeave={() => setHoveredClass(null)}
       onClick={() => {
-        const relatedSessions = filteredData.filter(s => 
+        console.log('🔍 Drilldown Debug - Grid View:', {
+          clickedSession: {
+            Class: session.Class,
+            Day: session.Day,
+            Time: session.Time,
+            Location: session.Location
+          },
+          locallyFilteredDataCount: locallyFilteredData.length,
+          sampleLocalData: locallyFilteredData.slice(0, 2).map(s => ({
+            Class: s.Class,
+            Day: s.Day,
+            Time: s.Time,
+            Location: s.Location
+          }))
+        });
+
+        const relatedSessions = locallyFilteredData.filter(s => 
           s.Class === session.Class && 
           s.Day === session.Day && 
           s.Time === session.Time && 
           s.Location === session.Location
         );
+        
+        console.log('🎯 Found related sessions:', relatedSessions.length, relatedSessions);
+        
         setDrilldownData(relatedSessions);
         setDrilldownTitle(`${session.Class} - ${session.Day} at ${session.Time} (${session.Location})`);
         setShowDrilldown(true);
@@ -645,8 +703,15 @@ const renderClassBlock = (calClass: CalendarClass) => {
           <div className="font-bold text-sm leading-tight truncate flex-1">
             {session.Class || 'Unnamed Class'}
           </div>
-          <div className="text-xs font-semibold whitespace-nowrap opacity-90 bg-white/20 px-1.5 py-0.5 rounded">
-            {session.CheckedIn || 0}/{session.Capacity || 0}
+          <div className="flex flex-col items-end gap-0.5">
+            <div className="text-xs font-semibold whitespace-nowrap opacity-90 bg-white/20 px-1.5 py-0.5 rounded">
+              {session.CheckedIn || 0}/{session.Capacity || 0}
+            </div>
+            {avgData && (
+              <div className="text-xs whitespace-nowrap opacity-80 bg-black/10 px-1 py-0.5 rounded text-center">
+                Avg: {avgData.avgCheckIns}
+              </div>
+            )}
           </div>
         </div>
         <div className="flex items-center justify-between gap-1.5">
@@ -695,8 +760,50 @@ const renderClassBlock = (calClass: CalendarClass) => {
             </button>
           </div>
 
-          {/* Quick Actions */}
-          <div className="flex items-center gap-2 flex-wrap">
+          {/* View Mode and Quick Actions */}
+          <div className="flex items-center gap-4 flex-wrap">
+            {/* View Mode Selector */}
+            <div className="flex items-center bg-gray-100 rounded-xl p-1">
+              <button
+                onClick={() => setViewMode('grid')}
+                className={`px-3 py-2 text-sm rounded-lg transition-all flex items-center gap-2 ${
+                  viewMode === 'grid' 
+                    ? 'bg-white shadow-md text-blue-600 font-semibold' 
+                    : 'text-gray-600 hover:bg-gray-200'
+                }`}
+                title="Grid View"
+              >
+                <Grid className="w-4 h-4" />
+                Grid
+              </button>
+              <button
+                onClick={() => setViewMode('horizontal')}
+                className={`px-3 py-2 text-sm rounded-lg transition-all flex items-center gap-2 ${
+                  viewMode === 'horizontal' 
+                    ? 'bg-white shadow-md text-blue-600 font-semibold' 
+                    : 'text-gray-600 hover:bg-gray-200'
+                }`}
+                title="Horizontal Time Slots"
+              >
+                <List className="w-4 h-4" />
+                Horizontal
+              </button>
+              <button
+                onClick={() => setViewMode('analysis')}
+                className={`px-3 py-2 text-sm rounded-lg transition-all flex items-center gap-2 ${
+                  viewMode === 'analysis' 
+                    ? 'bg-white shadow-md text-blue-600 font-semibold' 
+                    : 'text-gray-600 hover:bg-gray-200'
+                }`}
+                title="Format Analysis"
+              >
+                <BarChart3 className="w-4 h-4" />
+                Analysis
+              </button>
+            </div>
+
+            <div className="h-6 w-px bg-gray-300"></div>
+
             <button
               onClick={goToPreviousWeek}
               className="px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
@@ -885,95 +992,420 @@ const renderClassBlock = (calClass: CalendarClass) => {
         </div>
       )}
 
-      {/* Calendar Grid */}
+      {/* Calendar Views */}
       {calendarClasses.length > 0 && (
-      <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/60 overflow-hidden">
-        <div className="flex">
-          {/* Time Column */}
-          <div className="w-24 bg-gradient-to-b from-slate-50 to-white border-r-2 border-slate-200 flex-shrink-0">
-            <div className="h-20 border-b-2 border-slate-200 flex items-center justify-center">
-              <span className="text-xs font-bold text-slate-600">TIME</span>
-            </div>
-            {timeSlots.map((slot, idx) => (
-              <div
-                key={idx}
-                className="h-[100px] border-b border-slate-100 flex items-center justify-center"
-              >
-                <span className="text-sm text-slate-700 font-bold">
-                  {idx % 2 === 0 ? slot.label : ''}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* Days Grid */}
-          <div className="flex-1 overflow-x-auto">
-            <div className="grid grid-cols-7 min-w-[1800px]">
-              {/* Day Headers */}
-              {weekDays.map((day, idx) => {
-                const isToday = isSameDay(day, new Date());
-                const dayClasses = calendarClasses.filter(c => c.dayIndex === idx);
-                
-                return (
-                  <div
-                    key={idx}
-                    className={`h-20 border-b-2 border-r border-slate-200 flex flex-col items-center justify-center transition-colors ${
-                      isToday 
-                        ? 'bg-gradient-to-b from-blue-100 via-blue-50 to-white shadow-inner' 
-                        : 'bg-gradient-to-b from-slate-50 to-white hover:from-slate-100'
-                    }`}
-                  >
-                    <div className={`text-xs font-bold uppercase tracking-wide mb-1 ${
-                      isToday ? 'text-blue-600' : 'text-slate-600'
-                    }`}>
-                      {format(day, 'EEE')}
-                    </div>
-                    <div className={`text-2xl font-bold mb-0.5 ${
-                      isToday ? 'text-blue-700' : 'text-slate-800'
-                    }`}>
-                      {format(day, 'd')}
-                    </div>
-                    <div className={`text-xs px-2 py-0.5 rounded-full ${
-                      isToday 
-                        ? 'bg-blue-200 text-blue-800 font-semibold' 
-                        : 'bg-slate-200 text-slate-600'
-                    }`}>
-                      {dayClasses.length} {dayClasses.length === 1 ? 'class' : 'classes'}
-                    </div>
+        <>
+          {/* Grid View */}
+          {viewMode === 'grid' && (
+            <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/60 overflow-hidden">
+              <div className="flex">
+                {/* Time Column */}
+                <div className="w-24 bg-gradient-to-b from-slate-50 to-white border-r-2 border-slate-200 flex-shrink-0">
+                  <div className="h-20 border-b-2 border-slate-200 flex items-center justify-center">
+                    <span className="text-xs font-bold text-slate-600">TIME</span>
                   </div>
-                );
-              })}
-
-              {/* Day Columns with Time Slots */}
-              {weekDays.map((day, dayIdx) => (
-                <div key={dayIdx} className="border-r border-slate-200 relative bg-white hover:bg-slate-50/30 transition-colors">
-                  {timeSlots.map((slot, slotIdx) => (
+                  {timeSlots.map((slot, idx) => (
                     <div
-                      key={slotIdx}
-                      className="h-[100px] border-b border-slate-100 cursor-pointer hover:bg-blue-50/30 transition-colors group"
-                      onClick={() => {
-                        setSelectedSlot({ day, time: slot.label });
-                        setShowCreateClass(true);
-                      }}
+                      key={idx}
+                      className="h-[100px] border-b border-slate-100 flex items-center justify-center"
                     >
-                      <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center h-full">
-                        <span className="text-sm text-blue-600 font-semibold">+ Add Class</span>
-                      </div>
+                      <span className="text-sm text-slate-700 font-bold">
+                        {idx % 2 === 0 ? slot.label : ''}
+                      </span>
                     </div>
                   ))}
-                  
-                  {/* Classes for this day */}
-                  <AnimatePresence>
-                    {calendarClasses
-                      .filter(c => c.dayIndex === dayIdx)
-                      .map(calClass => renderClassBlock(calClass))}
-                  </AnimatePresence>
                 </div>
-              ))}
+
+                {/* Days Grid */}
+                <div className="flex-1 overflow-x-auto">
+                  <div className="grid grid-cols-7 min-w-[1800px]">
+                    {/* Day Headers */}
+                    {weekDays.map((day, idx) => {
+                      const isToday = isSameDay(day, new Date());
+                      const dayClasses = calendarClasses.filter(c => c.dayIndex === idx);
+                      
+                      return (
+                        <div
+                          key={idx}
+                          className={`h-20 border-b-2 border-r border-slate-200 flex flex-col items-center justify-center transition-colors ${
+                            isToday 
+                              ? 'bg-gradient-to-b from-blue-100 via-blue-50 to-white shadow-inner' 
+                              : 'bg-gradient-to-b from-slate-50 to-white hover:from-slate-100'
+                          }`}
+                        >
+                          <div className={`text-xs font-bold uppercase tracking-wide mb-1 ${
+                            isToday ? 'text-blue-600' : 'text-slate-600'
+                          }`}>
+                            {format(day, 'EEE')}
+                          </div>
+                          <div className={`text-2xl font-bold mb-0.5 ${
+                            isToday ? 'text-blue-700' : 'text-slate-800'
+                          }`}>
+                            {format(day, 'd')}
+                          </div>
+                          <div className={`text-xs px-2 py-0.5 rounded-full ${
+                            isToday 
+                              ? 'bg-blue-200 text-blue-800 font-semibold' 
+                              : 'bg-slate-200 text-slate-600'
+                          }`}>
+                            {dayClasses.length} {dayClasses.length === 1 ? 'class' : 'classes'}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Day Columns with Time Slots */}
+                    {weekDays.map((day, dayIdx) => (
+                      <div key={dayIdx} className="border-r border-slate-200 relative bg-white hover:bg-slate-50/30 transition-colors">
+                        {timeSlots.map((slot, slotIdx) => (
+                          <div
+                            key={slotIdx}
+                            className="h-[100px] border-b border-slate-100 cursor-pointer hover:bg-blue-50/30 transition-colors group"
+                            onClick={() => {
+                              setSelectedSlot({ day, time: slot.label });
+                              setShowCreateClass(true);
+                            }}
+                          >
+                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center h-full">
+                              <span className="text-sm text-blue-600 font-semibold">+ Add Class</span>
+                            </div>
+                          </div>
+                        ))}
+                        
+                        {/* Classes for this day */}
+                        <AnimatePresence>
+                          {calendarClasses
+                            .filter(c => c.dayIndex === dayIdx)
+                            .map(calClass => renderClassBlock(calClass))}
+                        </AnimatePresence>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      </div>
+          )}
+
+          {/* Horizontal View */}
+          {viewMode === 'horizontal' && (
+            <div className="space-y-4">
+              {timeSlots.map((slot, slotIdx) => {
+                const slotMinutes = slot.hour * 60 + slot.minute;
+                const slotClasses = calendarClasses.filter(c => c.startTime === slotMinutes);
+                
+                if (slotClasses.length === 0 && slotIdx % 2 !== 0) return null; // Skip empty half-hour slots
+                
+                return (
+                  <motion.div
+                    key={slotIdx}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-lg border border-white/50 overflow-hidden"
+                  >
+                    <div className="bg-gradient-to-r from-blue-50 to-purple-50 px-6 py-4 border-b border-white/50">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                          {slot.label}
+                        </h3>
+                        <div className="text-sm text-gray-500">
+                          {slotClasses.length} {slotClasses.length === 1 ? 'class' : 'classes'}
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {slotClasses.length > 0 ? (
+                      <div className="p-4">
+                        <div className="grid grid-cols-7 gap-3">
+                          {weekDays.map((day, dayIdx) => {
+                            const dayClass = slotClasses.find(c => c.dayIndex === dayIdx);
+                            const isToday = isSameDay(day, new Date());
+                            
+                            return (
+                              <div
+                                key={dayIdx}
+                                className={`min-h-[120px] rounded-xl border-2 transition-all ${
+                                  isToday 
+                                    ? 'border-blue-200 bg-blue-50/50' 
+                                    : 'border-gray-200 bg-gray-50/30'
+                                }`}
+                              >
+                                <div className={`text-center p-2 border-b ${
+                                  isToday ? 'border-blue-200 bg-blue-100/50' : 'border-gray-200'
+                                }`}>
+                                  <div className={`text-xs font-semibold uppercase tracking-wide ${
+                                    isToday ? 'text-blue-700' : 'text-gray-600'
+                                  }`}>
+                                    {format(day, 'EEE')}
+                                  </div>
+                                  <div className={`text-lg font-bold ${
+                                    isToday ? 'text-blue-800' : 'text-gray-800'
+                                  }`}>
+                                    {format(day, 'd')}
+                                  </div>
+                                </div>
+                                
+                                {dayClass ? (
+                                  <div 
+                                    className="p-3 cursor-pointer hover:bg-white/80 transition-all h-full"
+                                    onClick={() => {
+                                      console.log('🔍 Drilldown Debug - Horizontal View:', {
+                                        clickedSession: {
+                                          Class: dayClass.session.Class,
+                                          Day: dayClass.session.Day,
+                                          Time: dayClass.session.Time,
+                                          Location: dayClass.session.Location
+                                        },
+                                        locallyFilteredDataCount: locallyFilteredData.length,
+                                        sampleLocalData: locallyFilteredData.slice(0, 2).map(s => ({
+                                          Class: s.Class,
+                                          Day: s.Day,
+                                          Time: s.Time,
+                                          Location: s.Location
+                                        }))
+                                      });
+
+                                      const relatedSessions = locallyFilteredData.filter(s => 
+                                        s.Class === dayClass.session.Class && 
+                                        s.Day === dayClass.session.Day && 
+                                        s.Time === dayClass.session.Time && 
+                                        s.Location === dayClass.session.Location
+                                      );
+                                      
+                                      console.log('🎯 Found related sessions (horizontal):', relatedSessions.length, relatedSessions);
+                                      
+                                      setDrilldownData(relatedSessions);
+                                      setDrilldownTitle(`${dayClass.session.Class} - ${dayClass.session.Day} at ${dayClass.session.Time} (${dayClass.session.Location})`);
+                                      setShowDrilldown(true);
+                                    }}
+                                  >
+                                    {(() => {
+                                      const avgData = getAverageCheckIns(
+                                        dayClass.session.Class || '',
+                                        dayClass.session.Day || '',
+                                        dayClass.session.Time || '',
+                                        dayClass.session.Location || ''
+                                      );
+                                      
+                                      return (
+                                        <div className="space-y-2">
+                                          <div className="font-bold text-sm text-purple-700 truncate">
+                                            {dayClass.session.Class}
+                                          </div>
+                                          <div className="text-xs text-gray-600 truncate">
+                                            👤 {dayClass.session.Trainer}
+                                          </div>
+                                          <div className="space-y-1">
+                                            <div className="flex items-center justify-between">
+                                              <div className="text-xs font-semibold text-green-600">
+                                                Current: {dayClass.session.CheckedIn || 0}/{dayClass.session.Capacity || 0}
+                                              </div>
+                                              <div className={`text-xs px-2 py-1 rounded-full ${
+                                                dayClass.session.Status === 'Active'
+                                                  ? 'bg-green-100 text-green-700'
+                                                  : 'bg-gray-100 text-gray-600'
+                                              }`}>
+                                                {dayClass.session.Status}
+                                              </div>
+                                            </div>
+                                            {avgData && (
+                                              <div className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                                                Avg: {avgData.avgCheckIns} ({avgData.totalSessions} sessions)
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })()}
+                                  </div>
+                                ) : (
+                                  <div 
+                                    className="p-3 h-full flex items-center justify-center cursor-pointer hover:bg-blue-50/50 transition-all group"
+                                    onClick={() => {
+                                      setSelectedSlot({ day, time: slot.label });
+                                      setShowCreateClass(true);
+                                    }}
+                                  >
+                                    <div className="text-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <div className="text-blue-500 text-2xl mb-1">+</div>
+                                      <div className="text-xs text-blue-600 font-medium">Add Class</div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-8 text-center text-gray-500">
+                        <div className="text-gray-300 text-4xl mb-2">⏰</div>
+                        <div className="text-sm">No classes scheduled for this time slot</div>
+                      </div>
+                    )}
+                  </motion.div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Format Analysis View */}
+          {viewMode === 'analysis' && (
+            <div className="space-y-6">
+              {/* Daily Format Distribution */}
+              <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/60 p-6">
+                <h3 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-6">
+                  Class Format Distribution by Day
+                </h3>
+                
+                <div className="grid grid-cols-7 gap-4">
+                  {weekDays.map((day, dayIdx) => {
+                    const isToday = isSameDay(day, new Date());
+                    const dayFormats = dailyFormatDistribution[dayIdx] || {};
+                    const totalClasses = Object.values(dayFormats).reduce((sum: number, count) => sum + (count as number), 0);
+                    
+                    return (
+                      <div
+                        key={dayIdx}
+                        className={`p-4 rounded-xl border-2 transition-all ${
+                          isToday 
+                            ? 'border-blue-200 bg-gradient-to-b from-blue-50 to-blue-25' 
+                            : 'border-gray-200 bg-gradient-to-b from-gray-50 to-white'
+                        }`}
+                      >
+                        <div className="text-center mb-4">
+                          <div className={`text-xs font-bold uppercase tracking-wide ${
+                            isToday ? 'text-blue-600' : 'text-gray-600'
+                          }`}>
+                            {format(day, 'EEE')}
+                          </div>
+                          <div className={`text-2xl font-bold ${
+                            isToday ? 'text-blue-700' : 'text-gray-800'
+                          }`}>
+                            {format(day, 'd')}
+                          </div>
+                          <div className={`text-sm font-semibold mt-1 ${
+                            isToday ? 'text-blue-600' : 'text-gray-600'
+                          }`}>
+                            {totalClasses} classes
+                          </div>
+                        </div>
+                        
+                        {totalClasses > 0 ? (
+                          <div className="space-y-2">
+                            {Object.entries(dayFormats)
+                              .sort(([,a], [,b]) => (b as number) - (a as number))
+                              .map(([format, count], idx) => {
+                                const percentage = ((count as number) / totalClasses) * 100;
+                                
+                                // Generate consistent colors for each format
+                                const colors = [
+                                  'bg-purple-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500',
+                                  'bg-pink-500', 'bg-indigo-500', 'bg-red-500', 'bg-teal-500'
+                                ];
+                                const colorClass = colors[idx % colors.length];
+                                
+                                return (
+                                  <div key={format} className="space-y-1">
+                                    <div className="flex items-center justify-between text-xs">
+                                      <span className="font-medium text-gray-700 truncate" title={format}>
+                                        {format.length > 12 ? format.substring(0, 12) + '...' : format}
+                                      </span>
+                                      <span className="text-gray-600 font-semibold">{count}</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-2">
+                                      <div 
+                                        className={`h-2 rounded-full ${colorClass} transition-all duration-500`}
+                                        style={{ width: `${percentage}%` }}
+                                      ></div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        ) : (
+                          <div className="text-center py-4">
+                            <div className="text-gray-300 text-xl">📅</div>
+                            <div className="text-xs text-gray-500 mt-1">No classes</div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Weekly Format Summary */}
+              <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/60 p-6">
+                <h3 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-6">
+                  Weekly Format Summary
+                </h3>
+                
+                {(() => {
+                  const weeklyFormats: Record<string, number> = {};
+                  Object.values(dailyFormatDistribution).forEach(dayFormats => {
+                    Object.entries(dayFormats).forEach(([format, count]) => {
+                      weeklyFormats[format] = (weeklyFormats[format] || 0) + (count as number);
+                    });
+                  });
+
+                  const totalWeeklyClasses = Object.values(weeklyFormats).reduce((sum, count) => sum + count, 0);
+
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {Object.entries(weeklyFormats)
+                        .sort(([,a], [,b]) => b - a)
+                        .map(([format, count], idx) => {
+                          const percentage = (count / totalWeeklyClasses) * 100;
+                          
+                          const colors = [
+                            { bg: 'bg-purple-500', text: 'text-purple-700', light: 'bg-purple-50' },
+                            { bg: 'bg-blue-500', text: 'text-blue-700', light: 'bg-blue-50' },
+                            { bg: 'bg-green-500', text: 'text-green-700', light: 'bg-green-50' },
+                            { bg: 'bg-yellow-500', text: 'text-yellow-700', light: 'bg-yellow-50' },
+                            { bg: 'bg-pink-500', text: 'text-pink-700', light: 'bg-pink-50' },
+                            { bg: 'bg-indigo-500', text: 'text-indigo-700', light: 'bg-indigo-50' },
+                            { bg: 'bg-red-500', text: 'text-red-700', light: 'bg-red-50' },
+                            { bg: 'bg-teal-500', text: 'text-teal-700', light: 'bg-teal-50' },
+                          ];
+                          const color = colors[idx % colors.length];
+                          
+                          return (
+                            <motion.div
+                              key={format}
+                              initial={{ opacity: 0, scale: 0.9 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              transition={{ delay: idx * 0.1 }}
+                              className={`${color.light} rounded-2xl p-6 border border-white/50`}
+                            >
+                              <div className="flex items-center justify-between mb-4">
+                                <h4 className={`font-bold text-lg ${color.text}`}>{format}</h4>
+                                <div className={`px-3 py-1 rounded-full ${color.bg} text-white text-sm font-semibold`}>
+                                  {count}
+                                </div>
+                              </div>
+                              
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between text-sm">
+                                  <span className="text-gray-600">Weekly Share</span>
+                                  <span className={`font-semibold ${color.text}`}>{percentage.toFixed(1)}%</span>
+                                </div>
+                                <div className="w-full bg-gray-200 rounded-full h-3">
+                                  <div 
+                                    className={`h-3 rounded-full ${color.bg} transition-all duration-1000 ease-out`}
+                                    style={{ width: `${percentage}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            </motion.div>
+                          );
+                        })}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Hover Tooltip */}

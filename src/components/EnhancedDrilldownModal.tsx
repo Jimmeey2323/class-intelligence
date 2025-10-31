@@ -15,7 +15,6 @@ interface EnhancedDrilldownModalProps {
 }
 
 export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, title }: EnhancedDrilldownModalProps) {
-  if (sessions.length === 0) return null;
 
   // Sort sessions by date
   const sortedSessions = useMemo(() => {
@@ -157,12 +156,14 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                     <div className="flex items-center gap-4 text-sm text-gray-600">
                       <span className="flex items-center gap-1">
                         <Calendar className="w-4 h-4" />
-                        {metrics.totalSessions} sessions analyzed
+                        {sessions.length} sessions analyzed
                       </span>
-                      <span className="flex items-center gap-1">
-                        <MapPin className="w-4 h-4" />
-                        {metrics.locations.join(', ')}
-                      </span>
+                      {sessions.length > 0 && (
+                        <span className="flex items-center gap-1">
+                          <MapPin className="w-4 h-4" />
+                          {[...new Set(sessions.map(s => s.Location))].join(', ')}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <button
@@ -172,6 +173,32 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                     <X className="w-6 h-6 text-gray-500" />
                   </button>
                 </div>
+
+                {/* Empty State */}
+                {sessions.length === 0 && (
+                  <div className="text-center py-12">
+                    <AlertCircle className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                    <h3 className="text-xl font-semibold text-gray-700 mb-2">No Sessions Found</h3>
+                    <p className="text-gray-500 mb-6">
+                      No matching sessions were found for the selected class. This could be because:
+                    </p>
+                    <div className="text-left max-w-md mx-auto space-y-2 text-sm text-gray-600">
+                      <p>• The class format, time, or location doesn't match exactly</p>
+                      <p>• The selected filters are too restrictive</p>
+                      <p>• This is a new class with no historical data</p>
+                    </div>
+                    <button
+                      onClick={onClose}
+                      className="mt-6 px-6 py-2 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
+                    >
+                      Close
+                    </button>
+                  </div>
+                )}
+
+                {/* Content - only show if we have sessions */}
+                {sessions.length > 0 && (
+                  <div>
 
                 {/* Key Metrics Grid */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
@@ -407,6 +434,8 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                     Close
                   </button>
                 </div>
+                </div>
+                )}
               </Dialog.Panel>
             </Transition.Child>
           </div>

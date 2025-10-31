@@ -178,6 +178,11 @@ export interface DashboardState {
   sortDirection: 'asc' | 'desc';
   
   // Actions
+  getAverageCheckIns: (className: string, day: string, time: string, location: string) => {
+    avgCheckIns: number;
+    totalSessions: number;
+    lastSessionDate: string;
+  } | null;
   setRawData: (data: SessionData[]) => void;
   setFilters: (filters: Partial<FilterState>) => void;
   setViewMode: (mode: ViewMode) => void;
