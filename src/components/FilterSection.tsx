@@ -1,7 +1,6 @@
 import { ChevronDown, ChevronUp, Calendar, Users, MapPin, Layers, Activity } from 'lucide-react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { getUniqueValues } from '../utils/calculations';
-import { format } from 'date-fns';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 

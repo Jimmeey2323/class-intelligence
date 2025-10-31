@@ -12,7 +12,11 @@ import {
   Calendar,
   MapPin,
   Users,
-  Clock
+  Clock,
+  Edit3,
+
+  FileSpreadsheet,
+  BarChart3
 } from 'lucide-react';
 import { MappedScheduleClass } from '../types/schedule';
 import { 
@@ -20,6 +24,8 @@ import {
   calculateClassPerformance, 
   mapScheduleWithPerformance 
 } from '../utils/scheduleParser';
+import { CsvEditor } from './CsvEditor';
+import { SessionData } from '../types';
 
 export default function ScheduleManagement() {
   const { rawData } = useDashboardStore();
@@ -28,8 +34,78 @@ export default function ScheduleManagement() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string>('Monday');
+  const [showCsvEditor, setShowCsvEditor] = useState(false);
+  const [currentCsvContent, setCurrentCsvContent] = useState('');
+  const [currentFileName, setCurrentFileName] = useState('');
 
   const daysOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+  // CSV Editor handlers
+  const handleEditCsv = () => {
+    if (currentCsvContent) {
+      setShowCsvEditor(true);
+    }
+  };
+
+  const handleCsvSave = async (modifiedCsv: string, fileName: string) => {
+    console.log('CSV saved:', fileName);
+    setCurrentCsvContent(modifiedCsv);
+    setCurrentFileName(fileName);
+    
+    // Re-process the modified CSV
+    setIsProcessing(true);
+    setUploadError(null);
+    setUploadSuccess(false);
+
+    try {
+      const parsedSchedule = await extractScheduleData(modifiedCsv);
+      const performanceData = calculateClassPerformance(rawData);
+      const mappedSchedule = mapScheduleWithPerformance(parsedSchedule, performanceData);
+      
+      // Filter out classes without trainers
+      const filteredSchedule: { [day: string]: MappedScheduleClass[] } = {};
+      Object.keys(mappedSchedule).forEach(day => {
+        filteredSchedule[day] = mappedSchedule[day].filter(scheduleClass => 
+          scheduleClass.trainer1 && scheduleClass.trainer1.trim() !== ''
+        );
+      });
+      
+      setScheduleData(filteredSchedule);
+      setUploadSuccess(true);
+      setShowCsvEditor(false);
+    } catch (error) {
+      console.error('Error processing modified CSV:', error);
+      setUploadError(error instanceof Error ? error.message : 'Failed to process modified CSV');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCsvClose = () => {
+    setShowCsvEditor(false);
+  };
+
+  // Enhanced historic data mapping
+  const getEnhancedHistoricMapping = (scheduleClass: MappedScheduleClass): SessionData[] => {
+    return rawData.filter((session: SessionData) => {
+      // More flexible matching criteria
+      const classMatch = session.Class && scheduleClass.className && 
+        session.Class.toLowerCase().includes(scheduleClass.className.toLowerCase().replace('studio ', ''));
+      
+      const trainerMatch = session.Trainer && scheduleClass.trainer1 &&
+        (session.Trainer.toLowerCase().includes(scheduleClass.trainer1.toLowerCase()) ||
+         scheduleClass.trainer1.toLowerCase().includes(session.Trainer.toLowerCase()));
+      
+      const dayMatch = session.Day && scheduleClass.day &&
+        session.Day.toLowerCase() === scheduleClass.day.toLowerCase();
+      
+      const locationMatch = session.Location && scheduleClass.location &&
+        (session.Location.toLowerCase().includes(scheduleClass.location.toLowerCase()) ||
+         scheduleClass.location.toLowerCase().includes(session.Location.toLowerCase()));
+
+      return classMatch || (trainerMatch && dayMatch) || (classMatch && dayMatch && locationMatch);
+    });
+  };
 
   const handleFileUpload = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -48,15 +124,28 @@ export default function ScheduleManagement() {
 
     try {
       const csvText = await file.text();
+      
+      // Store the CSV content for editing if needed
+      setCurrentCsvContent(csvText);
+      setCurrentFileName(file.name);
+      
       const parsedSchedule = await extractScheduleData(csvText);
       
-      // Calculate performance data from historic sessions
+      // Enhanced performance calculation with better historic mapping
       const performanceData = calculateClassPerformance(rawData);
       
-      // Map schedule with historic performance
+      // Map schedule with historic performance, filtering out classes without trainers
       const mappedSchedule = mapScheduleWithPerformance(parsedSchedule, performanceData);
       
-      setScheduleData(mappedSchedule);
+      // Filter out any classes that don't have trainer assignments
+      const filteredSchedule: { [day: string]: MappedScheduleClass[] } = {};
+      Object.keys(mappedSchedule).forEach(day => {
+        filteredSchedule[day] = mappedSchedule[day].filter(scheduleClass => 
+          scheduleClass.trainer1 && scheduleClass.trainer1.trim() !== ''
+        );
+      });
+      
+      setScheduleData(filteredSchedule);
       setUploadSuccess(true);
       
     } catch (error) {
@@ -142,17 +231,39 @@ export default function ScheduleManagement() {
                 <p className="text-gray-500 mb-4">
                   Drop your schedule file here or click to browse
                 </p>
-                <label
-                  htmlFor="schedule-upload"
-                  className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all cursor-pointer"
-                >
-                  <FileText className="w-5 h-5" />
-                  Choose File
-                </label>
+                <div className="flex items-center justify-center gap-4">
+                  <label
+                    htmlFor="schedule-upload"
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all cursor-pointer"
+                  >
+                    <FileText className="w-5 h-5" />
+                    Choose File
+                  </label>
+                  
+                  {currentCsvContent && (
+                    <button
+                      onClick={handleEditCsv}
+                      className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
+                    >
+                      <Edit3 className="w-5 h-5" />
+                      Edit CSV
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="text-sm text-gray-400">
                 File must contain "schedule" in the name and be in CSV format
               </p>
+              {currentFileName && (
+                <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <FileSpreadsheet className="w-5 h-5 text-blue-600" />
+                    <span className="text-sm font-medium text-blue-800">
+                      Current file: {currentFileName}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -322,59 +433,99 @@ export default function ScheduleManagement() {
                           </div>
                         </div>
                         
-                        {mappedClass.historicalPerformance ? (
-                          <div className="bg-gray-50 rounded-lg p-3 space-y-2">
-                            <div className="grid grid-cols-2 gap-4 text-sm">
-                              <div>
-                                <span className="text-gray-600">Avg Check-ins:</span>
-                                <span className="font-semibold ml-2 text-green-600">
-                                  {mappedClass.historicalPerformance.avgCheckIns}
-                                </span>
+                        {(() => {
+                          const historicSessions = getEnhancedHistoricMapping(mappedClass);
+                          const hasHistoricData = historicSessions.length > 0;
+                          
+                          if (hasHistoricData) {
+                            const avgCheckIns = historicSessions.reduce((sum, s) => sum + s.CheckedIn, 0) / historicSessions.length;
+                            const avgCapacity = historicSessions.reduce((sum, s) => sum + s.Capacity, 0) / historicSessions.length;
+                            const avgFillRate = avgCapacity > 0 ? (avgCheckIns / avgCapacity) * 100 : 0;
+                            const totalRevenue = historicSessions.reduce((sum, s) => sum + s.Revenue, 0);
+                            const latestSession = historicSessions.sort((a, b) => 
+                              new Date(b.Date).getTime() - new Date(a.Date).getTime()
+                            )[0];
+                            
+                            return (
+                              <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+                                <div className="grid grid-cols-2 gap-4 text-sm">
+                                  <div>
+                                    <span className="text-gray-600">Avg Check-ins:</span>
+                                    <span className="font-semibold ml-2 text-green-600">
+                                      {avgCheckIns.toFixed(1)}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-600">Avg Capacity:</span>
+                                    <span className="font-semibold ml-2 text-blue-600">
+                                      {avgCapacity.toFixed(1)}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-600">Fill Rate:</span>
+                                    <span className="font-semibold ml-2 text-purple-600">
+                                      {avgFillRate.toFixed(1)}%
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-600">Sessions:</span>
+                                    <span className="font-semibold ml-2 text-gray-600">
+                                      {historicSessions.length}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-600">Total Revenue:</span>
+                                    <span className="font-semibold ml-2 text-orange-600">
+                                      ₹{totalRevenue.toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-600">Avg Revenue:</span>
+                                    <span className="font-semibold ml-2 text-orange-600">
+                                      ₹{(totalRevenue / historicSessions.length).toFixed(0)}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="text-xs text-gray-500 border-t pt-2">
+                                  Last session: {latestSession?.Date ? new Date(latestSession.Date).toLocaleDateString() : 'Unknown'} 
+                                  {latestSession?.CheckedIn && ` (${latestSession.CheckedIn}/${latestSession.Capacity} attended)`}
+                                </div>
+                                <div className="text-sm">
+                                  <span className="text-gray-600">Recommended Capacity:</span>
+                                  <span className="font-bold ml-2 text-green-700">
+                                    {Math.ceil(avgCheckIns * 1.1)}
+                                  </span>
+                                  <span className="text-xs text-gray-500 ml-1">
+                                    (10% buffer from historic avg)
+                                  </span>
+                                </div>
                               </div>
-                              <div>
-                                <span className="text-gray-600">Avg Capacity:</span>
-                                <span className="font-semibold ml-2 text-blue-600">
-                                  {mappedClass.historicalPerformance.avgCapacity}
-                                </span>
+                            );
+                          } else {
+                            return (
+                              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-center">
+                                <div className="flex items-center justify-center gap-2 mb-2">
+                                  <BarChart3 className="w-4 h-4 text-yellow-600" />
+                                  <p className="text-sm font-medium text-yellow-700">
+                                    No Historical Data Found
+                                  </p>
+                                </div>
+                                <p className="text-xs text-yellow-600 mb-2">
+                                  No matching sessions found for:
+                                </p>
+                                <div className="text-xs text-yellow-600 space-y-1">
+                                  <div>• Class: {mappedClass.className}</div>
+                                  <div>• Trainer: {mappedClass.trainer1}</div>
+                                  <div>• Day: {mappedClass.day}</div>
+                                  <div>• Location: {mappedClass.location}</div>
+                                </div>
+                                <p className="text-xs text-yellow-600 mt-2 font-medium">
+                                  Upload more historic session data to get insights
+                                </p>
                               </div>
-                              <div>
-                                <span className="text-gray-600">Fill Rate:</span>
-                                <span className="font-semibold ml-2 text-purple-600">
-                                  {mappedClass.historicalPerformance.avgFillRate}%
-                                </span>
-                              </div>
-                              <div>
-                                <span className="text-gray-600">Sessions:</span>
-                                <span className="font-semibold ml-2 text-gray-600">
-                                  {mappedClass.historicalPerformance.totalSessions}
-                                </span>
-                              </div>
-                            </div>
-                            <div className="text-xs text-gray-500 border-t pt-2">
-                              Last session: {mappedClass.historicalPerformance.lastSessionDate || 'Unknown'}
-                            </div>
-                            {mappedClass.recommendedCapacity && (
-                              <div className="text-sm">
-                                <span className="text-gray-600">Recommended Capacity:</span>
-                                <span className="font-bold ml-2 text-green-700">
-                                  {mappedClass.recommendedCapacity}
-                                </span>
-                                <span className="text-xs text-gray-500 ml-1">
-                                  (10% buffer)
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-center">
-                            <p className="text-sm text-yellow-700">
-                              No historical data found for this class format
-                            </p>
-                            <p className="text-xs text-yellow-600 mt-1">
-                              Upload more historic session data to get performance insights
-                            </p>
-                          </div>
-                        )}
+                            );
+                          }
+                        })()}
                       </motion.div>
                     );
                   })}
@@ -388,6 +539,16 @@ export default function ScheduleManagement() {
             </div>
           )}
         </div>
+      )}
+
+      {/* CSV Editor Modal */}
+      {showCsvEditor && currentCsvContent && (
+        <CsvEditor
+          csvContent={currentCsvContent}
+          fileName={currentFileName}
+          onSave={handleCsvSave}
+          onClose={handleCsvClose}
+        />
       )}
     </div>
   );

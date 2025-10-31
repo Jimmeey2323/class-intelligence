@@ -188,36 +188,7 @@ class AIService {
     }
   }
 
-  private generateMockImpactAnalysis(changes: string[], analysis: any): any {
-    // Calculate impact based on current performance and proposed changes
-    const impactMultiplier = changes.length * 0.02; // 2% impact per change
-    const fillRateImprovement = Math.min(impactMultiplier * 100, 15); // Cap at 15%
-    const revenueIncrease = analysis.avgRevenue * analysis.totalSessions * 0.1 * impactMultiplier;
-    const attendanceIncrease = analysis.avgClassSize * analysis.totalSessions * 0.05 * impactMultiplier;
 
-    const riskLevel = changes.length > 3 ? "Medium" : "Low";
-    const timeline = changes.length > 2 ? "3-6 weeks" : "2-4 weeks";
-
-    return {
-      fillRateChange: `+${fillRateImprovement.toFixed(1)}%`,
-      revenueChange: `+₹${Math.round(revenueIncrease)}/week`,
-      attendanceChange: `+${Math.round(attendanceIncrease)} people/week`,
-      riskLevel,
-      timeline,
-      keyBenefits: [
-        "Improved capacity utilization",
-        "Enhanced customer satisfaction",
-        "Better revenue optimization",
-        "Streamlined operations"
-      ].slice(0, Math.min(changes.length + 1, 4)),
-      potentialChallenges: [
-        "Staff training requirements",
-        "Customer communication needed",
-        "Schedule adjustment period",
-        "Monitoring performance metrics"
-      ].slice(0, Math.min(changes.length, 3))
-    };
-  }
 
   async generateClassSuggestions(existingClasses: string[], performanceData: any): Promise<string[]> {
     try {
@@ -259,7 +230,7 @@ class AIService {
     }
   }
 
-  private generateMockClassSuggestions(existingClasses: string[], performanceData: any): string[] {
+  private generateMockClassSuggestions(existingClasses: string[], _performanceData: any): string[] {
     const popularFormats = [
       'HIIT Fusion', 'Yoga Flow', 'Strength & Conditioning', 'Pilates Core',
       'Dance Cardio', 'Functional Training', 'Mindful Movement', 'Boxing Bootcamp',

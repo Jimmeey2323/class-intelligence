@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { SessionData } from '../types';
 import { format, startOfWeek, addDays, parseISO, isWithinInterval, isSameDay, addMonths, subMonths } from 'date-fns';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, MapPin, Filter, X, Sparkles, Grid, List, BarChart3 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar, Calendar as CalendarIcon, MapPin, Filter, X, Sparkles, Grid, List, BarChart3, Building, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EnhancedDrilldownModal from './EnhancedDrilldownModal';
 import CreateClassModal from './CreateClassModal';
@@ -16,19 +16,144 @@ interface CalendarClass {
   totalOverlaps: number;
 }
 
-type ViewMode = 'grid' | 'horizontal' | 'analysis';
+type ViewMode = 'grid' | 'horizontal' | 'analysis' | 'multiLocation';
+
+// Color mapping for different class types and names
+const getClassTypeColor = (className: string, classType?: string): string => {
+  // Get cleaned class name for consistent coloring
+  const cleanedName = cleanClassName(className);
+  
+  // Class name specific colors (takes precedence)
+  const classNameColors: Record<string, string> = {
+    'barre': 'from-indigo-400 to-purple-500',
+    'mat': 'from-pink-400 to-rose-500',
+    'pilates': 'from-pink-400 to-rose-500',
+    'yoga': 'from-purple-400 to-purple-600',
+    'power yoga': 'from-purple-500 to-purple-700',
+    'vinyasa': 'from-purple-300 to-purple-500',
+    'hatha': 'from-purple-600 to-indigo-600',
+    'hot yoga': 'from-red-400 to-orange-500',
+    'hiit': 'from-red-500 to-orange-500',
+    'cardio': 'from-orange-400 to-red-500',
+    'spin': 'from-blue-500 to-cyan-500',
+    'cycling': 'from-blue-500 to-cyan-500',
+    'strength': 'from-gray-600 to-gray-800',
+    'core': 'from-gray-500 to-gray-700',
+    'functional': 'from-green-500 to-emerald-600',
+    'circuit': 'from-green-400 to-green-600',
+    'boot camp': 'from-green-600 to-green-800',
+    'trx': 'from-emerald-400 to-emerald-600',
+    'dance': 'from-yellow-400 to-amber-500',
+    'zumba': 'from-yellow-500 to-orange-400',
+    'boxing': 'from-red-600 to-red-800',
+    'kickboxing': 'from-red-700 to-red-900',
+  };
+  
+  // Check for class name match first
+  for (const [key, color] of Object.entries(classNameColors)) {
+    if (cleanedName.includes(key)) {
+      return color;
+    }
+  }
+  
+  // Fallback to class type colors
+  const typeColors: Record<string, string> = {
+    'Yoga': 'from-purple-400 to-purple-600',
+    'Pilates': 'from-pink-400 to-rose-500',
+    'HIIT': 'from-red-500 to-orange-500',
+    'Cycling': 'from-blue-500 to-cyan-500',
+    'Strength': 'from-gray-600 to-gray-800',
+    'Functional': 'from-green-500 to-emerald-600',
+    'Dance': 'from-yellow-400 to-amber-500',
+    'Boxing': 'from-red-600 to-red-800',
+    'Barre 57': 'from-indigo-400 to-purple-500',
+    'Cardio': 'from-orange-400 to-red-500',
+    // Default fallback
+    'default': 'from-blue-400 to-blue-500'
+  };
+  
+  return typeColors[classType || ''] || typeColors['default'];
+};
+
+// Function to clean class name for comparison (removes variations)
+const cleanClassName = (className: string): string => {
+  return className
+    .toLowerCase()
+    .replace(/\s+(express|flow|basics?|elite|advanced?|beginner|intense?|cardio|blast|training|fitness|class)/gi, '')
+    .trim();
+};
+
+// Simplified function to determine if a class is active (much more efficient)
+const isClassActiveSimple = (session: SessionData): boolean => {
+  try {
+    const sessionDate = parseISO(session.Date);
+    const now = new Date();
+    const daysDifference = Math.abs((now.getTime() - sessionDate.getTime()) / (1000 * 60 * 60 * 24));
+    
+    // Consider active if the session is within the last 30 days
+    return daysDifference <= 30;
+  } catch {
+    return false; // If date parsing fails, consider inactive
+  }
+};
+
+// Function to detect trainer conflicts (same trainer at same time across locations)
+const detectTrainerConflicts = (calendarClasses: CalendarClass[], selectedDay: Date): Set<string> => {
+  const conflicts = new Set<string>();
+  const trainerTimeMap = new Map<string, Set<string>>();
+  
+  calendarClasses.forEach(calClass => {
+    const session = calClass.session;
+    try {
+      const sessionDate = parseISO(session.Date);
+      if (!isSameDay(sessionDate, selectedDay)) return;
+    } catch {
+      return;
+    }
+    
+    const timeKey = `${session.Day}-${session.Time}`;
+    const trainerKey = session.Trainer;
+    
+    if (!trainerTimeMap.has(trainerKey)) {
+      trainerTimeMap.set(trainerKey, new Set());
+    }
+    
+    const trainerTimes = trainerTimeMap.get(trainerKey)!;
+    if (trainerTimes.has(timeKey)) {
+      // Conflict detected - same trainer at same time
+      conflicts.add(`${trainerKey}-${timeKey}`);
+    } else {
+      trainerTimes.add(timeKey);
+    }
+  });
+  
+  return conflicts;
+};
 
 export default function WeeklyCalendar() {
-  const { filteredData, rawData, setRawData, getAverageCheckIns } = useDashboardStore();
+  const { filteredData, rawData, setRawData, getAverageCheckIns, filters } = useDashboardStore();
+  
+  // Early return if no data to prevent crashes
+  if (!rawData || rawData.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-xl border border-white/50 p-12 text-center">
+          <Calendar className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+          <h3 className="text-xl font-semibold text-gray-600 mb-2">No Calendar Data Available</h3>
+          <p className="text-gray-500">Please upload session data to view the weekly calendar.</p>
+        </div>
+      </div>
+    );
+  }
   
   console.log('📊 WeeklyCalendar filteredData count:', filteredData.length);
+  console.log('🎯 Global filters:', filters);
   
-  // State
-  const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [selectedWeekStart, setSelectedWeekStart] = useState(startOfWeek(new Date(), { weekStartsOn: 1 }));
-  const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
+  // Consolidated date state - single source of truth
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedLocations, setSelectedLocations] = useState<string[]>(filters.locations || []);
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>(['Active', 'Inactive']);
-  const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
+  const [selectedTypes, setSelectedTypes] = useState<string[]>(filters.classTypes || []);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [hoveredClass, setHoveredClass] = useState<SessionData | null>(null);
@@ -40,13 +165,76 @@ export default function WeeklyCalendar() {
   const [selectedSlot, setSelectedSlot] = useState<{ day: Date; time: string } | null>(null);
   const [isAutoPopulating, setIsAutoPopulating] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
+  const [multiLocationActiveOnly, setMultiLocationActiveOnly] = useState(false);
 
-  // Time configuration: 7am - 10pm
+  // Derived date values from single source of truth
+  const selectedWeekStart = useMemo(() => startOfWeek(currentDate, { weekStartsOn: 1 }), [currentDate]);
+  const selectedDay = currentDate;
+  const currentMonth = currentDate;
+
+  // Multi-location data - ONLY actual uploaded data, no mock/dummy data
+  const multiLocationDataProcessed = useMemo(() => {
+    // Return empty if no real uploaded data
+    if (!rawData || rawData.length === 0) {
+      console.log('📊 Multi-location: No uploaded data available');
+      return [];
+    }
+    
+    const allowedLocations = [
+      'Supreme HQ, Bandra',
+      'Pop-up',
+      'Kwality House, Kemps Corner',
+      'Kenkere House'
+    ];
+    
+    // Validate that we have actual session data (not mock data)
+    const validSessions = rawData.filter(session => {
+      // Ensure we have essential fields for a real session
+      return session && 
+             session.Date && 
+             session.Time && 
+             session.Class && 
+             session.Location &&
+             allowedLocations.includes(session.Location) &&
+             // Ensure numeric fields exist (even if 0)
+             typeof session.CheckedIn === 'number' &&
+             typeof session.Capacity === 'number';
+    });
+    
+    console.log('📊 Multi-location data validation:', {
+      totalRawSessions: rawData.length,
+      validSessions: validSessions.length,
+      filteredLocations: Array.from(new Set(validSessions.map(s => s.Location))).sort(),
+      sampleSession: validSessions[0] ? {
+        Date: validSessions[0].Date,
+        Time: validSessions[0].Time,
+        Class: validSessions[0].Class,
+        Location: validSessions[0].Location
+      } : null
+    });
+    
+    if (validSessions.length === 0) {
+      console.warn('⚠️ No valid sessions found for multi-location view');
+      return [];
+    }
+    
+    // Process validated sessions only
+    return validSessions.map(session => {
+      const status: 'Active' | 'Inactive' = isClassActiveSimple(session) ? 'Active' : 'Inactive';
+      return {
+        ...session,
+        Status: status,
+        FillRate: session.Capacity > 0 ? (session.CheckedIn / session.Capacity) * 100 : 0
+      };
+    });
+  }, [rawData]);
+
+  // Time configuration: 7am - 10pm with 15-minute intervals
   const startHour = 7;
   const endHour = 22;
-  const timeSlots = Array.from({ length: (endHour - startHour) * 2 }, (_, i) => {
-    const hour = Math.floor(i / 2) + startHour;
-    const minute = (i % 2) * 30;
+  const timeSlots = Array.from({ length: (endHour - startHour) * 4 }, (_, i) => {
+    const hour = Math.floor(i / 4) + startHour;
+    const minute = (i % 4) * 15;
     return { hour, minute, label: `${hour % 12 || 12}:${minute.toString().padStart(2, '0')} ${hour >= 12 ? 'PM' : 'AM'}` };
   });
 
@@ -87,12 +275,33 @@ export default function WeeklyCalendar() {
     return Array.from(statuses).sort();
   }, [filteredData]);
 
-  // Apply local filters to get the final filtered dataset
+  // Apply local filters to get the final filtered dataset - ONLY real uploaded data
   const locallyFilteredData = useMemo(() => {
-    return filteredData.filter(session => {
-      // Date filter
-      if (!session.Date) return false;
-      
+    if (!filteredData || filteredData.length === 0) {
+      console.log('🔍 No uploaded data available for calendar view');
+      return [];
+    }
+
+    console.log('🔍 Applying local filters to', filteredData.length, 'globally filtered sessions');
+    
+    // Validate that we're working with real session data, not mock data
+    const validFilteredData = filteredData.filter(session => {
+      return session && 
+             session.Date && 
+             session.Time && 
+             session.Class && 
+             session.Location &&
+             typeof session.CheckedIn === 'number' &&
+             typeof session.Capacity === 'number';
+    });
+
+    if (validFilteredData.length === 0) {
+      console.warn('⚠️ No valid uploaded sessions found for calendar');
+      return [];
+    }
+    
+    return validFilteredData.filter(session => {
+      // Date filter - ensure valid date
       let sessionDate;
       try {
         sessionDate = parseISO(session.Date);
@@ -105,24 +314,26 @@ export default function WeeklyCalendar() {
       const inWeek = weekDays.some(day => isSameDay(day, sessionDate));
       if (!inWeek) return false;
       
-      // Date range filter
+      // Date range filter (additional local filter)
       if (startDate && endDate) {
         const start = parseISO(startDate);
         const end = parseISO(endDate);
         if (!isWithinInterval(sessionDate, { start, end })) return false;
       }
       
-      // Location filter
-      if (selectedLocations.length > 0 && !selectedLocations.includes(session.Location || '')) {
-        return false;
+      // Local location filter - only apply if user has made a selection in calendar
+      if (selectedLocations.length > 0) {
+        if (!selectedLocations.includes(session.Location || '')) {
+          return false;
+        }
       }
       
-      // Status filter
+      // Status filter (local calendar filter)
       if (selectedStatuses.length > 0 && !selectedStatuses.includes(session.Status || '')) {
         return false;
       }
       
-      // Type filter
+      // Type filter (local calendar filter) 
       if (selectedTypes.length > 0 && !selectedTypes.includes(session.Type || '')) {
         return false;
       }
@@ -130,6 +341,38 @@ export default function WeeklyCalendar() {
       return true;
     });
   }, [filteredData, weekDays, selectedLocations, selectedStatuses, selectedTypes, startDate, endDate]);
+
+  // Debug logging for filter analysis
+  console.log('🎯 Calendar Filter Debug:', {
+    globalLocations: filters.locations,
+    localSelectedLocations: selectedLocations,
+    filteredDataCount: filteredData.length,
+    locallyFilteredDataCount: locallyFilteredData.length,
+    weekDaysCount: weekDays.length,
+    sampleFilteredSession: filteredData[0] ? {
+      Location: filteredData[0].Location,
+      Class: filteredData[0].Class,
+      Date: filteredData[0].Date
+    } : null
+  });
+
+  // Get unique locations for multi-location view (filtered to specific locations only)
+  const multiLocationUniqueLocations = useMemo(() => {
+    const allowedLocations = [
+      'Supreme HQ, Bandra',
+      'Pop-up',
+      'Kwality House, Kemps Corner',
+      'Kenkere House'
+    ];
+    
+    const allLocations = Array.from(new Set(multiLocationDataProcessed.map(session => session.Location).filter(Boolean)));
+    const filteredLocations = allowedLocations.filter(location => allLocations.includes(location)).sort();
+    
+    console.log('🏢 Multi-location allowed locations:', allowedLocations);
+    console.log('🏢 Multi-location filtered locations:', filteredLocations);
+    
+    return filteredLocations;
+  }, [multiLocationDataProcessed]);
 
   // Filter and organize classes
   const calendarClasses = useMemo(() => {
@@ -297,6 +540,75 @@ export default function WeeklyCalendar() {
     return classes;
   }, [locallyFilteredData, weekDays]);
 
+  // Multi-location calendar classes - filters all sessions for the selected 7-day range
+  const multiLocationCalendarClasses = useMemo(() => {
+    if (!multiLocationDataProcessed || multiLocationDataProcessed.length === 0) {
+      return [];
+    }
+    
+    try {
+      const dataToUse = multiLocationActiveOnly 
+        ? multiLocationDataProcessed.filter(session => session.Status === 'Active')
+        : multiLocationDataProcessed;
+
+      console.log('🗓️ Multi-location filtering for 7-day range around:', format(selectedDay, 'yyyy-MM-dd'));
+      
+      return dataToUse.map(session => {
+        if (!session || !session.Date || !session.Time) return null;
+      
+        try {
+          const sessionDate = parseISO(session.Date);
+          
+          // For multi-location view, include sessions from a 7-day range around selectedDay
+          const startRange = addDays(selectedDay, -3);
+          const endRange = addDays(selectedDay, 3);
+          
+          if (!isWithinInterval(sessionDate, { start: startRange, end: endRange })) {
+            return null;
+          }
+
+          // Calculate dayIndex relative to the selected day
+          const dayIndex = Math.floor((sessionDate.getTime() - selectedDay.getTime()) / (1000 * 60 * 60 * 24)) + 3;
+          
+          // Parse time
+          let hour: number;
+          let minute: number;
+          
+          let timeParts = session.Time.match(/(\d+):(\d+)\s*(AM|PM)/i);
+          if (timeParts) {
+            hour = parseInt(timeParts[1]);
+            minute = parseInt(timeParts[2]);
+            const period = timeParts[3].toUpperCase();
+            if (period === 'PM' && hour !== 12) hour += 12;
+            if (period === 'AM' && hour === 12) hour = 0;
+          } else {
+            // 24-hour format
+            timeParts = session.Time.match(/(\d+):(\d+)(?::(\d+))?/);
+            if (!timeParts) return null;
+            hour = parseInt(timeParts[1]);
+            minute = parseInt(timeParts[2]);
+          }
+
+          const startTime = hour * 60 + minute;
+          
+          return {
+            session,
+            dayIndex,
+            startTime,
+            duration: 60,
+            position: 0,
+            totalOverlaps: 1,
+          };
+        } catch {
+          return null;
+        }
+      }).filter(Boolean) as CalendarClass[];
+    } catch (error) {
+      console.error('Error processing multi-location calendar classes:', error);
+      return [];
+    }
+  }, [multiLocationDataProcessed, selectedDay, multiLocationActiveOnly]);
+
   // Calculate class format distribution for each day
   const dailyFormatDistribution = useMemo(() => {
     const distribution: Record<number, Record<string, number>> = {};
@@ -319,29 +631,34 @@ export default function WeeklyCalendar() {
     return distribution;
   }, [calendarClasses]);
 
-  // Navigation
+  // Consolidated navigation functions
   const goToPreviousWeek = () => {
-    setSelectedWeekStart(prev => addDays(prev, -7));
+    setCurrentDate(prev => addDays(prev, -7));
   };
 
   const goToNextWeek = () => {
-    setSelectedWeekStart(prev => addDays(prev, 7));
+    setCurrentDate(prev => addDays(prev, 7));
   };
 
   const goToToday = () => {
-    setSelectedWeekStart(startOfWeek(new Date(), { weekStartsOn: 1 }));
+    setCurrentDate(new Date());
   };
 
   const goToPreviousMonth = () => {
-    const newMonth = subMonths(currentMonth, 1);
-    setCurrentMonth(newMonth);
-    setSelectedWeekStart(startOfWeek(newMonth, { weekStartsOn: 1 }));
+    setCurrentDate(prev => subMonths(prev, 1));
   };
 
   const goToNextMonth = () => {
-    const newMonth = addMonths(currentMonth, 1);
-    setCurrentMonth(newMonth);
-    setSelectedWeekStart(startOfWeek(newMonth, { weekStartsOn: 1 }));
+    setCurrentDate(prev => addMonths(prev, 1));
+  };
+
+  // Day navigation for multi-location view
+  const goToPreviousDay = () => {
+    setCurrentDate(prev => addDays(prev, -1));
+  };
+
+  const goToNextDay = () => {
+    setCurrentDate(prev => addDays(prev, 1));
   };
 
   // Auto-populate schedule with optimal classes and trainers
@@ -560,7 +877,7 @@ export default function WeeklyCalendar() {
   };
 
   // Replace the renderClassBlock function with this improved version:
-const renderClassBlock = (calClass: CalendarClass) => {
+  const renderClassBlock = (calClass: CalendarClass) => {
   const { session, startTime, duration, position, totalOverlaps } = calClass;
   
   // Get average check-ins for similar classes
@@ -725,7 +1042,7 @@ const renderClassBlock = (calClass: CalendarClass) => {
       </div>
     </motion.div>
   );
-};
+  };
 
   return (
     <div className="space-y-6">
@@ -799,6 +1116,18 @@ const renderClassBlock = (calClass: CalendarClass) => {
               >
                 <BarChart3 className="w-4 h-4" />
                 Analysis
+              </button>
+              <button
+                onClick={() => setViewMode('multiLocation')}
+                className={`px-3 py-2 text-sm rounded-lg transition-all flex items-center gap-2 ${
+                  viewMode === 'multiLocation' 
+                    ? 'bg-white shadow-md text-blue-600 font-semibold' 
+                    : 'text-gray-600 hover:bg-gray-200'
+                }`}
+                title="Multi-Location View"
+              >
+                <Building className="w-4 h-4" />
+                Multi-Location
               </button>
             </div>
 
@@ -1405,6 +1734,288 @@ const renderClassBlock = (calClass: CalendarClass) => {
               </div>
             </div>
           )}
+
+          {/* Multi-Location View */}
+          {viewMode === 'multiLocation' && (
+            <div className="space-y-6">
+              {/* Multi-Location Header with Day Selector */}
+              <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/60 p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                    All Locations - {format(selectedDay, 'EEEE, MMMM d, yyyy')}
+                  </h3>
+                  <div className="flex items-center gap-4">
+                    {/* Active Only Toggle */}
+                    <button
+                      onClick={() => setMultiLocationActiveOnly(!multiLocationActiveOnly)}
+                      className={`px-4 py-2 rounded-xl transition-all font-semibold text-sm ${
+                        multiLocationActiveOnly
+                          ? 'bg-green-500 text-white shadow-lg'
+                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      }`}
+                      title={multiLocationActiveOnly ? 'Show all classes' : 'Show active classes only'}
+                    >
+                      {multiLocationActiveOnly ? '✓ Active Only' : 'Active Only'}
+                    </button>
+                    <div className="text-sm text-gray-600">
+                      Showing <span className="font-semibold text-blue-600">{multiLocationUniqueLocations.length}</span> locations
+                    </div>
+                  </div>
+                </div>
+
+                {/* Day Navigation - synchronized with main navigation */}
+                <div className="flex items-center justify-center gap-4 mb-6">
+                  <button
+                    onClick={goToPreviousDay}
+                    className="p-2 hover:bg-blue-50 rounded-xl transition-colors"
+                    title="Previous Day"
+                  >
+                    <ChevronLeft className="w-5 h-5 text-gray-600" />
+                  </button>
+                  
+                  <div className="flex gap-2">
+                    {/* Generate 7 days around selected day for easy navigation */}
+                    {Array.from({ length: 7 }, (_, i) => {
+                      const day = addDays(selectedDay, i - 3); // 3 days before, selected day, 3 days after
+                      const isSelected = isSameDay(day, selectedDay);
+                      const isToday = isSameDay(day, new Date());
+                      const dayClasses = multiLocationCalendarClasses.filter(calClass => {
+                        try {
+                          const sessionDate = parseISO(calClass.session.Date);
+                          return isSameDay(sessionDate, day);
+                        } catch {
+                          return false;
+                        }
+                      });
+                      
+                      return (
+                        <button
+                          key={i}
+                          onClick={() => setCurrentDate(day)}
+                          className={`px-4 py-2 rounded-xl transition-all ${
+                            isSelected
+                              ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white shadow-lg'
+                              : isToday
+                              ? 'bg-blue-100 text-blue-600 border border-blue-300'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          <div className="text-center">
+                            <div className="text-xs font-bold uppercase tracking-wide">
+                              {format(day, 'EEE')}
+                            </div>
+                            <div className="text-lg font-bold">
+                              {format(day, 'd')}
+                            </div>
+                            <div className="text-xs opacity-75">
+                              {dayClasses.length} classes
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    onClick={goToNextDay}
+                    className="p-2 hover:bg-blue-50 rounded-xl transition-colors"
+                    title="Next Day"
+                  >
+                    <ChevronRight className="w-5 h-5 text-gray-600" />
+                  </button>
+                </div>
+
+                {/* All Time Slots and Locations Grid - With Sticky Header */}
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  {/* Sticky Header Row */}
+                  <div className="sticky top-0 z-20 flex bg-gradient-to-r from-gray-100 to-gray-200 shadow-sm border-b border-gray-300">
+                    <div className="flex-shrink-0 w-24 border-r border-gray-200 p-3 flex items-center justify-center">
+                      <span className="text-sm font-bold text-gray-700">Time</span>
+                    </div>
+                    {multiLocationUniqueLocations.map((location) => (
+                      <div key={location} className="flex-1 min-w-0 border-r border-gray-200 last:border-r-0 p-3 text-center">
+                        <div className="font-bold text-gray-800 text-sm truncate" title={location}>
+                          {location}
+                        </div>
+                        <div className="text-xs text-gray-600 mt-1">
+                          {multiLocationCalendarClasses.filter(calClass => {
+                            try {
+                              const sessionDate = parseISO(calClass.session.Date);
+                              return calClass.session.Location === location && isSameDay(sessionDate, selectedDay);
+                            } catch {
+                              return false;
+                            }
+                          }).length} classes today
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Scrollable Time Slots Container */}
+                  <div className="overflow-y-auto max-h-[70vh] bg-white">
+                    {timeSlots.map((slot) => {
+                      // Detect trainer conflicts for the selected day using multi-location data
+                      const conflicts = detectTrainerConflicts(multiLocationCalendarClasses, selectedDay);
+                      const slotMinutes = slot.hour * 60 + slot.minute;
+                    
+                    // Check if any location has classes at this time slot for the selected day
+                    const hasClassesAtThisTime = multiLocationUniqueLocations.some(location => {
+                      return multiLocationCalendarClasses.some(calClass => {
+                        const session = calClass.session;
+                        if (session.Location !== location) return false;
+                        
+                        try {
+                          const sessionDate = parseISO(session.Date);
+                          if (!isSameDay(sessionDate, selectedDay)) return false;
+                        } catch {
+                          return false;
+                        }
+                        
+                        return Math.abs(calClass.startTime - slotMinutes) < 15;
+                      });
+                    });
+                    
+                    return (
+                      <div key={`slot-${slot.hour}-${slot.minute}`} className={`flex border-b border-gray-100 ${hasClassesAtThisTime ? 'bg-white' : 'bg-gray-25'}`}>
+                        {/* Time Label */}
+                        <div className={`flex-shrink-0 w-24 border-r border-gray-200 p-2 flex items-center justify-center ${hasClassesAtThisTime ? 'bg-blue-50' : 'bg-gray-50'}`}>
+                          <div className="text-xs font-semibold text-gray-800 text-center">
+                            {slot.label}
+                          </div>
+                        </div>
+
+                        {/* Location Columns */}
+                        {multiLocationUniqueLocations.map((location) => {
+                          // Get classes for this time slot, location, and selected day
+                          const slotClasses = multiLocationCalendarClasses.filter(calClass => {
+                            const session = calClass.session;
+                            if (session.Location !== location) return false;
+                            
+                            try {
+                              const sessionDate = parseISO(session.Date);
+                              if (!isSameDay(sessionDate, selectedDay)) return false;
+                            } catch {
+                              return false;
+                            }
+                            
+                            // Check if the class time matches this slot (within 15 minutes)
+                            return Math.abs(calClass.startTime - slotMinutes) < 15;
+                          });
+
+                          return (
+                            <div key={`${location}-${slot.hour}-${slot.minute}`} className="flex-1 min-w-0 border-r border-gray-200 last:border-r-0 p-1 min-h-[60px] relative">
+                              {slotClasses.map((calClass, sessionIdx) => {
+                                const session = calClass.session;
+                                const avgResult = getAverageCheckIns(session.Class, session.Day, session.Time, session.Location);
+                                const avgCheckIns = avgResult?.avgCheckIns || 0;
+                                
+                                const historicalCount = rawData.filter(s => 
+                                  s.Class === session.Class && 
+                                  s.Day === session.Day && 
+                                  s.Time === session.Time && 
+                                  s.Location === session.Location
+                                ).length;
+
+                                // Get class type color based on class name
+                                const classTypeColor = getClassTypeColor(session.Class, session.Type);
+                                
+                                // Check for trainer conflicts
+                                const conflictKey = `${session.Trainer}-${session.Day}-${session.Time}`;
+                                const hasConflict = conflicts.has(conflictKey);
+
+                                return (
+                                  <motion.div
+                                    key={`${session.Date}-${session.Time}-${sessionIdx}`}
+                                    initial={{ opacity: 0, scale: 0.9 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    whileHover={{ scale: 1.02 }}
+                                    className={`w-full h-16 rounded-lg p-2 cursor-pointer transition-all shadow-sm hover:shadow-md relative flex flex-col justify-between
+                                      ${hasConflict 
+                                        ? 'bg-gradient-to-r from-red-500 to-red-600 text-white border-2 border-red-700 ring-2 ring-red-300' 
+                                        : session.Status === 'Inactive' && multiLocationActiveOnly
+                                          ? `bg-gradient-to-r ${classTypeColor} text-white opacity-40 grayscale`
+                                          : session.Status === 'Inactive'
+                                            ? `bg-gradient-to-r from-gray-300 to-gray-400 text-gray-600`
+                                            : `bg-gradient-to-r ${classTypeColor} text-white ${multiLocationActiveOnly ? 'ring-2 ring-green-300 shadow-lg' : ''}`
+                                      }`}
+                                    onClick={() => {
+                                      console.log('🔍 Multi-Location Drilldown Debug - Class clicked:', session.Class);
+                                      
+                                      // Get all sessions for this class/time/location combination (historical data)
+                                      const relatedSessions = rawData.filter(s => 
+                                        s.Class === session.Class && 
+                                        s.Day === session.Day && 
+                                        s.Time === session.Time && 
+                                        s.Location === session.Location
+                                      );
+                                      
+                                      console.log('📊 Multi-Location historical sessions for drilldown:', relatedSessions.length);
+                                      console.log('💡 Sample sessions:', relatedSessions.slice(0, 3));
+                                      
+                                      if (relatedSessions.length > 0) {
+                                        setDrilldownData(relatedSessions);
+                                        setDrilldownTitle(`${session.Class} - ${session.Day} ${session.Time} at ${session.Location}`);
+                                        setShowDrilldown(true);
+                                      } else {
+                                        // Fallback to current session if no historical data
+                                        setDrilldownData([session]);
+                                        setDrilldownTitle(`${session.Class} - ${session.Day} ${session.Time} at ${session.Location}`);
+                                        setShowDrilldown(true);
+                                      }
+                                    }}
+                                  >
+                                    {/* Conflict indicator */}
+                                    {hasConflict && (
+                                      <div className="absolute top-1 left-1 w-5 h-5 bg-yellow-400 rounded-full flex items-center justify-center border border-red-300" title="Trainer Conflict Detected">
+                                        <AlertTriangle className="w-3 h-3 text-red-700" />
+                                      </div>
+                                    )}
+                                    
+                                    {/* Historical data indicator */}
+                                    {historicalCount > 1 && (
+                                      <div className={`absolute top-1 ${hasConflict ? 'right-1' : 'right-1'} w-4 h-4 bg-white/20 rounded-full flex items-center justify-center`}>
+                                        <span className="text-xs font-bold">{historicalCount}</span>
+                                      </div>
+                                    )}
+                                    
+                                    <div className="text-xs font-bold truncate mb-1">
+                                      {session.Class}
+                                      <div className="text-xs opacity-60 truncate">
+                                        {session.Type}
+                                      </div>
+                                    </div>
+                                    <div className="text-xs opacity-90 truncate mb-1">{session.Trainer}</div>
+                                    <div className="flex items-center justify-between text-xs">
+                                      <span>{session.CheckedIn}/{session.Capacity}</span>
+                                      {avgCheckIns > 0 && (
+                                        <span className="text-xs opacity-75">
+                                          Avg: {avgCheckIns.toFixed(1)}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </motion.div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                  </div>
+                </div>
+
+                {multiLocationUniqueLocations.length === 0 && (
+                  <div className="text-center py-12">
+                    <Building className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                    <p className="text-xl font-semibold text-gray-600 mb-2">No Locations Found</p>
+                    <p className="text-gray-500">No class data available for multi-location view</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
         </>
       )}
 
@@ -1484,23 +2095,75 @@ const renderClassBlock = (calClass: CalendarClass) => {
 
       {/* Legend */}
       <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-xl border border-white/50 p-6">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Legend</h3>
-        <div className="flex flex-wrap gap-4 text-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-green-100 border-l-4 border-green-400 rounded-r"></div>
-            <span className="text-gray-600">High Fill Rate (80%+)</span>
+        <h3 className="text-sm font-semibold text-gray-700 mb-4">Legend</h3>
+        
+        {/* Class Type Colors */}
+        <div className="mb-4">
+          <h4 className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">Class Types</h4>
+          <div className="flex flex-wrap gap-3 text-sm">
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-gradient-to-r from-purple-400 to-purple-600 rounded"></div>
+              <span className="text-gray-600">Yoga</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-gradient-to-r from-pink-400 to-rose-500 rounded"></div>
+              <span className="text-gray-600">Pilates</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-gradient-to-r from-red-500 to-orange-500 rounded"></div>
+              <span className="text-gray-600">HIIT</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-gradient-to-r from-blue-500 to-cyan-500 rounded"></div>
+              <span className="text-gray-600">Cycling</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-gradient-to-r from-gray-600 to-gray-800 rounded"></div>
+              <span className="text-gray-600">Strength</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-gradient-to-r from-green-500 to-emerald-600 rounded"></div>
+              <span className="text-gray-600">Functional</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-gradient-to-r from-yellow-400 to-amber-500 rounded"></div>
+              <span className="text-gray-600">Dance</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-gradient-to-r from-red-600 to-red-800 rounded"></div>
+              <span className="text-gray-600">Boxing</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-gradient-to-r from-indigo-400 to-purple-500 rounded"></div>
+              <span className="text-gray-600">Barre 57</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-blue-100 border-l-4 border-blue-400 rounded-r"></div>
-            <span className="text-gray-600">Medium Fill Rate (50-80%)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-yellow-100 border-l-4 border-yellow-400 rounded-r"></div>
-            <span className="text-gray-600">Low Fill Rate (&lt;50%)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-gray-300 border-l-4 border-gray-400 rounded-r"></div>
-            <span className="text-gray-600">Inactive</span>
+        </div>
+        
+        {/* Special Indicators */}
+        <div>
+          <h4 className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">Special Indicators</h4>
+          <div className="flex flex-wrap gap-4 text-sm">
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 bg-gradient-to-r from-red-500 to-red-600 rounded border-2 border-red-700 relative">
+                <div className="absolute top-0 left-0 w-3 h-3 bg-yellow-400 rounded-full flex items-center justify-center border border-red-300">
+                  <AlertTriangle className="w-2 h-2 text-red-700" />
+                </div>
+              </div>
+              <span className="text-gray-600">Trainer Conflict</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 bg-gradient-to-r from-blue-400 to-blue-500 rounded relative">
+                <div className="absolute top-0 right-0 w-3 h-3 bg-white/20 rounded-full flex items-center justify-center">
+                  <span className="text-xs font-bold text-white">5</span>
+                </div>
+              </div>
+              <span className="text-gray-600">Historical Data Count</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 bg-gray-300 border-l-4 border-gray-400 rounded-r"></div>
+              <span className="text-gray-600">Inactive</span>
+            </div>
           </div>
         </div>
       </div>
