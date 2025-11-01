@@ -46,6 +46,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   rawData: [],
   filteredData: [],
   processedData: [],
+  scheduleData: {},
   
   // Initial filters - default to previous month
   filters: getDefaultFilters(),
@@ -127,6 +128,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     
     set({ rawData: enrichedData });
     get().applyFilters();
+  },
+  
+  setScheduleData: (scheduleData: { [day: string]: any[] }) => {
+    set({ scheduleData });
   },
   
   setFilters: (newFilters: Partial<FilterState>) => {

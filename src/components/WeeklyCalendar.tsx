@@ -83,18 +83,48 @@ const cleanClassName = (className: string): string => {
     .trim();
 };
 
-// Simplified function to determine if a class is active (much more efficient)
-const isClassActiveSimple = (session: SessionData): boolean => {
-  try {
-    const sessionDate = parseISO(session.Date);
-    const now = new Date();
-    const daysDifference = Math.abs((now.getTime() - sessionDate.getTime()) / (1000 * 60 * 60 * 24));
-    
-    // Consider active if the session is within the last 30 days
-    return daysDifference <= 30;
-  } catch {
-    return false; // If date parsing fails, consider inactive
+// Function to determine if a class is active based on uploaded schedule data
+const isClassActiveSimple = (session: SessionData, scheduleData: { [day: string]: any[] }): boolean => {
+  // If no schedule data is uploaded, fall back to date-based logic
+  if (!scheduleData || Object.keys(scheduleData).length === 0) {
+    try {
+      const sessionDate = parseISO(session.Date);
+      const now = new Date();
+      const daysDifference = Math.abs((now.getTime() - sessionDate.getTime()) / (1000 * 60 * 60 * 24));
+      
+      // Consider active if the session is within the last 30 days
+      return daysDifference <= 30;
+    } catch {
+      return false; // If date parsing fails, consider inactive
+    }
   }
+  
+  // Use schedule data to determine active status
+  const sessionDay = session.Day;
+  if (!sessionDay || !scheduleData[sessionDay]) {
+    return false;
+  }
+  
+  // Look for matching class in schedule data
+  const scheduledClasses = scheduleData[sessionDay] || [];
+  const matchingClass = scheduledClasses.find((scheduleClass: any) => {
+    // Match by class name, location, and time where possible
+    const classNameMatch = scheduleClass.className && session.Class && 
+      scheduleClass.className.toLowerCase().includes(session.Class.toLowerCase());
+    
+    const locationMatch = scheduleClass.location && session.Location &&
+      (scheduleClass.location.toLowerCase().includes(session.Location.toLowerCase()) ||
+       session.Location.toLowerCase().includes(scheduleClass.location.toLowerCase()));
+    
+    const timeMatch = scheduleClass.time && session.Time &&
+      scheduleClass.time.toLowerCase().includes(session.Time.toLowerCase());
+    
+    // A class is considered matching if it has class name similarity and at least one other field matches
+    return classNameMatch && (locationMatch || timeMatch);
+  });
+  
+  // Class is active if it exists in schedule and has a trainer assigned
+  return matchingClass && matchingClass.trainer1 && matchingClass.trainer1.trim() !== '';
 };
 
 // Function to detect trainer conflicts (same trainer at same time across locations)
@@ -131,7 +161,7 @@ const detectTrainerConflicts = (calendarClasses: CalendarClass[], selectedDay: D
 };
 
 export default function WeeklyCalendar() {
-  const { filteredData, rawData, setRawData, getAverageCheckIns, filters } = useDashboardStore();
+  const { filteredData, rawData, setRawData, getAverageCheckIns, filters, scheduleData } = useDashboardStore();
   
   // Early return if no data to prevent crashes
   if (!rawData || rawData.length === 0) {
@@ -220,7 +250,7 @@ export default function WeeklyCalendar() {
     
     // Process validated sessions only
     return validSessions.map(session => {
-      const status: 'Active' | 'Inactive' = isClassActiveSimple(session) ? 'Active' : 'Inactive';
+      const status: 'Active' | 'Inactive' = isClassActiveSimple(session, scheduleData) ? 'Active' : 'Inactive';
       return {
         ...session,
         Status: status,

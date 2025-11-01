@@ -154,6 +154,7 @@ export interface DashboardState {
   rawData: SessionData[];
   filteredData: SessionData[]; // Filtered sessions before grouping
   processedData: (SessionData | GroupedRow)[];
+  scheduleData: { [day: string]: any[] }; // Schedule data from uploaded CSV
   
   // Filters
   filters: FilterState;
@@ -196,6 +197,7 @@ export interface DashboardState {
   setColumnVisibility: (columnId: string, visible: boolean) => void;
   setExcludeHostedClasses: (exclude: boolean) => void;
   setTableView: (view: TableView) => void;
+  setScheduleData: (scheduleData: { [day: string]: any[] }) => void;
   applyFilters: () => void;
   exportData: (format: 'csv' | 'xlsx') => void;
 }

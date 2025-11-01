@@ -28,8 +28,7 @@ import { CsvEditor } from './CsvEditor';
 import { SessionData } from '../types';
 
 export default function ScheduleManagement() {
-  const { rawData } = useDashboardStore();
-  const [scheduleData, setScheduleData] = useState<{ [day: string]: MappedScheduleClass[] }>({});
+  const { rawData, setScheduleData, scheduleData } = useDashboardStore();
   const [isProcessing, setIsProcessing] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
