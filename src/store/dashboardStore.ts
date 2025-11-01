@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { DashboardState, SessionData, FilterState, ViewMode, GroupBy, AdditionalView, ColumnWidthSettings } from '../types';
 import { subMonths, startOfMonth } from 'date-fns';
 import { groupData } from '../utils/calculations';
+import { loadActiveClasses, ActiveClassesByDay } from '../utils/activeClassesLoader';
 
 // Load column widths from localStorage
 const loadColumnWidths = (): ColumnWidthSettings => {
@@ -47,6 +48,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   filteredData: [],
   processedData: [],
   scheduleData: {},
+  activeClassesData: {},
   
   // Initial filters - default to previous month
   filters: getDefaultFilters(),
@@ -102,20 +104,97 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   setRawData: (data: SessionData[]) => {
+    const { activeClassesData } = get();
+    
+    let debugLogged = false; // Flag to log only once
+    
     // Calculate Status and FillRate for each session
-    const enrichedData = data.map(session => {
+    const enrichedData = data.map((session, index) => {
       const fillRate = session.Capacity > 0 ? (session.CheckedIn / session.Capacity) * 100 : 0;
       
-      // Determine status based on date (sessions in last 30 days are Active)
+      // Determine status based on Active.csv data
       let status: 'Active' | 'Inactive' = 'Inactive';
-      if (session.Date) {
-        try {
-          const sessionDate = new Date(session.Date);
-          const thirtyDaysAgo = new Date();
-          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-          status = sessionDate >= thirtyDaysAgo ? 'Active' : 'Inactive';
-        } catch (e) {
-          // If date parsing fails, keep as Inactive
+      
+      if (activeClassesData && Object.keys(activeClassesData).length > 0) {
+        // Use Active.csv data to determine status
+        const sessionDay = session.Day;
+        if (sessionDay && activeClassesData[sessionDay]) {
+          const normalizeString = (str: string) => 
+            str.toLowerCase().replace(/[^a-z0-9]/g, '');
+          
+          const normalizedSessionClass = normalizeString(session.Class);
+          const normalizedSessionLocation = normalizeString(session.Location);
+          const normalizedSessionTime = session.Time.toLowerCase().trim();
+          
+          const dayClasses = activeClassesData[sessionDay] || [];
+          
+          const isActive = dayClasses.some((activeClass: any) => {
+            const normalizedActiveClass = normalizeString(activeClass.className);
+            const normalizedActiveLocation = normalizeString(activeClass.location);
+            const normalizedActiveTime = activeClass.time.toLowerCase().trim();
+            
+            // More flexible class name matching - remove common prefixes
+            const cleanClassName = (name: string) => {
+              return normalizeString(name)
+                .replace(/^studio/i, '')
+                .replace(/^the/i, '')
+                .trim();
+            };
+            
+            const cleanedSessionClass = cleanClassName(session.Class);
+            const cleanedActiveClass = cleanClassName(activeClass.className);
+            
+            // Class match: check if cleaned names match or contain each other
+            const classMatch = cleanedActiveClass.includes(cleanedSessionClass) ||
+                               cleanedSessionClass.includes(cleanedActiveClass) ||
+                               normalizedActiveClass.includes(normalizedSessionClass) ||
+                               normalizedSessionClass.includes(normalizedActiveClass);
+            
+            // Location match: flexible matching for location names
+            const locationMatch = normalizedActiveLocation.includes(normalizedSessionLocation) ||
+                                  normalizedSessionLocation.includes(normalizedActiveLocation);
+            
+            // Time match: compare first 5 characters (HH:MM)
+            const timeMatch = normalizedActiveTime.startsWith(normalizedSessionTime.substring(0, 5)) ||
+                              normalizedSessionTime.startsWith(normalizedActiveTime.substring(0, 5));
+            
+            // Log matching attempts for debugging (first session only)
+            if (!debugLogged && index === 0 && (classMatch || locationMatch || timeMatch)) {
+              console.log('🔍 Matching attempt:', {
+                session: { 
+                  class: session.Class, 
+                  cleanClass: cleanedSessionClass,
+                  location: session.Location, 
+                  time: session.Time, 
+                  day: session.Day 
+                },
+                active: { 
+                  class: activeClass.className, 
+                  cleanClass: cleanedActiveClass,
+                  location: activeClass.location, 
+                  time: activeClass.time 
+                },
+                matches: { classMatch, locationMatch, timeMatch, overall: classMatch && locationMatch && timeMatch }
+              });
+              debugLogged = true;
+            }
+            
+            return classMatch && locationMatch && timeMatch;
+          });
+          
+          status = isActive ? 'Active' : 'Inactive';
+        }
+      } else {
+        // Fallback: Determine status based on date (sessions in last 30 days are Active)
+        if (session.Date) {
+          try {
+            const sessionDate = new Date(session.Date);
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+            status = sessionDate >= thirtyDaysAgo ? 'Active' : 'Inactive';
+          } catch (e) {
+            // If date parsing fails, keep as Inactive
+          }
         }
       }
       
@@ -125,6 +204,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         Status: status,
       };
     });
+    
+    // Log status distribution
+    const activeCount = enrichedData.filter(s => s.Status === 'Active').length;
+    const inactiveCount = enrichedData.filter(s => s.Status === 'Inactive').length;
+    console.log(`📈 Session status: ${activeCount} Active, ${inactiveCount} Inactive (${enrichedData.length} total)`);
     
     set({ rawData: enrichedData });
     get().applyFilters();
@@ -274,9 +358,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         filtered, 
         groupBy, 
         filters.minCheckins, 
-        filters.minClasses || 0, 
-        get().rawData,
-        filters.statusFilter || 'all'
+        filters.minClasses || 0
       );
       
       // Sort grouped data
@@ -321,3 +403,22 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     console.log(`Exporting ${processedData.length} rows as ${format}`);
   },
 }));
+
+// Load Active.csv on store initialization
+loadActiveClasses().then((activeClasses: ActiveClassesByDay) => {
+  useDashboardStore.setState({ activeClassesData: activeClasses });
+  const totalClasses = Object.values(activeClasses).reduce((sum, classes) => sum + classes.length, 0);
+  console.log('✅ Active classes loaded:', Object.keys(activeClasses).length, 'days,', totalClasses, 'total classes');
+  console.log('📊 Active classes by day:', Object.fromEntries(
+    Object.entries(activeClasses).map(([day, classes]) => [day, classes.length])
+  ));
+  
+  // Re-process raw data to apply active status
+  const currentRawData = useDashboardStore.getState().rawData;
+  if (currentRawData.length > 0) {
+    console.log('🔄 Re-processing', currentRawData.length, 'sessions with Active.csv data');
+    useDashboardStore.getState().setRawData(currentRawData);
+  }
+}).catch(error => {
+  console.error('❌ Failed to load active classes:', error);
+});

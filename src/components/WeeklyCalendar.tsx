@@ -83,10 +83,10 @@ const cleanClassName = (className: string): string => {
     .trim();
 };
 
-// Function to determine if a class is active based on uploaded schedule data
-const isClassActiveSimple = (session: SessionData, scheduleData: { [day: string]: any[] }): boolean => {
-  // If no schedule data is uploaded, fall back to date-based logic
-  if (!scheduleData || Object.keys(scheduleData).length === 0) {
+// Function to determine if a class is active based on Active.csv data from public folder
+const isClassActiveSimple = (session: SessionData, activeClassesData: { [day: string]: any[] }): boolean => {
+  // If no active classes data is loaded, fall back to date-based logic
+  if (!activeClassesData || Object.keys(activeClassesData).length === 0) {
     try {
       const sessionDate = parseISO(session.Date);
       const now = new Date();
@@ -99,32 +99,57 @@ const isClassActiveSimple = (session: SessionData, scheduleData: { [day: string]
     }
   }
   
-  // Use schedule data to determine active status
+  // Use Active.csv data to determine active status
   const sessionDay = session.Day;
-  if (!sessionDay || !scheduleData[sessionDay]) {
+  if (!sessionDay || !activeClassesData[sessionDay]) {
     return false;
   }
   
-  // Look for matching class in schedule data
-  const scheduledClasses = scheduleData[sessionDay] || [];
-  const matchingClass = scheduledClasses.find((scheduleClass: any) => {
-    // Match by class name, location, and time where possible
-    const classNameMatch = scheduleClass.className && session.Class && 
-      scheduleClass.className.toLowerCase().includes(session.Class.toLowerCase());
-    
-    const locationMatch = scheduleClass.location && session.Location &&
-      (scheduleClass.location.toLowerCase().includes(session.Location.toLowerCase()) ||
-       session.Location.toLowerCase().includes(scheduleClass.location.toLowerCase()));
-    
-    const timeMatch = scheduleClass.time && session.Time &&
-      scheduleClass.time.toLowerCase().includes(session.Time.toLowerCase());
-    
-    // A class is considered matching if it has class name similarity and at least one other field matches
-    return classNameMatch && (locationMatch || timeMatch);
-  });
+  // Normalize strings for comparison
+  const normalizeString = (str: string) => 
+    str.toLowerCase().replace(/[^a-z0-9]/g, '');
   
-  // Class is active if it exists in schedule and has a trainer assigned
-  return matchingClass && matchingClass.trainer1 && matchingClass.trainer1.trim() !== '';
+  const normalizedSessionClass = normalizeString(session.Class);
+  const normalizedSessionLocation = normalizeString(session.Location);
+  const normalizedSessionTime = session.Time.toLowerCase().trim();
+  
+  // Look for matching class in Active.csv data
+  const dayClasses = activeClassesData[sessionDay] || [];
+  
+  return dayClasses.some((activeClass: any) => {
+    const normalizedActiveClass = normalizeString(activeClass.className);
+    const normalizedActiveLocation = normalizeString(activeClass.location);
+    const normalizedActiveTime = activeClass.time.toLowerCase().trim();
+    
+    // More flexible class name matching - remove common prefixes
+    const cleanClassName = (name: string) => {
+      return normalizeString(name)
+        .replace(/^studio/i, '')
+        .replace(/^the/i, '')
+        .trim();
+    };
+    
+    const cleanedSessionClass = cleanClassName(session.Class);
+    const cleanedActiveClass = cleanClassName(activeClass.className);
+    
+    // Class match: check if cleaned names match or contain each other
+    const classMatch = cleanedActiveClass.includes(cleanedSessionClass) ||
+                       cleanedSessionClass.includes(cleanedActiveClass) ||
+                       normalizedActiveClass.includes(normalizedSessionClass) ||
+                       normalizedSessionClass.includes(normalizedActiveClass);
+    
+    // Match by location
+    const locationMatch = normalizedActiveLocation.includes(normalizedSessionLocation) ||
+                          normalizedSessionLocation.includes(normalizedActiveLocation);
+    
+    // Match by time - handle different formats (HH:MM:SS vs HH:MM)
+    const timeMatch = normalizedActiveTime.startsWith(normalizedSessionTime.substring(0, 5)) ||
+                      normalizedSessionTime.startsWith(normalizedActiveTime.substring(0, 5));
+    
+    // A class is considered active if it matches class name AND location AND time
+    // All trainers in Active.csv already have trainers assigned (non-empty)
+    return classMatch && locationMatch && timeMatch;
+  });
 };
 
 // Function to detect trainer conflicts (same trainer at same time across locations)
@@ -160,8 +185,13 @@ const detectTrainerConflicts = (calendarClasses: CalendarClass[], selectedDay: D
   return conflicts;
 };
 
+// Time configuration constants - defined outside component to ensure stability
+const CALENDAR_START_HOUR = 7;
+const CALENDAR_END_HOUR = 22;
+const TIME_SLOT_HEIGHT = 100; // px per 30min slot
+
 export default function WeeklyCalendar() {
-  const { filteredData, rawData, setRawData, getAverageCheckIns, filters, scheduleData } = useDashboardStore();
+  const { filteredData, rawData, setRawData, getAverageCheckIns, filters, activeClassesData } = useDashboardStore();
   
   // Early return if no data to prevent crashes
   if (!rawData || rawData.length === 0) {
@@ -250,7 +280,7 @@ export default function WeeklyCalendar() {
     
     // Process validated sessions only
     return validSessions.map(session => {
-      const status: 'Active' | 'Inactive' = isClassActiveSimple(session, scheduleData) ? 'Active' : 'Inactive';
+      const status: 'Active' | 'Inactive' = isClassActiveSimple(session, activeClassesData) ? 'Active' : 'Inactive';
       return {
         ...session,
         Status: status,
@@ -259,14 +289,14 @@ export default function WeeklyCalendar() {
     });
   }, [rawData]);
 
-  // Time configuration: 7am - 10pm with 15-minute intervals
-  const startHour = 7;
-  const endHour = 22;
-  const timeSlots = Array.from({ length: (endHour - startHour) * 4 }, (_, i) => {
-    const hour = Math.floor(i / 4) + startHour;
-    const minute = (i % 4) * 15;
-    return { hour, minute, label: `${hour % 12 || 12}:${minute.toString().padStart(2, '0')} ${hour >= 12 ? 'PM' : 'AM'}` };
-  });
+  // Create time slots every 30 minutes (2 slots per hour) - memoized to prevent recalculation
+  const timeSlots = useMemo(() => {
+    return Array.from({ length: (CALENDAR_END_HOUR - CALENDAR_START_HOUR) * 2 }, (_, i) => {
+      const hour = Math.floor(i / 2) + CALENDAR_START_HOUR;
+      const minute = (i % 2) * 30;
+      return { hour, minute, label: `${hour % 12 || 12}:${minute.toString().padStart(2, '0')} ${hour >= 12 ? 'PM' : 'AM'}` };
+    });
+  }, []);
 
     // Get unique values for filters
   const allLocations = useMemo(() => {
@@ -493,7 +523,7 @@ export default function WeeklyCalendar() {
       }
       
       // Skip if outside our display range
-      if (hour < startHour || hour >= endHour) {
+      if (hour < CALENDAR_START_HOUR || hour >= CALENDAR_END_HOUR) {
         skipReasons.outsideTimeRange++;
         return;
       }
@@ -906,9 +936,8 @@ export default function WeeklyCalendar() {
     );
   };
 
-  // Replace the renderClassBlock function with this improved version:
   const renderClassBlock = (calClass: CalendarClass) => {
-  const { session, startTime, duration, position, totalOverlaps } = calClass;
+  const { session, startTime, position } = calClass;
   
   // Get average check-ins for similar classes
   const avgData = getAverageCheckIns(
@@ -918,31 +947,13 @@ export default function WeeklyCalendar() {
     session.Location || ''
   );
   
-  console.log('🎯 Rendering class:', {
-    class: session.Class,
-    dayIndex: calClass.dayIndex,
-    startTime,
-    duration,
-    position,
-    totalOverlaps,
-    avgCheckIns: avgData?.avgCheckIns
-  });
+  // Calculate position using consistent constants
+  const top = ((startTime - (CALENDAR_START_HOUR * 60)) / 30) * TIME_SLOT_HEIGHT;
   
-  // Calculate position - ensure proper positioning
-  const timeSlotHeight = 100; // px per 30min slot
-  const top = ((startTime - (startHour * 60)) / 30) * timeSlotHeight;
-  const height = Math.max((duration / 30) * timeSlotHeight, 120); // Minimum 120px height
-  
-  // Calculate card dimensions for overlapping classes
-  // Make overlapping cards wide and short (stacked vertically) instead of tall and narrow (side by side)
-  // Occupy full width and height to maximize visibility
-  const cardHeight = totalOverlaps > 1 
-    ? Math.max(70, (height / totalOverlaps) - 2) // Divide height among overlapping cards, minimal gap
-    : height;
-  
-  const cardTop = totalOverlaps > 1 
-    ? top + (position * (height / totalOverlaps)) // Stack vertically
-    : top;
+  // UNIFORM CARD SIZING - All cards same size regardless of overlaps
+  // Cards with same start time stack on top of each other using z-index
+  const cardHeight = 120; // Fixed uniform height for all cards
+  const cardTop = top; // Always use the calculated top position - no offset for overlaps
   
   const width = '100%'; // Full column width
   const left = '0'; // No offset, occupy full width
@@ -991,11 +1002,9 @@ export default function WeeklyCalendar() {
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: -20, scale: 0.9 }}
       whileHover={{ 
-        scale: 1.03,
-        zIndex: 50,
-        y: -4,
-        height: totalOverlaps > 1 ? `${height}px` : undefined, // Expand to full height on hover if overlapping
-        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.4)',
+        scale: 1.02,
+        zIndex: 100, // Bring to front on hover
+        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
         transition: { 
           type: "spring",
           stiffness: 400,
@@ -1008,7 +1017,7 @@ export default function WeeklyCalendar() {
         height: `${cardHeight}px`,
         width,
         left,
-        zIndex: 10 + position,
+        zIndex: 10 + position, // Stack overlapping cards by position
       }}
       className={`${bgColor} ${borderColor} ${textColor} border-2 border-white border-t-4 rounded-lg shadow-lg p-2 cursor-pointer backdrop-blur-sm overflow-hidden`}
       onMouseEnter={() => setHoveredClass(session)}
@@ -1419,12 +1428,16 @@ export default function WeeklyCalendar() {
                         {timeSlots.map((slot, slotIdx) => (
                           <div
                             key={slotIdx}
-                            className="h-[100px] border-b border-slate-100 cursor-pointer hover:bg-blue-50/30 transition-colors group"
+                            className="h-[100px] border-b border-slate-100 cursor-pointer hover:bg-blue-50/30 transition-colors group relative"
                             onClick={() => {
                               setSelectedSlot({ day, time: slot.label });
                               setShowCreateClass(true);
                             }}
                           >
+                            {/* Visual marker for debugging - show time at each slot */}
+                            <div className="absolute top-0 left-0 text-[8px] text-gray-400 px-1 pointer-events-none">
+                              {slot.label} ({slotIdx * 100}px)
+                            </div>
                             <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center h-full">
                               <span className="text-sm text-blue-600 font-semibold">+ Add Class</span>
                             </div>

@@ -74,7 +74,7 @@ export default function Rankings() {
     const rankingGroups: RankingGroup[] = [];
     groups.forEach((sessions, key) => {
       const parsed = parseCompositeKey(key);
-      const metrics = calculateMetrics(sessions, allRawData);
+      const metrics = calculateMetrics(sessions);
 
       // Apply minCheckins and minClasses filters
       if (metrics.totalCheckIns < filters.minCheckins) {
@@ -84,15 +84,8 @@ export default function Rankings() {
         return;
       }
       
-      // Apply status filter
-      if (filters.statusFilter && filters.statusFilter !== 'all') {
-        if (filters.statusFilter === 'active' && metrics.status !== 'Active') {
-          return;
-        }
-        if (filters.statusFilter === 'inactive' && metrics.status !== 'Inactive') {
-          return;
-        }
-      }
+      // Note: Status filter is applied visually (graying out) rather than removing items
+      // This allows inactive classes to remain visible but grayed out
 
       rankingGroups.push({
         key,
@@ -310,27 +303,33 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
 
           {/* List */}
           <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
-            {topPerformers.map((group, index) => (
+            {topPerformers.map((group, index) => {
+              const isInactive = group.metrics.status === 'Inactive';
+              return (
               <motion.div
                 key={group.key}
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
                 onClick={() => handleCardClick(group)}
-                className="flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-green-300 hover:shadow-md transition-all cursor-pointer"
+                className={`flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-green-300 hover:shadow-md transition-all cursor-pointer ${isInactive ? 'opacity-40 bg-gray-50/50' : ''}`}
               >
                 <div className="flex items-center justify-center min-w-[32px] h-8 rounded-lg bg-gradient-to-br from-green-100 to-green-200 text-green-700 font-bold text-sm">
                   {index + 1}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-gray-900 truncate text-sm">{group.className}</p>
-                  <p className="text-xs text-gray-600 truncate">
+                  <p className={`font-bold truncate text-sm ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
+                    {group.className}
+                  </p>
+                  <p className={`text-xs truncate ${isInactive ? 'text-gray-400' : 'text-gray-600'}`}>
                     {group.day} • {group.time} • {group.location}
                   </p>
                   {group.trainer && (
-                    <p className="text-xs text-blue-600 truncate">{group.trainer}</p>
+                    <p className={`text-xs truncate ${isInactive ? 'text-gray-400' : 'text-blue-600'}`}>
+                      {group.trainer}
+                    </p>
                   )}
-                  <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                  <div className={`flex items-center gap-3 mt-1 text-xs ${isInactive ? 'text-gray-400' : 'text-gray-500'}`}>
                     <span>{group.metrics.classes} classes</span>
                     <span>•</span>
                     <span>{formatNumber(group.metrics.totalCheckIns)} check-ins</span>
@@ -343,9 +342,9 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-green-500" />
+                  <TrendingUp className={`w-4 h-4 ${isInactive ? 'text-gray-400' : 'text-green-500'}`} />
                   <div className="relative group">
-                    <span className="font-bold text-gray-900 text-sm cursor-help">
+                    <span className={`font-bold text-sm cursor-help ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
                       {formatMetricValue(topMetric, group.metrics[topMetric])}
                     </span>
                     {topMetric === 'compositeScore' && (
@@ -359,7 +358,8 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
                   </div>
                 </div>
               </motion.div>
-            ))}
+              );
+            })}
           </div>
         </motion.div>
 
@@ -408,27 +408,33 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
 
           {/* List */}
           <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
-            {bottomPerformers.map((group, index) => (
+            {bottomPerformers.map((group, index) => {
+              const isInactive = group.metrics.status === 'Inactive';
+              return (
               <motion.div
                 key={group.key}
                 initial={{ opacity: 0, x: 10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
                 onClick={() => handleCardClick(group)}
-                className="flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-orange-300 hover:shadow-md transition-all cursor-pointer"
+                className={`flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-orange-300 hover:shadow-md transition-all cursor-pointer ${isInactive ? 'opacity-40 bg-gray-50/50' : ''}`}
               >
                 <div className="flex items-center justify-center min-w-[32px] h-8 rounded-lg bg-gradient-to-br from-orange-100 to-orange-200 text-orange-700 font-bold text-sm">
                   {index + 1}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-gray-900 truncate text-sm">{group.className}</p>
-                  <p className="text-xs text-gray-600 truncate">
+                  <p className={`font-bold truncate text-sm ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
+                    {group.className}
+                  </p>
+                  <p className={`text-xs truncate ${isInactive ? 'text-gray-400' : 'text-gray-600'}`}>
                     {group.day} • {group.time} • {group.location}
                   </p>
                   {group.trainer && (
-                    <p className="text-xs text-blue-600 truncate">{group.trainer}</p>
+                    <p className={`text-xs truncate ${isInactive ? 'text-gray-400' : 'text-blue-600'}`}>
+                      {group.trainer}
+                    </p>
                   )}
-                  <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                  <div className={`flex items-center gap-3 mt-1 text-xs ${isInactive ? 'text-gray-400' : 'text-gray-500'}`}>
                     <span>{group.metrics.classes} classes</span>
                     <span>•</span>
                     <span>{formatNumber(group.metrics.totalCheckIns)} check-ins</span>
@@ -457,7 +463,8 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
                   </div>
                 </div>
               </motion.div>
-            ))}
+              );
+            })}
           </div>
         </motion.div>
       </div>

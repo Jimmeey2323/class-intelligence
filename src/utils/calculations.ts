@@ -12,7 +12,7 @@ import {
  * @param sessions - The filtered sessions to calculate metrics from
  * @param allRawSessions - Optional: All raw sessions to calculate status accurately (ignores date filters)
  */
-export function calculateMetrics(sessions: SessionData[], allRawSessions?: SessionData[]): CalculatedMetrics {
+export function calculateMetrics(sessions: SessionData[]): CalculatedMetrics {
   const totalClasses = sessions.length;
   const emptyClasses = sessions.filter((s) => s.CheckedIn === 0).length;
   const nonEmptyClasses = totalClasses - emptyClasses;
@@ -60,26 +60,15 @@ export function calculateMetrics(sessions: SessionData[], allRawSessions?: Sessi
   const stdDev = Math.sqrt(variance);
   const consistencyScore = avgAttendance > 0 ? Math.max(0, 100 - (stdDev / avgAttendance) * 100) : 0;
   
-  // Status: Active if most recent class is within 8 days (use allRawSessions to ignore date filters)
-  const sessionsForStatus = allRawSessions || sessions;
+  // Status: Use Status field from session data (set by Active.csv in store)
+  // If any session in the group is Active, the group is Active
+  const status: 'Active' | 'Inactive' = sessions.some(s => s.Status === 'Active') ? 'Active' : 'Inactive';
   
-  // Get the unique identifier for this group (class + day + time + location)
-  const groupIdentifier = sessions[0] ? 
-    `${sessions[0].SessionName || sessions[0].Class}|${sessions[0].Day}|${sessions[0].Time}|${sessions[0].Location}` : '';
-  
-  // Find all sessions matching this group from raw data
-  const matchingSessions = groupIdentifier ? 
-    sessionsForStatus.filter(s => 
-      `${s.SessionName || s.Class}|${s.Day}|${s.Time}|${s.Location}` === groupIdentifier
-    ) : sessions;
-  
-  const mostRecentDate = matchingSessions.reduce((latest, s) => {
+  // Get most recent date for reference
+  const mostRecentDate = sessions.reduce((latest, s) => {
     const sessionDate = new Date(s.Date);
     return sessionDate > latest ? sessionDate : latest;
   }, new Date(0));
-  
-  const daysSinceLastClass = (new Date().getTime() - mostRecentDate.getTime()) / (1000 * 60 * 60 * 24);
-  const status = daysSinceLastClass <= 8 ? 'Active' : 'Inactive';
   
   // Calculate composite score (weighted combination of key metrics)
   const compositeScore = calculateCompositeScore(classAvg, fillRate, totalClasses);
@@ -119,9 +108,7 @@ export function groupData(
   sessions: SessionData[],
   groupBy: GroupBy,
   minCheckins: number = 0,
-  minClasses: number = 0,
-  allRawSessions?: SessionData[],
-  statusFilter?: 'all' | 'active' | 'inactive'
+  minClasses: number = 0
 ): GroupedRow[] {
   // Group sessions
   const groups = new Map<string, SessionData[]>();
@@ -219,7 +206,7 @@ export function groupData(
   const groupedRows: GroupedRow[] = [];
   
   groups.forEach((groupSessions, key) => {
-    const metrics = calculateMetrics(groupSessions, allRawSessions);
+    const metrics = calculateMetrics(groupSessions);
     
     // Filter by minimum check-ins
     if (metrics.totalCheckIns < minCheckins) {
@@ -231,15 +218,8 @@ export function groupData(
       return;
     }
     
-    // Filter by status if specified
-    if (statusFilter && statusFilter !== 'all') {
-      if (statusFilter === 'active' && metrics.status !== 'Active') {
-        return;
-      }
-      if (statusFilter === 'inactive' && metrics.status !== 'Inactive') {
-        return;
-      }
-    }
+    // Note: Status filter is applied visually (graying out) rather than removing rows
+    // This allows inactive classes to remain visible but grayed out
     
     // Get representative values or "Multiple Values"
     const firstSession = groupSessions[0];

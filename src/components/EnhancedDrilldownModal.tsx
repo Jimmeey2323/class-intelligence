@@ -398,15 +398,23 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                     <tbody className="bg-white divide-y divide-gray-100">
                       {sortedSessions.map((session, idx) => {
                         const fillRate = session.Capacity > 0 ? (session.CheckedIn / session.Capacity) * 100 : 0;
+                        const isInactive = session.Status === 'Inactive';
                         return (
-                          <tr key={idx} className="hover:bg-blue-50/50 transition-colors">
-                            <td className="px-4 py-3 text-sm text-gray-900">{format(parseISO(session.Date), 'MMM d, yyyy')}</td>
-                            <td className="px-4 py-3 text-sm text-gray-700">{session.Trainer}</td>
-                            <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">
+                          <tr 
+                            key={idx} 
+                            className={`hover:bg-blue-50/50 transition-colors ${isInactive ? 'opacity-40 bg-gray-50/50' : ''}`}
+                          >
+                            <td className={`px-4 py-3 text-sm ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
+                              {format(parseISO(session.Date), 'MMM d, yyyy')}
+                            </td>
+                            <td className={`px-4 py-3 text-sm ${isInactive ? 'text-gray-400' : 'text-gray-700'}`}>
+                              {session.Trainer}
+                            </td>
+                            <td className={`px-4 py-3 text-sm text-right font-medium ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
                               {session.CheckedIn}/{session.Capacity}
                             </td>
                             <td className="px-4 py-3 text-sm text-right">
-                              <span className={`font-semibold ${
+                              <span className={`font-semibold ${isInactive ? 'text-gray-400' :
                                 fillRate >= 80 ? 'text-green-600' :
                                 fillRate >= 50 ? 'text-blue-600' :
                                 'text-amber-600'
@@ -414,10 +422,12 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                                 {formatPercentage(fillRate)}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">
+                            <td className={`px-4 py-3 text-sm text-right font-medium ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
                               {formatCurrency(session.Revenue)}
                             </td>
-                            <td className="px-4 py-3 text-sm text-right text-gray-700">{session.LateCancelled}</td>
+                            <td className={`px-4 py-3 text-sm text-right ${isInactive ? 'text-gray-400' : 'text-gray-700'}`}>
+                              {session.LateCancelled}
+                            </td>
                           </tr>
                         );
                       })}

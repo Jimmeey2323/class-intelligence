@@ -722,6 +722,12 @@ export default function DataTableEnhanced() {
             <tbody className="bg-white divide-y divide-gray-200">
               {table.getRowModel().rows.map((row, index) => {
                 const isGroupRow = 'isGroupRow' in row.original && row.original.isGroupRow;
+                // For grouped rows, check the status from metrics; for flat rows, check Status field
+                const status = isGroupRow && 'status' in row.original 
+                  ? row.original.status 
+                  : ('Status' in row.original ? row.original.Status : 'Active');
+                const isInactive = status === 'Inactive';
+                
                 return (
                   <motion.tr
                     key={row.id}
@@ -730,13 +736,13 @@ export default function DataTableEnhanced() {
                     transition={{ delay: index * 0.01 }}
                     className={`hover:bg-blue-50 transition-colors ${
                       isGroupRow ? 'bg-gray-50 font-semibold' : ''
-                    }`}
+                    } ${isInactive ? 'opacity-40 bg-gray-50/50' : ''}`}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <td
                         key={cell.id}
                         style={{ width: cell.column.getSize() }}
-                        className="px-4 py-3 text-sm text-gray-900"
+                        className={`px-4 py-3 text-sm ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}
                       >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>

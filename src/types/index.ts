@@ -155,6 +155,7 @@ export interface DashboardState {
   filteredData: SessionData[]; // Filtered sessions before grouping
   processedData: (SessionData | GroupedRow)[];
   scheduleData: { [day: string]: any[] }; // Schedule data from uploaded CSV
+  activeClassesData: { [day: string]: any[] }; // Active classes loaded from Active.csv
   
   // Filters
   filters: FilterState;
