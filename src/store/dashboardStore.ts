@@ -335,6 +335,17 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         return false;
       }
       
+      // Status filter - IMPORTANT: Filter by Active/Inactive status from Active.csv
+      if (filters.statusFilter && filters.statusFilter !== 'all') {
+        const rowStatus = row.Status || 'Inactive'; // Default to Inactive if not set
+        if (filters.statusFilter === 'active' && rowStatus !== 'Active') {
+          return false;
+        }
+        if (filters.statusFilter === 'inactive' && rowStatus !== 'Inactive') {
+          return false;
+        }
+      }
+      
       // Search query (fuzzy search will be applied in component)
       if (filters.searchQuery) {
         const query = filters.searchQuery.toLowerCase();

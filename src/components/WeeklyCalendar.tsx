@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { SessionData } from '../types';
 import { format, startOfWeek, addDays, parseISO, isWithinInterval, isSameDay, addMonths, subMonths } from 'date-fns';
-import { ChevronLeft, ChevronRight, Calendar, Calendar as CalendarIcon, MapPin, Filter, X, Sparkles, Grid, List, BarChart3, Building, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar, Calendar as CalendarIcon, MapPin, Filter, Sparkles, Grid, List, BarChart3, Building, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EnhancedDrilldownModal from './EnhancedDrilldownModal';
 import CreateClassModal from './CreateClassModal';
@@ -211,21 +211,15 @@ export default function WeeklyCalendar() {
   
   // Consolidated date state - single source of truth
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [selectedLocations, setSelectedLocations] = useState<string[]>(filters.locations || []);
-  const [selectedStatuses, setSelectedStatuses] = useState<string[]>(['Active', 'Inactive']);
-  const [selectedTypes, setSelectedTypes] = useState<string[]>(filters.classTypes || []);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
   const [hoveredClass, setHoveredClass] = useState<SessionData | null>(null);
   const [drilldownData, setDrilldownData] = useState<SessionData[]>([]);
   const [drilldownTitle, setDrilldownTitle] = useState('');
   const [showDrilldown, setShowDrilldown] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
   const [showCreateClass, setShowCreateClass] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<{ day: Date; time: string } | null>(null);
   const [isAutoPopulating, setIsAutoPopulating] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
-  const [multiLocationActiveOnly, setMultiLocationActiveOnly] = useState(false);
+  const [activeOnly, setActiveOnly] = useState(false); // Active filter for calendar
 
   // Derived date values from single source of truth
   const selectedWeekStart = useMemo(() => startOfWeek(currentDate, { weekStartsOn: 1 }), [currentDate]);
@@ -298,53 +292,18 @@ export default function WeeklyCalendar() {
     });
   }, []);
 
-    // Get unique values for filters
-  const allLocations = useMemo(() => {
-    const locations = new Set<string>();
-    filteredData.forEach(session => {
-      if (session.Location) {
-        locations.add(session.Location);
-      }
-    });
-    return Array.from(locations).sort();
-  }, [filteredData]);
-
   // Week days for current selection (Monday to Sunday)
   const weekDays = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => addDays(selectedWeekStart, i));
   }, [selectedWeekStart]);
 
-  // Get unique values for local filters
-  const allTypes = useMemo(() => {
-    const types = new Set<string>();
-    filteredData.forEach(session => {
-      if (session.Type) {
-        types.add(session.Type);
-      }
-    });
-    return Array.from(types).sort();
-  }, [filteredData]);
-
-  const allStatuses = useMemo(() => {
-    const statuses = new Set<string>();
-    filteredData.forEach(session => {
-      if (session.Status) {
-        statuses.add(session.Status);
-      }
-    });
-    return Array.from(statuses).sort();
-  }, [filteredData]);
-
-  // Apply local filters to get the final filtered dataset - ONLY real uploaded data
+  // Use globally filtered data directly - no local calendar filters
   const locallyFilteredData = useMemo(() => {
     if (!filteredData || filteredData.length === 0) {
-      console.log('🔍 No uploaded data available for calendar view');
       return [];
     }
 
-    console.log('🔍 Applying local filters to', filteredData.length, 'globally filtered sessions');
-    
-    // Validate that we're working with real session data, not mock data
+    // Validate that we're working with real session data
     const validFilteredData = filteredData.filter(session => {
       return session && 
              session.Date && 
@@ -356,7 +315,6 @@ export default function WeeklyCalendar() {
     });
 
     if (validFilteredData.length === 0) {
-      console.warn('⚠️ No valid uploaded sessions found for calendar');
       return [];
     }
     
@@ -366,7 +324,6 @@ export default function WeeklyCalendar() {
       try {
         sessionDate = parseISO(session.Date);
       } catch (e) {
-        console.warn('Failed to parse date:', session.Date);
         return false;
       }
       
@@ -374,47 +331,9 @@ export default function WeeklyCalendar() {
       const inWeek = weekDays.some(day => isSameDay(day, sessionDate));
       if (!inWeek) return false;
       
-      // Date range filter (additional local filter)
-      if (startDate && endDate) {
-        const start = parseISO(startDate);
-        const end = parseISO(endDate);
-        if (!isWithinInterval(sessionDate, { start, end })) return false;
-      }
-      
-      // Local location filter - only apply if user has made a selection in calendar
-      if (selectedLocations.length > 0) {
-        if (!selectedLocations.includes(session.Location || '')) {
-          return false;
-        }
-      }
-      
-      // Status filter (local calendar filter)
-      if (selectedStatuses.length > 0 && !selectedStatuses.includes(session.Status || '')) {
-        return false;
-      }
-      
-      // Type filter (local calendar filter) 
-      if (selectedTypes.length > 0 && !selectedTypes.includes(session.Type || '')) {
-        return false;
-      }
-      
       return true;
     });
-  }, [filteredData, weekDays, selectedLocations, selectedStatuses, selectedTypes, startDate, endDate]);
-
-  // Debug logging for filter analysis
-  console.log('🎯 Calendar Filter Debug:', {
-    globalLocations: filters.locations,
-    localSelectedLocations: selectedLocations,
-    filteredDataCount: filteredData.length,
-    locallyFilteredDataCount: locallyFilteredData.length,
-    weekDaysCount: weekDays.length,
-    sampleFilteredSession: filteredData[0] ? {
-      Location: filteredData[0].Location,
-      Class: filteredData[0].Class,
-      Date: filteredData[0].Date
-    } : null
-  });
+  }, [filteredData, weekDays]);
 
   // Get unique locations for multi-location view (filtered to specific locations only)
   const multiLocationUniqueLocations = useMemo(() => {
@@ -607,11 +526,10 @@ export default function WeeklyCalendar() {
     }
     
     try {
-      const dataToUse = multiLocationActiveOnly 
+      // Use activeOnly state instead of multiLocationActiveOnly
+      const dataToUse = activeOnly 
         ? multiLocationDataProcessed.filter(session => session.Status === 'Active')
         : multiLocationDataProcessed;
-
-      console.log('🗓️ Multi-location filtering for 7-day range around:', format(selectedDay, 'yyyy-MM-dd'));
       
       return dataToUse.map(session => {
         if (!session || !session.Date || !session.Time) return null;
@@ -667,7 +585,7 @@ export default function WeeklyCalendar() {
       console.error('Error processing multi-location calendar classes:', error);
       return [];
     }
-  }, [multiLocationDataProcessed, selectedDay, multiLocationActiveOnly]);
+  }, [multiLocationDataProcessed, selectedDay, activeOnly]);
 
   // Calculate class format distribution for each day
   const dailyFormatDistribution = useMemo(() => {
@@ -899,43 +817,6 @@ export default function WeeklyCalendar() {
     handleAutoPopulate();
   }
 
-  // Quick filters
-  const clearFilters = () => {
-    setSelectedLocations([]);
-    setSelectedTypes([]);
-    setSelectedStatuses(['Active', 'Inactive']);
-    setStartDate('');
-    setEndDate('');
-  };
-
-  const showActiveOnly = () => {
-    setSelectedStatuses(['Active']);
-  };
-
-  const toggleLocation = (location: string) => {
-    setSelectedLocations(prev =>
-      prev.includes(location)
-        ? prev.filter(l => l !== location)
-        : [...prev, location]
-    );
-  };
-
-  const toggleType = (type: string) => {
-    setSelectedTypes(prev =>
-      prev.includes(type)
-        ? prev.filter(t => t !== type)
-        : [...prev, type]
-    );
-  };
-
-  const toggleStatus = (status: string) => {
-    setSelectedStatuses(prev =>
-      prev.includes(status)
-        ? prev.filter(s => s !== status)
-        : [...prev, status]
-    );
-  };
-
   const renderClassBlock = (calClass: CalendarClass) => {
   const { session, startTime, position } = calClass;
   
@@ -991,9 +872,22 @@ export default function WeeklyCalendar() {
   const isActive = session.Status === 'Active';
   const classColor = getClassColor(session.Class);
   
-  let bgColor = isActive ? classColor.bg : 'bg-gray-400';
-  let borderColor = isActive ? classColor.border : 'border-t-gray-600';
-  let textColor = isActive ? classColor.text : 'text-white';
+  // When activeOnly is true: highlight active classes normally, gray out inactive classes
+  // When activeOnly is false: show all classes with their normal colors
+  let bgColor, borderColor, textColor, additionalClasses = '';
+  
+  if (activeOnly && !isActive) {
+    // Gray out inactive classes when activeOnly is enabled
+    bgColor = 'bg-gray-400';
+    borderColor = 'border-t-gray-500';
+    textColor = 'text-gray-100';
+    additionalClasses = 'opacity-60';
+  } else {
+    // Normal coloring for active classes or when activeOnly is disabled
+    bgColor = isActive ? classColor.bg : 'bg-gray-400';
+    borderColor = isActive ? classColor.border : 'border-t-gray-600';
+    textColor = isActive ? classColor.text : 'text-white';
+  }
   
   return (
     <motion.div
@@ -1019,7 +913,7 @@ export default function WeeklyCalendar() {
         left,
         zIndex: 10 + position, // Stack overlapping cards by position
       }}
-      className={`${bgColor} ${borderColor} ${textColor} border-2 border-white border-t-4 rounded-lg shadow-lg p-2 cursor-pointer backdrop-blur-sm overflow-hidden`}
+      className={`${bgColor} ${borderColor} ${textColor} ${additionalClasses} border-2 border-white border-t-4 rounded-lg shadow-lg p-2 cursor-pointer backdrop-blur-sm overflow-hidden`}
       onMouseEnter={() => setHoveredClass(session)}
       onMouseLeave={() => setHoveredClass(null)}
       onClick={() => {
@@ -1204,137 +1098,19 @@ export default function WeeklyCalendar() {
             </button>
             
             <button
-              onClick={() => setShowFilters(!showFilters)}
-              className={`p-2 rounded-xl transition-all ${showFilters ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
-              title="Toggle Filters"
+              onClick={() => setActiveOnly(!activeOnly)}
+              className={`px-4 py-2 text-sm rounded-xl transition-all flex items-center gap-2 ${
+                activeOnly
+                  ? 'bg-green-500 text-white shadow-lg'
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              }`}
+              title="Show only active classes from Active.csv"
             >
-              <Filter className="w-5 h-5" />
+              <Filter className="w-4 h-4" />
+              Active Only
             </button>
           </div>
         </div>
-
-        {/* Filters Panel */}
-        <AnimatePresence>
-          {showFilters && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="mt-6 space-y-4 border-t border-gray-200 pt-6"
-            >
-              {/* Date Range */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Start Date</label>
-                  <input
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    className="w-full px-4 py-2 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">End Date</label>
-                  <input
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    className="w-full px-4 py-2 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-              </div>
-
-              {/* Quick Filters */}
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={showActiveOnly}
-                  className="px-4 py-2 text-sm bg-green-100 hover:bg-green-200 text-green-800 rounded-xl transition-colors"
-                >
-                  Active Only
-                </button>
-                <button
-                  onClick={clearFilters}
-                  className="px-4 py-2 text-sm bg-red-100 hover:bg-red-200 text-red-800 rounded-xl transition-colors flex items-center gap-2"
-                >
-                  <X className="w-4 h-4" />
-                  Clear All
-                </button>
-              </div>
-
-              {/* Location Filters */}
-              {allLocations.length > 0 && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Locations</label>
-                  <div className="flex flex-wrap gap-2">
-                    {allLocations.map((location: string) => (
-                      <button
-                        key={location}
-                        onClick={() => toggleLocation(location)}
-                        className={`px-3 py-1.5 text-sm rounded-lg transition-all ${
-                          selectedLocations.includes(location)
-                            ? 'bg-blue-500 text-white shadow-md'
-                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                        }`}
-                      >
-                        <MapPin className="w-3 h-3 inline mr-1" />
-                        {location}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Type Filters */}
-              {allTypes.length > 0 && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Class Types</label>
-                  <div className="flex flex-wrap gap-2">
-                    {allTypes.map((type: string) => (
-                      <button
-                        key={type}
-                        onClick={() => toggleType(type)}
-                        className={`px-3 py-1.5 text-sm rounded-lg transition-all ${
-                          selectedTypes.includes(type)
-                            ? 'bg-purple-500 text-white shadow-md'
-                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                        }`}
-                      >
-                        {type}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Status Filters */}
-              {allStatuses.length > 0 && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
-                  <div className="flex flex-wrap gap-2">
-                    {allStatuses.map((status: string) => (
-                      <button
-                        key={status}
-                        onClick={() => toggleStatus(status)}
-                        className={`px-3 py-1.5 text-sm rounded-lg transition-all ${
-                          selectedStatuses.includes(status)
-                            ? 'bg-green-500 text-white shadow-md'
-                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
-                        }`}
-                      >
-                        {status}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Results Count */}
-              <div className="text-sm text-gray-600 bg-blue-50 rounded-xl p-3">
-                Showing <span className="font-semibold text-blue-600">{calendarClasses.length}</span> classes
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
 
       {/* Empty State */}
@@ -1790,15 +1566,15 @@ export default function WeeklyCalendar() {
                   <div className="flex items-center gap-4">
                     {/* Active Only Toggle */}
                     <button
-                      onClick={() => setMultiLocationActiveOnly(!multiLocationActiveOnly)}
+                      onClick={() => setActiveOnly(!activeOnly)}
                       className={`px-4 py-2 rounded-xl transition-all font-semibold text-sm ${
-                        multiLocationActiveOnly
+                        activeOnly
                           ? 'bg-green-500 text-white shadow-lg'
                           : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                       }`}
-                      title={multiLocationActiveOnly ? 'Show all classes' : 'Show active classes only'}
+                      title={activeOnly ? 'Show all classes' : 'Show active classes only'}
                     >
-                      {multiLocationActiveOnly ? '✓ Active Only' : 'Active Only'}
+                      {activeOnly ? '✓ Active Only' : 'Active Only'}
                     </button>
                     <div className="text-sm text-gray-600">
                       Showing <span className="font-semibold text-blue-600">{multiLocationUniqueLocations.length}</span> locations
@@ -1914,15 +1690,16 @@ export default function WeeklyCalendar() {
                           return false;
                         }
                         
-                        return Math.abs(calClass.startTime - slotMinutes) < 15;
+                        // Exact time match
+                        return calClass.startTime === slotMinutes;
                       });
                     });
                     
                     return (
                       <div key={`slot-${slot.hour}-${slot.minute}`} className={`flex border-b border-gray-100 ${hasClassesAtThisTime ? 'bg-white' : 'bg-gray-25'}`}>
                         {/* Time Label */}
-                        <div className={`flex-shrink-0 w-24 border-r border-gray-200 p-2 flex items-center justify-center ${hasClassesAtThisTime ? 'bg-blue-50' : 'bg-gray-50'}`}>
-                          <div className="text-xs font-semibold text-gray-800 text-center">
+                        <div className={`flex-shrink-0 w-20 border-r-2 border-gray-200 p-2 flex items-center justify-center ${hasClassesAtThisTime ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'}`}>
+                          <div className="text-xs font-bold text-gray-700 text-center">
                             {slot.label}
                           </div>
                         </div>
@@ -1941,12 +1718,13 @@ export default function WeeklyCalendar() {
                               return false;
                             }
                             
-                            // Check if the class time matches this slot (within 15 minutes)
-                            return Math.abs(calClass.startTime - slotMinutes) < 15;
+                            // Exact time match for the slot
+                            return calClass.startTime === slotMinutes;
                           });
 
                           return (
-                            <div key={`${location}-${slot.hour}-${slot.minute}`} className="flex-1 min-w-0 border-r border-gray-200 last:border-r-0 p-1 min-h-[60px] relative">
+                            <div key={`${location}-${slot.hour}-${slot.minute}`} className="flex-1 min-w-[180px] max-w-[280px] border-r border-gray-200 last:border-r-0 p-2 min-h-[90px] relative bg-white hover:bg-gray-50/50 transition-colors">
+                              <div className="space-y-2">
                               {slotClasses.map((calClass, sessionIdx) => {
                                 const session = calClass.session;
                                 const avgResult = getAverageCheckIns(session.Class, session.Day, session.Time, session.Location);
@@ -1965,22 +1743,27 @@ export default function WeeklyCalendar() {
                                 // Check for trainer conflicts
                                 const conflictKey = `${session.Trainer}-${session.Day}-${session.Time}`;
                                 const hasConflict = conflicts.has(conflictKey);
+                                
+                                // Determine styling based on active filter and status
+                                const isActive = session.Status === 'Active';
+                                const shouldGrayOut = activeOnly && !isActive;
+                                const fillRate = session.Capacity > 0 ? (session.CheckedIn / session.Capacity) * 100 : 0;
 
                                 return (
                                   <motion.div
                                     key={`${session.Date}-${session.Time}-${sessionIdx}`}
-                                    initial={{ opacity: 0, scale: 0.9 }}
+                                    initial={{ opacity: 0, scale: 0.95 }}
                                     animate={{ opacity: 1, scale: 1 }}
-                                    whileHover={{ scale: 1.02 }}
-                                    className={`w-full h-16 rounded-lg p-2 cursor-pointer transition-all shadow-sm hover:shadow-md relative flex flex-col justify-between
-                                      ${hasConflict 
-                                        ? 'bg-gradient-to-r from-red-500 to-red-600 text-white border-2 border-red-700 ring-2 ring-red-300' 
-                                        : session.Status === 'Inactive' && multiLocationActiveOnly
-                                          ? `bg-gradient-to-r ${classTypeColor} text-white opacity-40 grayscale`
-                                          : session.Status === 'Inactive'
-                                            ? `bg-gradient-to-r from-gray-300 to-gray-400 text-gray-600`
-                                            : `bg-gradient-to-r ${classTypeColor} text-white ${multiLocationActiveOnly ? 'ring-2 ring-green-300 shadow-lg' : ''}`
-                                      }`}
+                                    whileHover={{ scale: 1.03, zIndex: 20 }}
+                                    className={`w-full rounded-xl p-3 cursor-pointer transition-all relative border-l-4 ${
+                                      hasConflict 
+                                        ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-600 ring-2 ring-red-300 shadow-lg' 
+                                        : shouldGrayOut
+                                          ? 'bg-gray-100 border-gray-400 opacity-50 shadow-sm'
+                                          : isActive
+                                            ? `bg-gradient-to-br from-white via-blue-50 to-indigo-50 border-blue-500 shadow-md hover:shadow-xl ${activeOnly ? 'ring-2 ring-green-400' : ''}`
+                                            : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-400 shadow-sm'
+                                    }`}
                                     onClick={() => {
                                       console.log('🔍 Multi-Location Drilldown Debug - Class clicked:', session.Class);
                                       
@@ -2007,38 +1790,70 @@ export default function WeeklyCalendar() {
                                       }
                                     }}
                                   >
+                                    {/* Status Badge */}
+                                    {activeOnly && isActive && (
+                                      <div className="absolute -top-1 -right-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center shadow-md">
+                                        <span className="text-white text-xs font-bold">✓</span>
+                                      </div>
+                                    )}
+                                    
                                     {/* Conflict indicator */}
                                     {hasConflict && (
-                                      <div className="absolute top-1 left-1 w-5 h-5 bg-yellow-400 rounded-full flex items-center justify-center border border-red-300" title="Trainer Conflict Detected">
-                                        <AlertTriangle className="w-3 h-3 text-red-700" />
+                                      <div className="absolute top-1 left-1 w-6 h-6 bg-red-500 rounded-full flex items-center justify-center shadow-md" title="Trainer Conflict!">
+                                        <AlertTriangle className="w-4 h-4 text-white" />
                                       </div>
                                     )}
                                     
                                     {/* Historical data indicator */}
-                                    {historicalCount > 1 && (
-                                      <div className={`absolute top-1 ${hasConflict ? 'right-1' : 'right-1'} w-4 h-4 bg-white/20 rounded-full flex items-center justify-center`}>
-                                        <span className="text-xs font-bold">{historicalCount}</span>
+                                    {historicalCount > 1 && !hasConflict && (
+                                      <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-blue-600 rounded-full">
+                                        <span className="text-xs font-bold text-white">{historicalCount}x</span>
                                       </div>
                                     )}
                                     
-                                    <div className="text-xs font-bold truncate mb-1">
-                                      {session.Class}
-                                      <div className="text-xs opacity-60 truncate">
-                                        {session.Type}
-                                      </div>
+                                    {/* Class Name - Prominent */}
+                                    <div className={`text-sm font-bold mb-2 ${shouldGrayOut ? 'text-gray-600' : hasConflict ? 'text-red-800' : 'text-gray-900'}`}>
+                                      {session.Class.replace('Studio ', '')}
                                     </div>
-                                    <div className="text-xs opacity-90 truncate mb-1">{session.Trainer}</div>
-                                    <div className="flex items-center justify-between text-xs">
-                                      <span>{session.CheckedIn}/{session.Capacity}</span>
-                                      {avgCheckIns > 0 && (
-                                        <span className="text-xs opacity-75">
-                                          Avg: {avgCheckIns.toFixed(1)}
+                                    
+                                    {/* Trainer */}
+                                    <div className={`text-xs mb-2 flex items-center gap-1 ${shouldGrayOut ? 'text-gray-500' : hasConflict ? 'text-red-700' : 'text-gray-700'}`}>
+                                      <span className="font-medium">👤</span>
+                                      <span className="truncate">{session.Trainer}</span>
+                                    </div>
+                                    
+                                    {/* Stats Row */}
+                                    <div className="flex items-center justify-between gap-2">
+                                      {/* Attendance */}
+                                      <div className={`flex items-center gap-1 text-xs ${shouldGrayOut ? 'text-gray-500' : hasConflict ? 'text-red-700' : 'text-gray-700'}`}>
+                                        <span className="font-semibold">{session.CheckedIn}/{session.Capacity}</span>
+                                        <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                          fillRate >= 80 ? 'bg-green-100 text-green-700' : 
+                                          fillRate >= 50 ? 'bg-yellow-100 text-yellow-700' : 
+                                          'bg-red-100 text-red-700'
+                                        }`}>
+                                          {fillRate.toFixed(0)}%
                                         </span>
+                                      </div>
+                                      
+                                      {/* Average Check-ins */}
+                                      {avgCheckIns > 0 && (
+                                        <div className={`text-xs ${shouldGrayOut ? 'text-gray-500' : 'text-blue-600'}`}>
+                                          <span className="font-medium">Avg: {avgCheckIns.toFixed(1)}</span>
+                                        </div>
                                       )}
                                     </div>
+                                    
+                                    {/* Revenue if available */}
+                                    {session.Revenue > 0 && (
+                                      <div className={`text-xs mt-1 ${shouldGrayOut ? 'text-gray-500' : 'text-green-600'}`}>
+                                        <span className="font-semibold">₹{session.Revenue.toLocaleString()}</span>
+                                      </div>
+                                    )}
                                   </motion.div>
                                 );
                               })}
+                              </div>
                             </div>
                           );
                         })}

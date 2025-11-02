@@ -9,10 +9,9 @@ import { FormatIntelligence } from './components/FormatIntelligence';
 import WeeklyCalendar from './components/WeeklyCalendar';
 import AIInsights from './components/AIInsights';
 import SmartScheduling from './components/SmartScheduling';
-import ScheduleManagement from './components/ScheduleManagement';
-import { LayoutDashboard, TrendingUp, Calendar, Brain, Zap, ClipboardList } from 'lucide-react';
+import { LayoutDashboard, TrendingUp, Calendar, Brain, Zap } from 'lucide-react';
 
-type ViewTab = 'dashboard' | 'formats' | 'calendar' | 'ai-insights' | 'smart-scheduling' | 'schedule-management';
+type ViewTab = 'dashboard' | 'formats' | 'calendar' | 'ai-insights' | 'smart-scheduling';
 
 function App() {
   const { rawData } = useDashboardStore();
@@ -110,17 +109,6 @@ function App() {
             <Zap className="w-5 h-5" />
             Smart Scheduling
           </button>
-          <button
-            onClick={() => setActiveView('schedule-management')}
-            className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
-              activeView === 'schedule-management'
-                ? 'bg-gradient-to-r from-green-600 to-green-700 text-white shadow-lg'
-                : 'text-gray-700 hover:bg-gray-100'
-            }`}
-          >
-            <ClipboardList className="w-5 h-5" />
-            Schedule Management
-          </button>
         </div>
       )}
 
@@ -162,11 +150,6 @@ function App() {
       {/* Smart Scheduling View */}
       {hasData && activeView === 'smart-scheduling' && (
         <SmartScheduling />
-      )}
-
-      {/* Schedule Management View */}
-      {hasData && activeView === 'schedule-management' && (
-        <ScheduleManagement />
       )}
 
       {/* Footer */}
