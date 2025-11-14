@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from 'react';
+import * as XLSX from 'xlsx';
 import {
   useReactTable,
   getCoreRowModel,
@@ -28,34 +29,9 @@ import {
   Award,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import EnhancedDrilldownModal from './EnhancedDrilldownModal';
 
-// Simple Sparkline component
-const Sparkline = ({ values, color = '#3b82f6' }: { values: number[]; color?: string }) => {
-  if (!values || values.length < 2) return null;
-  
-  const max = Math.max(...values);
-  const min = Math.min(...values);
-  const range = max - min || 1;
-  
-  const points = values.map((v, i) => {
-    const x = (i / (values.length - 1)) * 40;
-    const y = 16 - ((v - min) / range) * 14;
-    return `${x},${y}`;
-  }).join(' ');
-  
-  return (
-    <svg width="44" height="18" className="inline-block ml-2">
-      <polyline
-        points={points}
-        fill="none"
-        stroke={color}
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-};
+// (Sparkline removed per design requirements)
 
 export default function DataTableEnhanced() {
   const {
@@ -82,6 +58,27 @@ export default function DataTableEnhanced() {
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 50 });
   const [showColumnSettings, setShowColumnSettings] = useState(false);
   const [columnSizing, setColumnSizing] = useState<Record<string, number>>({});
+  const [density, setDensity] = useState<'comfortable' | 'compact'>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('tableDensity') : null;
+    return (saved === 'compact' || saved === 'comfortable') ? saved : 'comfortable';
+  });
+  const [columnOverrides, setColumnOverrides] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? localStorage.getItem('tableVisibilityOverrides') : null;
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('tableDensity', density);
+  }, [density]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('tableVisibilityOverrides', JSON.stringify(columnOverrides));
+    } catch {}
+  }, [columnOverrides]);
   
   // Auto-calculate column widths based on content
   const calculateColumnWidth = (columnId: string, data: any[]) => {
@@ -96,7 +93,7 @@ export default function DataTableEnhanced() {
       maxWidth = Math.max(maxWidth, valueWidth);
     });
     
-    return Math.min(Math.max(maxWidth, 80), 400); // Min 80px, max 400px
+    return Math.min(Math.max(maxWidth, 120), 500); // Min 120px, max 500px
   };
 
   // Initialize column widths from store or auto-calculate
@@ -121,6 +118,52 @@ export default function DataTableEnhanced() {
       }
     }
   }, [processedData, storedColumnWidths]);
+
+  // Sync key view settings to URL query params and initialize from URL on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlViewMode = params.get('viewMode');
+    const urlGroupBy = params.get('groupBy');
+    const urlTableView = params.get('tableView');
+    const urlRankingMetric = params.get('rankingMetric');
+    const urlExcludeHosted = params.get('excludeHosted');
+
+    if (urlViewMode === 'grouped' || urlViewMode === 'flat') setViewMode(urlViewMode as any);
+    if (urlGroupBy) setGroupBy(urlGroupBy as any);
+    if (urlTableView) setTableView(urlTableView as any);
+    if (urlRankingMetric) setRankingMetric(urlRankingMetric as any);
+    if (urlExcludeHosted === 'true' || urlExcludeHosted === 'false') setExcludeHostedClasses(urlExcludeHosted === 'true');
+    // run once
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    params.set('viewMode', viewMode);
+    params.set('groupBy', groupBy);
+    params.set('tableView', tableView);
+    params.set('rankingMetric', rankingMetric);
+    params.set('excludeHosted', String(excludeHostedClasses));
+    const newUrl = `${window.location.pathname}?${params.toString()}`;
+    window.history.replaceState({}, '', newUrl);
+  }, [viewMode, groupBy, tableView, rankingMetric, excludeHostedClasses]);
+
+  // Drilldown modal state
+  const [isDrilldownOpen, setIsDrilldownOpen] = useState(false);
+  const [drilldownSessions, setDrilldownSessions] = useState<SessionData[]>([]);
+  const [drilldownTitle, setDrilldownTitle] = useState('');
+
+  const openDrilldownFromGroup = (group: GroupedRow) => {
+    setDrilldownSessions(group.children || []);
+    setDrilldownTitle(group.groupValue);
+    setIsDrilldownOpen(true);
+  };
+  const openDrilldownFromSession = (session: SessionData) => {
+    setDrilldownSessions([session]);
+    const title = `${session.SessionName || session.Class} - ${session.Day} ${session.Time} (${session.Location})`;
+    setDrilldownTitle(title);
+    setIsDrilldownOpen(true);
+  };
 
   // Table view configurations
   const tableViews: { value: TableView; label: string; columns: string[] }[] = [
@@ -182,7 +225,7 @@ export default function DataTableEnhanced() {
             const isExpanded = expandedGroups.has(data.groupValue);
             return (
               <button
-                onClick={() => toggleGroup(data.groupValue)}
+                onClick={(e) => { e.stopPropagation(); toggleGroup(data.groupValue); }}
                 className="p-1 hover:bg-gray-100 rounded transition-colors"
               >
                 {isExpanded ? (
@@ -199,33 +242,14 @@ export default function DataTableEnhanced() {
       {
         accessorKey: 'rank',
         header: 'Rank',
-        size: columnSizing['rank'] || 80,
+        size: columnSizing['rank'] || 96,
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
             const rank = data.rank;
-            let badge = '';
-            let badgeColor = '';
-            
-            if (rank === 1) {
-              badge = '🥇';
-              badgeColor = 'bg-gradient-to-r from-yellow-400 to-yellow-500 text-yellow-900';
-            } else if (rank === 2) {
-              badge = '🥈';
-              badgeColor = 'bg-gradient-to-r from-gray-300 to-gray-400 text-gray-900';
-            } else if (rank === 3) {
-              badge = '🥉';
-              badgeColor = 'bg-gradient-to-r from-orange-400 to-orange-500 text-orange-900';
-            } else if (rank <= 10) {
-              badgeColor = 'bg-gradient-to-r from-blue-100 to-blue-200 text-blue-900';
-            } else {
-              badgeColor = 'bg-gray-100 text-gray-700';
-            }
-            
             return (
-              <div className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full font-bold text-sm ${badgeColor} shadow-sm`}>
-                {badge && <span className="text-lg">{badge}</span>}
-                <span>#{rank}</span>
+              <div className="inline-flex items-center justify-center w-20 h-8 rounded-full font-semibold text-xs bg-gradient-to-r from-purple-700 to-indigo-700 text-white shadow-sm select-none">
+                <span className="tabular-nums whitespace-nowrap">#{rank}</span>
               </div>
             );
           }
@@ -252,25 +276,25 @@ export default function DataTableEnhanced() {
         accessorKey: 'Trainer',
         header: 'Trainer',
         size: columnSizing['Trainer'] || 150,
-        cell: ({ getValue }) => <div className="truncate">{String(getValue() || '')}</div>,
+        cell: ({ getValue }) => <div className="whitespace-nowrap">{String(getValue() || '')}</div>,
       },
       {
         accessorKey: 'Location',
         header: 'Location',
         size: columnSizing['Location'] || 180,
-        cell: ({ getValue }) => <div className="truncate">{String(getValue() || '')}</div>,
+        cell: ({ getValue }) => <div className="whitespace-nowrap">{String(getValue() || '')}</div>,
       },
       {
         accessorKey: 'Class',
         header: 'Class',
         size: columnSizing['Class'] || 150,
-        cell: ({ getValue }) => <div className="truncate">{String(getValue() || '')}</div>,
+        cell: ({ getValue }) => <div className="whitespace-nowrap">{String(getValue() || '')}</div>,
       },
       {
         accessorKey: 'Type',
         header: 'Type',
         size: columnSizing['Type'] || 120,
-        cell: ({ getValue }) => <div className="truncate">{String(getValue() || '')}</div>,
+        cell: ({ getValue }) => <div className="whitespace-nowrap">{String(getValue() || '')}</div>,
       },
       {
         accessorKey: 'Date',
@@ -321,12 +345,7 @@ export default function DataTableEnhanced() {
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
-            // Generate sparkline data from children if available
-            const sparklineData = data.children
-              ?.slice(0, 10)
-              .map((child) => child.CheckedIn)
-              .filter((v) => v != null) || [];
-            
+            const sparklineData = data.children?.map((child) => child.CheckedIn).filter((v) => v != null) || [];
             const trend = sparklineData.length >= 2
               ? sparklineData[sparklineData.length - 1] > sparklineData[0]
                 ? 'up'
@@ -334,20 +353,13 @@ export default function DataTableEnhanced() {
                 ? 'down'
                 : 'stable'
               : 'stable';
-            
             return (
               <div className="flex items-center justify-center gap-2">
                 <span className="font-bold text-blue-600 text-base">
                   {formatNumber(data.classAvg, 1)}
                 </span>
-                {trend === 'up' && <TrendingUp className="w-4 h-4 text-green-500" />}
-                {trend === 'down' && <TrendingDown className="w-4 h-4 text-red-500" />}
-                {sparklineData.length > 1 && (
-                  <Sparkline
-                    values={sparklineData}
-                    color={trend === 'up' ? '#10b981' : trend === 'down' ? '#ef4444' : '#3b82f6'}
-                  />
-                )}
+                {trend === 'up' && <TrendingUp className="w-4 h-4 text-green-700" />}
+                {trend === 'down' && <TrendingDown className="w-4 h-4 text-red-700" />}
               </div>
             );
           }
@@ -518,17 +530,23 @@ export default function DataTableEnhanced() {
       return processedData as SessionData[];
     }
 
+    // In grouped view, ensure group rows appear sorted by rank by default,
+    // while keeping children directly beneath their parent when expanded.
+    const groupRows = (processedData.filter((r) => 'isGroupRow' in r && (r as GroupedRow).isGroupRow) as GroupedRow[])
+      .slice()
+      .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+
     const expandedData: (SessionData | GroupedRow)[] = [];
-    processedData.forEach((row) => {
-      if ('isGroupRow' in row && row.isGroupRow) {
-        expandedData.push(row);
-        if (expandedGroups.has(row.groupValue) && row.children) {
-          expandedData.push(...row.children);
-        }
-      } else {
-        expandedData.push(row);
+    groupRows.forEach((row) => {
+      expandedData.push(row);
+      if (expandedGroups.has(row.groupValue) && row.children) {
+        expandedData.push(...row.children);
       }
     });
+
+    // If any stray non-group rows exist, append them at the end to avoid data loss.
+    const nonGroup = processedData.filter((r) => !('isGroupRow' in r && (r as any).isGroupRow));
+    if (nonGroup.length) expandedData.push(...(nonGroup as SessionData[]));
 
     return expandedData;
   }, [processedData, viewMode, expandedGroups]);
@@ -539,9 +557,13 @@ export default function DataTableEnhanced() {
 
   // Keep local sorting in sync with global store when criteria/grouping/filters change
   useEffect(() => {
-    // Auto-sort by rank ascending when underlying config changes,
-    // unless user has manually changed sorting away from rank
-    if (!sorting.length || sorting[0].id === 'rank' || !sorting.find(s => s.id !== 'rank')) {
+    // In grouped view, disable TanStack sorting so children stay under their group.
+    if (viewMode === 'grouped') {
+      if (sorting.length) setSortingState([]);
+      return;
+    }
+    // In flat view, default to sorting by rank ascending unless user changed it.
+    if (!sorting.length || sorting[0].id === 'rank' || !sorting.find((s) => s.id !== 'rank')) {
       setSortingState([{ id: 'rank', desc: false }]);
     }
   }, [viewMode, groupBy, tableView, processedData, rankingMetric]);
@@ -550,16 +572,90 @@ export default function DataTableEnhanced() {
   const visibility = useMemo(() => {
     const visibleCols = getVisibleColumnsForView();
     const visibilityState: VisibilityState = {};
-    
     columns.forEach((col) => {
       const colId = col.id || (col as any).accessorKey;
-      if (colId) {
-        visibilityState[colId] = visibleCols.includes(colId);
-      }
+      if (!colId) return;
+      const baseVisible = visibleCols.includes(colId);
+      const override = columnOverrides[colId];
+      visibilityState[colId] = typeof override === 'boolean' ? override : baseVisible;
     });
-    
     return visibilityState;
-  }, [tableView, columns]);
+  }, [tableView, columns, columnOverrides]);
+
+  const tdPaddingClass = density === 'compact' ? 'px-3 py-2' : 'px-4 py-3.5';
+  const thPaddingClass = density === 'compact' ? 'px-3 py-2' : 'px-4 py-4';
+
+  const handleExport = () => {
+    try {
+      const visibleCols = table
+        .getVisibleLeafColumns()
+        .filter((c) => {
+          const id = c.id || (c.columnDef as any).accessorKey;
+          return id && id !== 'expand' && id !== 'actions';
+        });
+
+      const headers = visibleCols.map((c) => {
+        const id = c.id || (c.columnDef as any).accessorKey;
+        const headerLabel = typeof c.columnDef.header === 'string' ? (c.columnDef.header as string) : String(id);
+        return { id: String(id), label: headerLabel };
+      });
+
+      const rows = table.getRowModel().rows.map((r) => {
+        const data: Record<string, any> = {};
+        const original = r.original as any;
+        headers.forEach(({ id, label }) => {
+          let value: any = '';
+          if ('isGroupRow' in original && original.isGroupRow) {
+            switch (id) {
+              case 'groupValue': value = original.groupValue; break;
+              case 'rank': value = original.rank; break;
+              case 'classes': value = original.classes; break;
+              case 'totalCheckIns': value = original.totalCheckIns; break;
+              case 'classAvg': value = original.classAvg; break;
+              case 'fillRate': value = original.fillRate; break;
+              case 'cancellationRate': value = original.cancellationRate; break;
+              case 'totalRevenue': value = original.totalRevenue; break;
+              case 'revPerCheckin': value = original.revPerCheckin; break;
+              case 'consistencyScore': value = original.consistencyScore; break;
+              case 'emptyClasses': value = original.emptyClasses; break;
+              case 'capacity': value = original.totalCapacity; break;
+              case 'booked': value = original.totalBooked; break;
+              case 'lateCancelled': value = original.totalCancellations; break;
+              case 'waitlisted': value = original.totalWaitlisted ?? 0; break;
+              default:
+                value = original[id] ?? '';
+            }
+          } else {
+            const s = original as any;
+            switch (id) {
+              case 'classes': value = 1; break;
+              case 'totalCheckIns': value = s.CheckedIn; break;
+              case 'classAvg': value = s.CheckedIn; break;
+              case 'fillRate': value = s.Capacity > 0 ? (s.CheckedIn / s.Capacity) * 100 : 0; break;
+              case 'cancellationRate': value = s.Booked > 0 ? (s.LateCancelled / s.Booked) * 100 : 0; break;
+              case 'totalRevenue': value = s.Revenue; break;
+              case 'revPerCheckin': value = s.CheckedIn > 0 ? s.Revenue / s.CheckedIn : 0; break;
+              case 'capacity': value = s.Capacity; break;
+              case 'booked': value = s.Booked; break;
+              case 'lateCancelled': value = s.LateCancelled; break;
+              case 'waitlisted': value = s.Waitlisted ?? 0; break;
+              default:
+                value = s[id] ?? '';
+            }
+          }
+          data[label] = value;
+        });
+        return data;
+      });
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Data');
+      XLSX.writeFile(wb, 'table-view.xlsx');
+    } catch (e) {
+      console.error('Export failed', e);
+    }
+  };
 
   const table = useReactTable({
     data: tableData,
@@ -601,6 +697,7 @@ export default function DataTableEnhanced() {
     getPaginationRowModel: getPaginationRowModel(),
     manualPagination: viewMode === 'grouped',
     columnResizeMode: 'onChange',
+    enableSorting: viewMode === 'flat',
   });
 
   const totals = calculateTotalsRow(processedData);
@@ -742,6 +839,28 @@ export default function DataTableEnhanced() {
             </label>
           </div>
 
+          {/* Density Toggle */}
+          <div className="flex items-center gap-1 bg-white rounded-xl p-1 border-2 border-gray-200">
+            <button
+              onClick={() => setDensity('comfortable')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                density === 'comfortable' ? 'bg-blue-600 text-white shadow' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+              title="Comfortable density"
+            >
+              Cozy
+            </button>
+            <button
+              onClick={() => setDensity('compact')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                density === 'compact' ? 'bg-blue-600 text-white shadow' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+              title="Compact density"
+            >
+              Compact
+            </button>
+          </div>
+
           {/* Column Visibility Button */}
           <button
             onClick={() => setShowColumnSettings(!showColumnSettings)}
@@ -752,7 +871,7 @@ export default function DataTableEnhanced() {
           </button>
 
           {/* Export Button */}
-          <button className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-green-600 to-green-700 text-white font-medium hover:shadow-lg transition-all flex items-center gap-2">
+          <button onClick={handleExport} className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-green-600 to-green-700 text-white font-medium hover:shadow-lg transition-all flex items-center gap-2">
             <Download className="w-4 h-4" />
             Export
           </button>
@@ -793,8 +912,7 @@ export default function DataTableEnhanced() {
                       type="checkbox"
                       checked={isVisible}
                       onChange={(e) => {
-                        // This is controlled by table view, but we can add custom overrides later
-                        console.log('Column toggle:', colId, e.target.checked);
+                        setColumnOverrides((prev) => ({ ...prev, [colId]: e.target.checked }));
                       }}
                       className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
                     />
@@ -804,6 +922,15 @@ export default function DataTableEnhanced() {
                   </label>
                 );
               })}
+            </div>
+            <div className="mt-4 flex items-center justify-end">
+              <button
+                onClick={() => setColumnOverrides({})}
+                className="px-3 py-2 text-sm rounded-lg border-2 border-gray-200 hover:border-blue-400 bg-white text-gray-700"
+                title="Reset custom column visibility"
+              >
+                Reset Columns
+              </button>
             </div>
           </motion.div>
         )}
@@ -816,22 +943,34 @@ export default function DataTableEnhanced() {
         className="glass-card rounded-2xl overflow-hidden"
       >
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
+          <table className="w-full border-separate border-spacing-0">
+            <thead className="sticky top-0 z-20">
               {table.getHeaderGroups().map((headerGroup) => (
-                <tr key={headerGroup.id} className="bg-gradient-to-r from-blue-700 via-blue-800 to-blue-900">
+                <tr key={headerGroup.id} className="bg-gradient-to-r from-black via-purple-950 to-purple-900">
                   {headerGroup.headers.map((header) => {
                     const canSort = header.column.getCanSort();
                     const isSorted = header.column.getIsSorted();
+                    const ariaSort = isSorted === 'asc' ? 'ascending' : isSorted === 'desc' ? 'descending' : 'none';
                     
                     return (
                       <th
                         key={header.id}
                         style={{ width: header.getSize() }}
-                        className={`px-4 py-4 text-left text-xs font-bold text-white uppercase tracking-wider relative group ${
+                        className={`${thPaddingClass} sticky top-0 z-10 text-left text-xs font-bold text-white uppercase tracking-wider whitespace-nowrap relative group ${
                           canSort ? 'cursor-pointer hover:bg-blue-600 transition-colors' : ''
                         }`}
+                        role="columnheader"
+                        scope="col"
+                        aria-sort={ariaSort as any}
+                        tabIndex={canSort ? 0 : -1}
                         onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
+                        onKeyDown={(e) => {
+                          if (!canSort) return;
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            header.column.toggleSorting(undefined, e.shiftKey);
+                          }
+                        }}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className={canSort ? 'select-none' : ''}>
@@ -864,37 +1003,44 @@ export default function DataTableEnhanced() {
                   })}
                 </tr>
               ))}
+              {/* Animated bottom border under header row */}
+              <tr>
+                <th colSpan={table.getVisibleLeafColumns().length} className="p-0">
+                  <div className="h-0.5 w-full bg-gradient-to-r from-blue-400 via-cyan-400 to-indigo-400 animate-pulse" />
+                </th>
+              </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {table.getRowModel().rows.map((row, index) => {
                 const isGroupRow = 'isGroupRow' in row.original && row.original.isGroupRow;
-                // For grouped rows, check the status from metrics; for flat rows, check Status field
-                const status = isGroupRow && 'status' in row.original 
-                  ? row.original.status 
-                  : ('Status' in row.original ? row.original.Status : 'Active');
-                const isInactive = status === 'Inactive';
-                
+                // Do not gray out rows—show all with standard emphasis
                 return (
                   <motion.tr
                     key={row.id}
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: index * 0.01 }}
-                    className={`transition-all duration-200 ${
-                      isGroupRow 
-                        ? 'bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 border-l-4 border-blue-500' 
-                        : index % 2 === 0 
-                        ? 'bg-white hover:bg-blue-50' 
+                    onClick={() => {
+                      const original = row.original as any;
+                      if ('isGroupRow' in original && original.isGroupRow) {
+                        openDrilldownFromGroup(original as GroupedRow);
+                      } else {
+                        openDrilldownFromSession(original as SessionData);
+                      }
+                    }}
+                    className={`cursor-pointer transition-all duration-200 h-[35px] max-h-[35px] ${
+                      isGroupRow
+                        ? 'bg-gray-100 text-black border-b border-gray-300'
+                        : index % 2 === 0
+                        ? 'bg-white hover:bg-blue-50'
                         : 'bg-gray-50 hover:bg-blue-50'
-                    } ${isInactive ? 'opacity-40' : ''}`}
+                    }`}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <td
                         key={cell.id}
                         style={{ width: cell.column.getSize() }}
-                        className={`px-4 py-3.5 text-sm ${
-                          isInactive ? 'text-gray-400' : isGroupRow ? 'text-gray-900 font-medium' : 'text-gray-700'
-                        }`}
+                        className={`${tdPaddingClass} text-sm align-middle whitespace-nowrap ${isGroupRow ? 'text-black font-medium' : 'text-gray-700'}`}
                       >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
@@ -903,22 +1049,64 @@ export default function DataTableEnhanced() {
                 );
               })}
             </tbody>
-            {/* Totals Footer */}
+            {/* Totals Footer (aligned to visible columns) */}
             <tfoot className="bg-gradient-to-r from-gray-100 to-gray-200">
               <tr>
-                <td colSpan={3} className="px-4 py-4 text-sm font-bold text-gray-800">
-                  TOTALS
-                </td>
-                <td className="px-4 py-4 text-center text-sm font-bold">{formatNumber(totals.classes)}</td>
-                <td className="px-4 py-4 text-center text-sm font-bold">{formatNumber(totals.totalCheckIns)}</td>
-                <td className="px-4 py-4 text-center text-sm font-bold text-blue-600">
-                  {formatNumber(totals.classAvg, 1)}
-                </td>
-                <td className="px-4 py-4 text-center text-sm font-bold">{formatPercentage(totals.fillRate)}</td>
-                <td className="px-4 py-4 text-right text-sm font-bold text-green-600">
-                  {formatCurrency(totals.totalRevenue, true)}
-                </td>
-                <td colSpan={table.getVisibleLeafColumns().length - 8}></td>
+                {table.getVisibleLeafColumns().map((col, i) => {
+                  const id = col.id || (col.columnDef as any).accessorKey;
+                  let content: any = '';
+                  let className = 'px-4 py-3 text-sm font-bold text-gray-800 text-center';
+                  const isFirst = i === 0;
+                  if (id === 'totalRevenue' || id === 'revPerCheckin') className += ' text-right';
+
+                  switch (id) {
+                    case 'groupValue':
+                    case 'Trainer':
+                    case 'Location':
+                    case 'Class':
+                    case 'Type':
+                    case 'Date':
+                    case 'Day':
+                    case 'Time':
+                    case 'rank':
+                    case 'expand':
+                      if (isFirst) content = 'TOTALS';
+                      break;
+                    case 'classes':
+                      content = formatNumber(totals.classes); break;
+                    case 'totalCheckIns':
+                      content = formatNumber(totals.totalCheckIns); break;
+                    case 'classAvg':
+                      content = formatNumber(totals.classAvg, 1); className += ' text-blue-600'; break;
+                    case 'fillRate':
+                      content = formatPercentage(totals.fillRate); break;
+                    case 'cancellationRate':
+                      content = formatPercentage(totals.cancellationRate); break;
+                    case 'totalRevenue':
+                      content = formatCurrency(totals.totalRevenue, true); className += ' text-green-600'; break;
+                    case 'revPerCheckin':
+                      content = formatCurrency(totals.revPerCheckin, true); break;
+                    case 'consistencyScore':
+                      content = formatPercentage(totals.consistencyScore); break;
+                    case 'emptyClasses':
+                      content = formatNumber(totals.emptyClasses); break;
+                    case 'capacity':
+                      content = formatNumber(totals.totalCapacity); break;
+                    case 'booked':
+                      content = formatNumber(totals.totalBooked); break;
+                    case 'lateCancelled':
+                      content = formatNumber(totals.totalCancellations); break;
+                    case 'waitlisted':
+                      content = formatNumber(totals.totalWaitlisted || 0); break;
+                    default:
+                      content = '';
+                  }
+                  return (
+                    <td key={String(id)} className={className}>
+                      {content}
+                    </td>
+                  );
+                })}
               </tr>
             </tfoot>
           </table>
@@ -953,6 +1141,13 @@ export default function DataTableEnhanced() {
             </div>
           </div>
         )}
+        {/* Drilldown Modal */}
+        <EnhancedDrilldownModal
+          isOpen={isDrilldownOpen}
+          onClose={() => setIsDrilldownOpen(false)}
+          sessions={drilldownSessions}
+          title={drilldownTitle}
+        />
       </motion.div>
     </div>
   );

@@ -304,7 +304,6 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
           {/* List */}
           <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
             {topPerformers.map((group, index) => {
-              const isInactive = group.metrics.status === 'Inactive';
               return (
               <motion.div
                 key={group.key}
@@ -312,39 +311,39 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
                 onClick={() => handleCardClick(group)}
-                className={`flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-green-300 hover:shadow-md transition-all cursor-pointer ${isInactive ? 'opacity-40 bg-gray-50/50' : ''}`}
+                className={`flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-green-700 hover:shadow-md transition-all cursor-pointer`}
               >
-                <div className="flex items-center justify-center min-w-[32px] h-8 rounded-lg bg-gradient-to-br from-green-100 to-green-200 text-green-700 font-bold text-sm">
+                <div className="flex items-center justify-center min-w-[32px] h-8 rounded-lg bg-gradient-to-br from-green-700 to-green-800 text-white font-bold text-sm">
                   {index + 1}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className={`font-bold truncate text-sm ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
+                  <p className={`font-bold truncate text-sm text-gray-900`}>
                     {group.className}
                   </p>
-                  <p className={`text-xs truncate ${isInactive ? 'text-gray-400' : 'text-gray-600'}`}>
+                  <p className={`text-xs truncate text-gray-600`}>
                     {group.day} • {group.time} • {group.location}
                   </p>
                   {group.trainer && (
-                    <p className={`text-xs truncate ${isInactive ? 'text-gray-400' : 'text-blue-600'}`}>
+                    <p className={`text-xs truncate text-blue-600`}>
                       {group.trainer}
                     </p>
                   )}
-                  <div className={`flex items-center gap-3 mt-1 text-xs ${isInactive ? 'text-gray-400' : 'text-gray-500'}`}>
+                  <div className={`flex items-center gap-3 mt-1 text-xs text-gray-500`}>
                     <span>{group.metrics.classes} classes</span>
                     <span>•</span>
                     <span>{formatNumber(group.metrics.totalCheckIns)} check-ins</span>
                     <span>•</span>
                     <span>{group.metrics.emptyClasses} empty</span>
                     <span>•</span>
-                    <span className={group.metrics.status === 'Active' ? 'text-green-600 font-semibold' : 'text-gray-400'}>
+                    <span className={group.metrics.status === 'Active' ? 'text-green-700 font-semibold' : 'text-red-700 font-semibold'}>
                       {group.metrics.status}
                     </span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <TrendingUp className={`w-4 h-4 ${isInactive ? 'text-gray-400' : 'text-green-500'}`} />
+                  <TrendingUp className={`w-4 h-4 text-green-700`} />
                   <div className="relative group">
-                    <span className={`font-bold text-sm cursor-help ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
+                    <span className={`font-bold text-sm cursor-help text-gray-900`}>
                       {formatMetricValue(topMetric, group.metrics[topMetric])}
                     </span>
                     {topMetric === 'compositeScore' && (
@@ -409,7 +408,6 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
           {/* List */}
           <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2">
             {bottomPerformers.map((group, index) => {
-              const isInactive = group.metrics.status === 'Inactive';
               return (
               <motion.div
                 key={group.key}
@@ -417,37 +415,37 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
                 onClick={() => handleCardClick(group)}
-                className={`flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-orange-300 hover:shadow-md transition-all cursor-pointer ${isInactive ? 'opacity-40 bg-gray-50/50' : ''}`}
+                className={`flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-red-700 hover:shadow-md transition-all cursor-pointer`}
               >
-                <div className="flex items-center justify-center min-w-[32px] h-8 rounded-lg bg-gradient-to-br from-orange-100 to-orange-200 text-orange-700 font-bold text-sm">
+                <div className="flex items-center justify-center min-w-[32px] h-8 rounded-lg bg-gradient-to-br from-red-700 to-red-800 text-white font-bold text-sm">
                   {index + 1}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className={`font-bold truncate text-sm ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
+                  <p className={`font-bold truncate text-sm text-gray-900`}>
                     {group.className}
                   </p>
-                  <p className={`text-xs truncate ${isInactive ? 'text-gray-400' : 'text-gray-600'}`}>
+                  <p className={`text-xs truncate text-gray-600`}>
                     {group.day} • {group.time} • {group.location}
                   </p>
                   {group.trainer && (
-                    <p className={`text-xs truncate ${isInactive ? 'text-gray-400' : 'text-blue-600'}`}>
+                    <p className={`text-xs truncate text-blue-600`}>
                       {group.trainer}
                     </p>
                   )}
-                  <div className={`flex items-center gap-3 mt-1 text-xs ${isInactive ? 'text-gray-400' : 'text-gray-500'}`}>
+                  <div className={`flex items-center gap-3 mt-1 text-xs text-gray-500`}>
                     <span>{group.metrics.classes} classes</span>
                     <span>•</span>
                     <span>{formatNumber(group.metrics.totalCheckIns)} check-ins</span>
                     <span>•</span>
                     <span>{group.metrics.emptyClasses} empty</span>
                     <span>•</span>
-                    <span className={group.metrics.status === 'Active' ? 'text-green-600 font-semibold' : 'text-gray-400'}>
+                    <span className={group.metrics.status === 'Active' ? 'text-green-700 font-semibold' : 'text-red-700 font-semibold'}>
                       {group.metrics.status}
                     </span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <TrendingDown className="w-4 h-4 text-orange-500" />
+                  <TrendingDown className="w-4 h-4 text-red-700" />
                   <div className="relative group">
                     <span className="font-bold text-gray-900 text-sm cursor-help">
                       {formatMetricValue(bottomMetric, group.metrics[bottomMetric])}

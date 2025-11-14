@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useDashboardStore } from './store/dashboardStore';
 import FileUpload from './components/FileUpload';
 import FilterSection from './components/FilterSection';
-import DataTableFixed from './components/DataTableFixed';
+import DataTableEnhanced from './components/DataTableEnhanced';
 import Rankings from './components/Rankings';
 import MetricsCardsEnhanced from './components/MetricsCardsEnhanced';
 import { FormatIntelligence } from './components/FormatIntelligence';
@@ -128,7 +128,7 @@ function App() {
           <Rankings />
 
           {/* Data Table */}
-          <DataTableFixed />
+          <DataTableEnhanced />
         </div>
       )}
 

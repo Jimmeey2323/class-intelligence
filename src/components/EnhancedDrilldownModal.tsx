@@ -146,11 +146,11 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
               leaveFrom="opacity-100 scale-100"
               leaveTo="opacity-0 scale-95"
             >
-              <Dialog.Panel className="w-full max-w-6xl transform overflow-hidden rounded-3xl bg-white/95 backdrop-blur-xl p-8 shadow-2xl border border-white/50 transition-all">
+              <Dialog.Panel className="glass-card rounded-3xl p-8 max-w-7xl w-full max-h-[90vh] overflow-y-auto shadow-2xl transition-all">
                 {/* Header */}
                 <div className="flex items-start justify-between mb-6">
                   <div>
-                    <Dialog.Title className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+                    <Dialog.Title className="text-3xl font-bold bg-gradient-to-r from-blue-900 to-blue-600 bg-clip-text text-transparent mb-2">
                       {title}
                     </Dialog.Title>
                     <div className="flex items-center gap-4 text-sm text-gray-600">
@@ -383,7 +383,7 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                 </div>
 
                 {/* Sessions Table */}
-                <div className="overflow-auto max-h-64 rounded-2xl border border-gray-200">
+                <div className="overflow-auto max-h-96 rounded-2xl border border-gray-200">
                   <table className="min-w-full divide-y divide-gray-200">
                     <thead className="bg-gradient-to-r from-gray-50 to-gray-100 sticky top-0">
                       <tr>
@@ -398,34 +398,33 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                     <tbody className="bg-white divide-y divide-gray-100">
                       {sortedSessions.map((session, idx) => {
                         const fillRate = session.Capacity > 0 ? (session.CheckedIn / session.Capacity) * 100 : 0;
-                        const isInactive = session.Status === 'Inactive';
                         return (
                           <tr 
                             key={idx} 
-                            className={`hover:bg-blue-50/50 transition-colors ${isInactive ? 'opacity-40 bg-gray-50/50' : ''}`}
+                            className={`hover:bg-blue-50/50 transition-colors`}
                           >
-                            <td className={`px-4 py-3 text-sm ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
+                            <td className={`px-4 py-3 text-sm text-gray-900`}>
                               {format(parseISO(session.Date), 'MMM d, yyyy')}
                             </td>
-                            <td className={`px-4 py-3 text-sm ${isInactive ? 'text-gray-400' : 'text-gray-700'}`}>
+                            <td className={`px-4 py-3 text-sm text-gray-700`}>
                               {session.Trainer}
                             </td>
-                            <td className={`px-4 py-3 text-sm text-right font-medium ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
+                            <td className={`px-4 py-3 text-sm text-right font-medium text-gray-900`}>
                               {session.CheckedIn}/{session.Capacity}
                             </td>
                             <td className="px-4 py-3 text-sm text-right">
-                              <span className={`font-semibold ${isInactive ? 'text-gray-400' :
-                                fillRate >= 80 ? 'text-green-600' :
+                              <span className={`font-semibold ${
+                                fillRate >= 80 ? 'text-green-700' :
                                 fillRate >= 50 ? 'text-blue-600' :
                                 'text-amber-600'
                               }`}>
                                 {formatPercentage(fillRate)}
                               </span>
                             </td>
-                            <td className={`px-4 py-3 text-sm text-right font-medium ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}>
+                            <td className={`px-4 py-3 text-sm text-right font-medium text-gray-900`}>
                               {formatCurrency(session.Revenue)}
                             </td>
-                            <td className={`px-4 py-3 text-sm text-right ${isInactive ? 'text-gray-400' : 'text-gray-700'}`}>
+                            <td className={`px-4 py-3 text-sm text-right text-gray-700`}>
                               {session.LateCancelled}
                             </td>
                           </tr>
