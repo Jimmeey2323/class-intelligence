@@ -148,6 +148,18 @@ export type TableView =
   | 'cancellations'
   | 'consistency';
 
+export type RankingMetric = 
+  | 'classAvg'
+  | 'fillRate'
+  | 'totalCheckIns'
+  | 'totalRevenue'
+  | 'revPerCheckin'
+  | 'consistencyScore'
+  | 'cancellationRate'
+  | 'classes'
+  | 'emptyClasses'
+  | 'compositeScore';
+
 // Store state
 export interface DashboardState {
   // Data
@@ -178,6 +190,7 @@ export interface DashboardState {
   // Sorting
   sortColumn: string | null;
   sortDirection: 'asc' | 'desc';
+  rankingMetric: RankingMetric;
   
   // Actions
   getAverageCheckIns: (className: string, day: string, time: string, location: string) => {
@@ -193,6 +206,7 @@ export interface DashboardState {
   toggleGroup: (groupKey: string) => void;
   toggleFilterCollapse: () => void;
   setSorting: (column: string, direction: 'asc' | 'desc') => void;
+  setRankingMetric: (metric: RankingMetric) => void;
   setColumnWidth: (columnId: string, width: number) => void;
   setIncludeTrainerInRankings: (include: boolean) => void;
   setColumnVisibility: (columnId: string, visible: boolean) => void;

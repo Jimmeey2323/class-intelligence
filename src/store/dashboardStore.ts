@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { DashboardState, SessionData, FilterState, ViewMode, GroupBy, AdditionalView, ColumnWidthSettings } from '../types';
+import { DashboardState, SessionData, FilterState, ViewMode, GroupBy, AdditionalView, ColumnWidthSettings, RankingMetric } from '../types';
 import { subMonths, startOfMonth } from 'date-fns';
 import { groupData } from '../utils/calculations';
 import { loadActiveClasses, ActiveClassesByDay } from '../utils/activeClassesLoader';
@@ -26,19 +26,26 @@ const saveColumnWidths = (widths: ColumnWidthSettings) => {
 const getDefaultFilters = (): FilterState => {
   const today = new Date();
   const previousMonth = subMonths(today, 1);
+
+  // Default to the full previous month
+  const firstDayOfPrevMonth = startOfMonth(previousMonth);
+  const lastDayOfPrevMonth = new Date(firstDayOfPrevMonth);
+  lastDayOfPrevMonth.setMonth(lastDayOfPrevMonth.getMonth() + 1);
+  lastDayOfPrevMonth.setDate(0); // last day of previous month
+
   return {
-    dateFrom: startOfMonth(previousMonth),
-    dateTo: today, // Set to today as the latest available date
+    dateFrom: firstDayOfPrevMonth,
+    dateTo: lastDayOfPrevMonth,
     trainers: [],
-    locations: [],
+    locations: ['Kwality House, Kemps Corner'],
     classTypes: [],
     classes: [],
-    minCheckins: 1, // Set to 1 as default
-    minClasses: 2, // Set to 2 as default
+    minCheckins: 0,
+    minClasses: 0,
     searchQuery: '',
     statusFilter: 'all',
-    excludeHostedClasses: true, // Default to exclude hosted classes
-    includeTrainer: true, // Default to include trainer
+    excludeHostedClasses: true,
+    includeTrainer: true,
   };
 };
 
@@ -69,10 +76,15 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   tableView: 'default',
   
   // Initial sorting
-  sortColumn: 'classAvg',
-  sortDirection: 'desc',
+  sortColumn: 'rank',
+  sortDirection: 'asc',
+  rankingMetric: 'classAvg',
   
   // Actions
+  setRankingMetric: (metric: RankingMetric) => {
+    set({ rankingMetric: metric });
+    get().applyFilters();
+  },
   // Calculate average check-ins for similar classes
   getAverageCheckIns: (className: string, day: string, time: string, location: string) => {
     const { rawData } = get();
@@ -288,7 +300,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
   
   applyFilters: () => {
-    const { rawData, filters, viewMode, groupBy, sortColumn, sortDirection, excludeHostedClasses } = get();
+    const { rawData, filters, viewMode, groupBy, sortColumn, sortDirection, excludeHostedClasses, rankingMetric } = get();
     
     if (rawData.length === 0) {
       set({ processedData: [] });
@@ -372,9 +384,23 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         filters.minClasses || 0
       );
       
-      // Sort grouped data
+      // Re-rank based on selected ranking metric
+      const sortedForRanking = [...grouped].sort((a, b) => {
+        const aVal = (a as any)[rankingMetric] || 0;
+        const bVal = (b as any)[rankingMetric] || 0;
+        // For cancellationRate and emptyClasses, lower is better; for others, higher is better
+        const multiplier = (rankingMetric === 'cancellationRate' || rankingMetric === 'emptyClasses') ? 1 : -1;
+        return (aVal - bVal) * multiplier;
+      });
+      
+      // Assign new ranks based on ranking metric
+      sortedForRanking.forEach((row, index) => {
+        row.rank = index + 1;
+      });
+      
+      // Now apply user's sorting if they've selected a column to sort by
       if (sortColumn) {
-        grouped.sort((a, b) => {
+        sortedForRanking.sort((a, b) => {
           const aVal = (a as any)[sortColumn];
           const bVal = (b as any)[sortColumn];
           const multiplier = sortDirection === 'asc' ? 1 : -1;
@@ -387,7 +413,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         });
       }
       
-      set({ processedData: grouped });
+      set({ processedData: sortedForRanking });
     } else {
       // Flat view with sorting
       if (sortColumn) {

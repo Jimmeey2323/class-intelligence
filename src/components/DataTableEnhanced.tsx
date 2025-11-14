@@ -10,7 +10,7 @@ import {
   VisibilityState,
 } from '@tanstack/react-table';
 import { useDashboardStore } from '../store/dashboardStore';
-import { SessionData, GroupedRow, GroupBy, TableView } from '../types';
+import { SessionData, GroupedRow, GroupBy, TableView, RankingMetric } from '../types';
 import { formatCurrency, formatNumber, formatPercentage, calculateTotalsRow } from '../utils/calculations';
 import {
   ChevronDown,
@@ -23,8 +23,39 @@ import {
   Eye,
   Settings,
   X,
+  TrendingUp,
+  TrendingDown,
+  Award,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+
+// Simple Sparkline component
+const Sparkline = ({ values, color = '#3b82f6' }: { values: number[]; color?: string }) => {
+  if (!values || values.length < 2) return null;
+  
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const range = max - min || 1;
+  
+  const points = values.map((v, i) => {
+    const x = (i / (values.length - 1)) * 40;
+    const y = 16 - ((v - min) / range) * 14;
+    return `${x},${y}`;
+  }).join(' ');
+  
+  return (
+    <svg width="44" height="18" className="inline-block ml-2">
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+};
 
 export default function DataTableEnhanced() {
   const {
@@ -41,6 +72,11 @@ export default function DataTableEnhanced() {
     setTableView,
     columnWidths: storedColumnWidths,
     setColumnWidth,
+    sortColumn,
+    sortDirection,
+    setSorting,
+    rankingMetric,
+    setRankingMetric,
   } = useDashboardStore();
 
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 50 });
@@ -163,11 +199,35 @@ export default function DataTableEnhanced() {
       {
         accessorKey: 'rank',
         header: 'Rank',
-        size: columnSizing['rank'] || 60,
+        size: columnSizing['rank'] || 80,
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
-            return <span className="font-bold text-blue-600">#{data.rank}</span>;
+            const rank = data.rank;
+            let badge = '';
+            let badgeColor = '';
+            
+            if (rank === 1) {
+              badge = '🥇';
+              badgeColor = 'bg-gradient-to-r from-yellow-400 to-yellow-500 text-yellow-900';
+            } else if (rank === 2) {
+              badge = '🥈';
+              badgeColor = 'bg-gradient-to-r from-gray-300 to-gray-400 text-gray-900';
+            } else if (rank === 3) {
+              badge = '🥉';
+              badgeColor = 'bg-gradient-to-r from-orange-400 to-orange-500 text-orange-900';
+            } else if (rank <= 10) {
+              badgeColor = 'bg-gradient-to-r from-blue-100 to-blue-200 text-blue-900';
+            } else {
+              badgeColor = 'bg-gray-100 text-gray-700';
+            }
+            
+            return (
+              <div className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full font-bold text-sm ${badgeColor} shadow-sm`}>
+                {badge && <span className="text-lg">{badge}</span>}
+                <span>#{rank}</span>
+              </div>
+            );
           }
           return null;
         },
@@ -257,13 +317,37 @@ export default function DataTableEnhanced() {
       {
         accessorKey: 'classAvg',
         header: 'Class Avg',
-        size: columnSizing['classAvg'] || 100,
+        size: columnSizing['classAvg'] || 140,
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
+            // Generate sparkline data from children if available
+            const sparklineData = data.children
+              ?.slice(0, 10)
+              .map((child) => child.CheckedIn)
+              .filter((v) => v != null) || [];
+            
+            const trend = sparklineData.length >= 2
+              ? sparklineData[sparklineData.length - 1] > sparklineData[0]
+                ? 'up'
+                : sparklineData[sparklineData.length - 1] < sparklineData[0]
+                ? 'down'
+                : 'stable'
+              : 'stable';
+            
             return (
-              <div className="text-center font-bold text-blue-600">
-                {formatNumber(data.classAvg, 1)}
+              <div className="flex items-center justify-center gap-2">
+                <span className="font-bold text-blue-600 text-base">
+                  {formatNumber(data.classAvg, 1)}
+                </span>
+                {trend === 'up' && <TrendingUp className="w-4 h-4 text-green-500" />}
+                {trend === 'down' && <TrendingDown className="w-4 h-4 text-red-500" />}
+                {sparklineData.length > 1 && (
+                  <Sparkline
+                    values={sparklineData}
+                    color={trend === 'up' ? '#10b981' : trend === 'down' ? '#ef4444' : '#3b82f6'}
+                  />
+                )}
               </div>
             );
           }
@@ -449,7 +533,18 @@ export default function DataTableEnhanced() {
     return expandedData;
   }, [processedData, viewMode, expandedGroups]);
 
-  const [sorting, setSortingState] = useState<SortingState>([]);
+  const [sorting, setSortingState] = useState<SortingState>([
+    { id: sortColumn || 'rank', desc: sortDirection === 'desc' },
+  ]);
+
+  // Keep local sorting in sync with global store when criteria/grouping/filters change
+  useEffect(() => {
+    // Auto-sort by rank ascending when underlying config changes,
+    // unless user has manually changed sorting away from rank
+    if (!sorting.length || sorting[0].id === 'rank' || !sorting.find(s => s.id !== 'rank')) {
+      setSortingState([{ id: 'rank', desc: false }]);
+    }
+  }, [viewMode, groupBy, tableView, processedData, rankingMetric]);
 
   // Create visibility state based on table view
   const visibility = useMemo(() => {
@@ -475,7 +570,15 @@ export default function DataTableEnhanced() {
       columnVisibility: visibility,
       columnSizing,
     },
-    onSortingChange: setSortingState,
+    onSortingChange: (updater) => {
+      const nextSorting = typeof updater === 'function' ? updater(sorting) : updater;
+      setSortingState(nextSorting);
+      if (nextSorting && nextSorting[0]) {
+        const colId = nextSorting[0].id as string;
+        const desc = !!nextSorting[0].desc;
+        setSorting(colId, desc ? 'desc' : 'asc');
+      }
+    },
     onPaginationChange: setPagination,
     onColumnSizingChange: (updater) => {
       setColumnSizing(updater);
@@ -530,6 +633,19 @@ export default function DataTableEnhanced() {
     { value: 'SessionName', label: '🎫 Session Name' },
   ];
 
+  const rankingOptions: { value: RankingMetric; label: string; icon: string }[] = [
+    { value: 'classAvg', label: 'Class Average', icon: '📊' },
+    { value: 'fillRate', label: 'Fill Rate', icon: '📈' },
+    { value: 'totalCheckIns', label: 'Total Check-ins', icon: '👥' },
+    { value: 'totalRevenue', label: 'Total Revenue', icon: '💰' },
+    { value: 'revPerCheckin', label: 'Revenue per Check-in', icon: '💵' },
+    { value: 'consistencyScore', label: 'Consistency Score', icon: '🎯' },
+    { value: 'cancellationRate', label: 'Cancellation Rate (Lower is Better)', icon: '❌' },
+    { value: 'classes', label: 'Number of Classes', icon: '📚' },
+    { value: 'emptyClasses', label: 'Empty Classes (Lower is Better)', icon: '⚠️' },
+    { value: 'compositeScore', label: 'Composite Score', icon: '⭐' },
+  ];
+
   return (
     <div className="space-y-4">
       {/* Control Bar */}
@@ -564,6 +680,25 @@ export default function DataTableEnhanced() {
               Flat
             </button>
           </div>
+
+          {/* Ranking Metric Selector */}
+          {viewMode === 'grouped' && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-xl border-2 border-purple-300 bg-gradient-to-r from-purple-50 to-pink-50">
+              <Award className="w-5 h-5 text-purple-600" />
+              <span className="text-sm font-semibold text-purple-900">Rank By:</span>
+              <select
+                value={rankingMetric}
+                onChange={(e) => setRankingMetric(e.target.value as RankingMetric)}
+                className="px-3 py-1.5 rounded-lg border-2 border-purple-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none font-medium transition-all bg-white text-sm"
+              >
+                {rankingOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.icon} {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Group By Selector */}
           {viewMode === 'grouped' && (
@@ -685,37 +820,48 @@ export default function DataTableEnhanced() {
             <thead>
               {table.getHeaderGroups().map((headerGroup) => (
                 <tr key={headerGroup.id} className="bg-gradient-to-r from-blue-700 via-blue-800 to-blue-900">
-                  {headerGroup.headers.map((header) => (
-                    <th
-                      key={header.id}
-                      style={{ width: header.getSize() }}
-                      className="px-4 py-4 text-left text-xs font-bold text-white uppercase tracking-wider relative group"
-                    >
-                      <div className="flex items-center justify-between">
-                        {header.isPlaceholder
-                          ? null
-                          : flexRender(header.column.columnDef.header, header.getContext())}
-                        {header.column.getCanSort() && (
-                          <button
-                            onClick={header.column.getToggleSortingHandler()}
-                            className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                          >
-                            {header.column.getIsSorted() === 'asc' && <ArrowUp className="w-4 h-4" />}
-                            {header.column.getIsSorted() === 'desc' && <ArrowDown className="w-4 h-4" />}
-                            {!header.column.getIsSorted() && <ArrowUp className="w-4 h-4 opacity-30" />}
-                          </button>
+                  {headerGroup.headers.map((header) => {
+                    const canSort = header.column.getCanSort();
+                    const isSorted = header.column.getIsSorted();
+                    
+                    return (
+                      <th
+                        key={header.id}
+                        style={{ width: header.getSize() }}
+                        className={`px-4 py-4 text-left text-xs font-bold text-white uppercase tracking-wider relative group ${
+                          canSort ? 'cursor-pointer hover:bg-blue-600 transition-colors' : ''
+                        }`}
+                        onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={canSort ? 'select-none' : ''}>
+                            {header.isPlaceholder
+                              ? null
+                              : flexRender(header.column.columnDef.header, header.getContext())}
+                          </span>
+                          {canSort && (
+                            <div className="flex items-center">
+                              {isSorted === 'asc' && <ArrowUp className="w-4 h-4 text-green-300" />}
+                              {isSorted === 'desc' && <ArrowDown className="w-4 h-4 text-red-300" />}
+                              {!isSorted && (
+                                <div className="opacity-40 group-hover:opacity-70 transition-opacity">
+                                  <ArrowUp className="w-3 h-3" />
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        {/* Resize Handle */}
+                        {header.column.getCanResize() && (
+                          <div
+                            onMouseDown={header.getResizeHandler()}
+                            onTouchStart={header.getResizeHandler()}
+                            className="absolute right-0 top-0 h-full w-1 bg-white opacity-0 group-hover:opacity-50 hover:!opacity-100 cursor-col-resize"
+                          />
                         )}
-                      </div>
-                      {/* Resize Handle */}
-                      {header.column.getCanResize() && (
-                        <div
-                          onMouseDown={header.getResizeHandler()}
-                          onTouchStart={header.getResizeHandler()}
-                          className="absolute right-0 top-0 h-full w-1 bg-white opacity-0 group-hover:opacity-50 hover:!opacity-100 cursor-col-resize"
-                        />
-                      )}
-                    </th>
-                  ))}
+                      </th>
+                    );
+                  })}
                 </tr>
               ))}
             </thead>
@@ -734,15 +880,21 @@ export default function DataTableEnhanced() {
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: index * 0.01 }}
-                    className={`hover:bg-blue-50 transition-colors ${
-                      isGroupRow ? 'bg-gray-50 font-semibold' : ''
-                    } ${isInactive ? 'opacity-40 bg-gray-50/50' : ''}`}
+                    className={`transition-all duration-200 ${
+                      isGroupRow 
+                        ? 'bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 border-l-4 border-blue-500' 
+                        : index % 2 === 0 
+                        ? 'bg-white hover:bg-blue-50' 
+                        : 'bg-gray-50 hover:bg-blue-50'
+                    } ${isInactive ? 'opacity-40' : ''}`}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <td
                         key={cell.id}
                         style={{ width: cell.column.getSize() }}
-                        className={`px-4 py-3 text-sm ${isInactive ? 'text-gray-400' : 'text-gray-900'}`}
+                        className={`px-4 py-3.5 text-sm ${
+                          isInactive ? 'text-gray-400' : isGroupRow ? 'text-gray-900 font-medium' : 'text-gray-700'
+                        }`}
                       >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
