@@ -4,7 +4,7 @@ import { SessionData } from '../types';
 import { format, startOfWeek, addDays, parseISO, isWithinInterval, isSameDay, addMonths, subMonths } from 'date-fns';
 import { ChevronLeft, ChevronRight, Calendar, Calendar as CalendarIcon, MapPin, Filter, Sparkles, Grid, List, BarChart3, Building, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import EnhancedDrilldownModal from './EnhancedDrilldownModal';
+import EnhancedDrilldownModal from './EnhancedDrilldownModal2';
 import CreateClassModal from './CreateClassModal';
 
 interface CalendarClass {
@@ -19,7 +19,7 @@ interface CalendarClass {
 type ViewMode = 'grid' | 'horizontal' | 'analysis' | 'multiLocation';
 
 // Color mapping for different class types and names
-const getClassTypeColor = (className: string, classType?: string): string => {
+export const getClassTypeColor = (className: string, classType?: string): string => {
   // Get cleaned class name for consistent coloring
   const cleanedName = cleanClassName(className);
   
@@ -1737,8 +1737,7 @@ export default function WeeklyCalendar() {
                                   s.Location === session.Location
                                 ).length;
 
-                                // Get class type color based on class name
-                                const classTypeColor = getClassTypeColor(session.Class, session.Type);
+                                // Class type color intentionally unused here (kept for future styling)
                                 
                                 // Check for trainer conflicts
                                 const conflictKey = `${session.Trainer}-${session.Day}-${session.Time}`;

@@ -5,9 +5,23 @@ import { formatNumber, formatCurrency, formatPercentage, calculateMetrics } from
 import { TrendingUp, TrendingDown, Award, BarChart3, Search } from 'lucide-react';
 import { generateCompositeKey, parseCompositeKey } from '../utils/cleaners';
 import { motion } from 'framer-motion';
-import EnhancedDrilldownModal from './EnhancedDrilldownModal';
+import EnhancedDrilldownModal from './EnhancedDrilldownModal2';
 
-type RankingMetric = 'classAvg' | 'fillRate' | 'totalRevenue' | 'consistencyScore' | 'totalCancellations' | 'totalBooked' | 'classes' | 'compositeScore';
+type RankingMetric =
+  | 'classAvg'
+  | 'fillRate'
+  | 'totalRevenue'
+  | 'consistencyScore'
+  | 'totalCancellations'
+  | 'totalBooked'
+  | 'classes'
+  | 'compositeScore'
+  | 'revPerCheckin'
+  | 'revPerBooking'
+  | 'cancellationRate'
+  | 'waitlistRate'
+  | 'totalWaitlisted'
+  | 'revLostPerCancellation';
 
 interface RankingGroup {
   key: string;
@@ -120,6 +134,18 @@ export default function Rankings() {
         return 'Classes';
       case 'compositeScore':
         return 'Composite Score';
+      case 'revPerCheckin':
+        return 'Rev / Check-in';
+      case 'revPerBooking':
+        return 'Rev / Booking';
+      case 'cancellationRate':
+        return 'Cancel Rate';
+      case 'waitlistRate':
+        return 'Waitlist Rate';
+      case 'totalWaitlisted':
+        return 'Total Waitlisted';
+      case 'revLostPerCancellation':
+        return 'Rev Lost / Cancel';
     }
   };
 
@@ -139,6 +165,18 @@ export default function Rankings() {
         return formatPercentage(value);
       case 'compositeScore':
         return formatNumber(value, 1);
+      case 'revPerCheckin':
+        return formatCurrency(value, true);
+      case 'revPerBooking':
+        return formatCurrency(value, true);
+      case 'cancellationRate':
+        return formatPercentage(value);
+      case 'waitlistRate':
+        return formatPercentage(value);
+      case 'totalWaitlisted':
+        return formatNumber(value);
+      case 'revLostPerCancellation':
+        return formatCurrency(value, true);
     }
   };
 
@@ -173,7 +211,19 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
   const topPerformers = getTopPerformers(topMetric, topCount);
   const bottomPerformers = getBottomPerformers(bottomMetric, bottomCount);
 
-  const metricOptions: RankingMetric[] = ['classAvg', 'fillRate', 'totalRevenue', 'consistencyScore', 'compositeScore'];
+  const metricOptions: RankingMetric[] = [
+    'classAvg',
+    'fillRate',
+    'totalRevenue',
+    'consistencyScore',
+    'compositeScore',
+    'revPerCheckin',
+    'revPerBooking',
+    'cancellationRate',
+    'waitlistRate',
+    'totalWaitlisted',
+    'revLostPerCancellation',
+  ];
 
   return (
     <>

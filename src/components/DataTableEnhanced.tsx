@@ -24,12 +24,10 @@ import {
   Eye,
   Settings,
   X,
-  TrendingUp,
-  TrendingDown,
   Award,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import EnhancedDrilldownModal from './EnhancedDrilldownModal';
+import EnhancedDrilldownModal from './EnhancedDrilldownModal2';
 
 // (Sparkline removed per design requirements)
 
@@ -236,7 +234,10 @@ export default function DataTableEnhanced() {
               </button>
             );
           }
-          return null;
+          // For individual rows show a numeric value so column alignment matches grouped rows
+          const session = data as SessionData;
+          const val = (session as any).classAvg ?? session.CheckedIn ?? 0;
+          return <div className="text-center text-sm">{formatNumber(val, 1)}</div>;
         },
       },
       {
@@ -345,25 +346,13 @@ export default function DataTableEnhanced() {
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
-            const sparklineData = data.children?.map((child) => child.CheckedIn).filter((v) => v != null) || [];
-            const trend = sparklineData.length >= 2
-              ? sparklineData[sparklineData.length - 1] > sparklineData[0]
-                ? 'up'
-                : sparklineData[sparklineData.length - 1] < sparklineData[0]
-                ? 'down'
-                : 'stable'
-              : 'stable';
             return (
-              <div className="flex items-center justify-center gap-2">
-                <span className="font-bold text-blue-600 text-base">
-                  {formatNumber(data.classAvg, 1)}
-                </span>
-                {trend === 'up' && <TrendingUp className="w-4 h-4 text-green-700" />}
-                {trend === 'down' && <TrendingDown className="w-4 h-4 text-red-700" />}
+              <div className="text-right font-semibold text-blue-700">
+                {formatNumber(data.classAvg, 1)}
               </div>
             );
           }
-          return null;
+          return <div className="text-right text-gray-400">-</div>;
         },
       },
       {

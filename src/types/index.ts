@@ -42,6 +42,7 @@ export interface CalculatedMetrics {
   rank: number;
   classAvg: number;
   classAvgNonEmpty: number;
+  waitlistRate: number;
   revPerBooking: number;
   revPerCheckin: number;
   revLostPerCancellation: number;

@@ -25,6 +25,7 @@ export function calculateMetrics(sessions: SessionData[]): CalculatedMetrics {
   const totalRevenue = sessions.reduce((sum, s) => sum + s.Revenue, 0);
   const complimentaryVisits = sessions.reduce((sum, s) => sum + s.NonPaid, 0);
   const totalWaitlisted = sessions.reduce((sum, s) => sum + (s.Waitlisted || 0), 0);
+  const waitlistRate = totalCapacity > 0 ? (totalWaitlisted / totalCapacity) * 100 : 0;
   
   // Fill rate: total check-ins / total capacity
   const fillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
@@ -78,8 +79,9 @@ export function calculateMetrics(sessions: SessionData[]): CalculatedMetrics {
     emptyClasses,
     nonEmptyClasses,
     complimentaryVisits,
-    fillRate,
+      fillRate,
     cancellationRate,
+      waitlistRate,
     rank: 0, // Will be set after sorting
     classAvg,
     classAvgNonEmpty,

@@ -166,12 +166,12 @@ export default function DataTable() {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
             return (
-              <div className="text-center font-bold text-blue-600">
+              <div className="text-right font-semibold text-blue-700">
                 {formatNumber(data.classAvg, 1)}
               </div>
             );
           }
-          return null;
+          return <div className="text-right text-gray-400">-</div>;
         },
       },
       {

@@ -24,13 +24,22 @@ import {
   Calendar,
   Activity,
   Settings,
+  Lightbulb,
+  Target,
+  Zap,
+  Brain,
+  Shield,
+  CheckCircle2,
+  DollarSign,
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
 import { parseISO, format as formatDate, eachWeekOfInterval, isSameWeek } from 'date-fns';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { AdvancedInsightsService, SmartRecommendation, EnhancedAnomaly } from '../services/advancedInsights';
+import { tTest, forecastLinear, TTestResult, ForecastResult } from '../utils/statistics';
 
-type AnalysisTab = 'overview' | 'formats' | 'trainers' | 'reports';
+type AnalysisTab = 'overview' | 'formats' | 'trainers' | 'reports' | 'insights' | 'anomalies';
 
 interface FormatMetrics {
   format: string;
@@ -65,6 +74,9 @@ interface ChangeDetection {
   dayOfWeek: string;
   timeSlot: string;
   isActive: boolean; // Only track active classes
+  statisticalSignificance?: TTestResult; // New: statistical validation
+  forecast?: ForecastResult; // New: predicted future impact
+  confidenceScore?: number; // New: 0-100 confidence in the impact measurement
 }
 
 interface WeeklyData {
@@ -98,6 +110,13 @@ export function FormatIntelligence() {
   const [trainerFilterMinSessions, setTrainerFilterMinSessions] = useState(0);
   const [trainerSearchTerm, setTrainerSearchTerm] = useState('');
   const [showPatternBreaksOnly, setShowPatternBreaksOnly] = useState(false);
+  
+  // New: AI Insights state
+  const [smartRecommendations, setSmartRecommendations] = useState<SmartRecommendation[]>([]);
+  const [detectedAnomalies, setDetectedAnomalies] = useState<EnhancedAnomaly[]>([]);
+  const [selectedRecommendation, setSelectedRecommendation] = useState<SmartRecommendation | null>(null);
+  const [selectedAnomaly, setSelectedAnomaly] = useState<EnhancedAnomaly | null>(null);
+  const [isGeneratingInsights, setIsGeneratingInsights] = useState(false);
 
   // Use the global filtered data from the store
   const formatFilteredData = filteredData;
@@ -209,6 +228,19 @@ export function FormatIntelligence() {
             const beforeAvg = sessionsBefore.reduce((sum, s) => sum + s.CheckedIn, 0) / sessionsBefore.length;
             const afterAvg = sessionsAfter.reduce((sum, s) => sum + s.CheckedIn, 0) / sessionsAfter.length;
             
+            // Statistical significance testing
+            const beforeValues = sessionsBefore.map(s => s.CheckedIn);
+            const afterValues = sessionsAfter.map(s => s.CheckedIn);
+            const significance = tTest(beforeValues, afterValues, 0.95);
+            
+            // Forecast future impact
+            const forecast = forecastLinear(afterValues, 4); // 4 weeks ahead
+            
+            // Confidence score
+            const sampleSize = beforeValues.length + afterValues.length;
+            const variance = Math.abs(significance.tStatistic);
+            const confidenceScore = Math.round((significance.isSignificant ? 80 : 50) * (Math.min(sampleSize / 10, 1)));
+            
             changes.push({
               type: 'trainer',
               date: curr.Date,
@@ -222,6 +254,9 @@ export function FormatIntelligence() {
               dayOfWeek,
               timeSlot,
               isActive: true,
+              statisticalSignificance: significance,
+              forecast,
+              confidenceScore,
             });
           }
           
@@ -399,6 +434,28 @@ export function FormatIntelligence() {
       return b.totalSessions - a.totalSessions;
     });
   }, [formatFilteredData, showPatternBreaksOnly]);
+  
+  // Generate smart recommendations and detect anomalies
+  useEffect(() => {
+    if (formatFilteredData.length < 10) return; // Need sufficient data
+    
+    setIsGeneratingInsights(true);
+    
+    // Run insights generation asynchronously
+    setTimeout(() => {
+      try {
+        const recommendations = AdvancedInsightsService.generateRecommendations(formatFilteredData);
+        const anomalies = AdvancedInsightsService.detectAnomalies(formatFilteredData);
+        
+        setSmartRecommendations(recommendations);
+        setDetectedAnomalies(anomalies);
+      } catch (error) {
+        console.error('Error generating insights:', error);
+      } finally {
+        setIsGeneratingInsights(false);
+      }
+    }, 500); // Small delay to prevent UI blocking
+  }, [formatFilteredData]);
 
   // Get weekly trend data for selected format
   const weeklyTrendData = useMemo<WeeklyData[]>(() => {
@@ -1533,6 +1590,282 @@ export function FormatIntelligence() {
     </div>
   );
 
+  const renderInsightsTab = () => (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="glass-card rounded-2xl p-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-xl bg-gradient-to-r from-purple-600 to-purple-700 shadow-lg">
+              <Brain className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">AI-Powered Insights</h2>
+              <p className="text-gray-600 text-sm">Smart recommendations based on statistical analysis</p>
+            </div>
+          </div>
+          {isGeneratingInsights && (
+            <div className="flex items-center gap-2 text-purple-600">
+              <div className="animate-spin w-5 h-5 border-2 border-purple-600 border-t-transparent rounded-full"></div>
+              <span className="text-sm font-semibold">Analyzing...</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Recommendations Grid */}
+      {smartRecommendations.length === 0 ? (
+        <div className="glass-card rounded-2xl p-12 text-center">
+          <Lightbulb className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <h3 className="text-xl font-bold text-gray-700 mb-2">No Insights Available</h3>
+          <p className="text-gray-600">Need at least 10 sessions to generate recommendations. Try adjusting your filters.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {smartRecommendations.map((rec, idx) => (
+            <motion.div
+              key={idx}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: idx * 0.05 }}
+              className="glass-card rounded-2xl p-6 hover:shadow-xl transition-all cursor-pointer"
+              onClick={() => setSelectedRecommendation(rec)}
+            >
+              <div className="flex items-start gap-4">
+                {/* Priority Badge */}
+                <div className={`px-3 py-1 rounded-lg font-bold text-sm whitespace-nowrap ${
+                  rec.priority === 'high' ? 'bg-red-100 text-red-700' :
+                  rec.priority === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                  'bg-green-100 text-green-700'
+                }`}>
+                  {rec.priority.toUpperCase()}
+                </div>
+
+                {/* Content */}
+                <div className="flex-1">
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <h3 className="text-lg font-bold text-gray-900 mb-1">{rec.title}</h3>
+                      <p className="text-sm text-gray-600">{rec.description}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {rec.type === 'capacity' && <Target className="w-5 h-5 text-blue-600" />}
+                      {rec.type === 'schedule' && <Clock className="w-5 h-5 text-green-600" />}
+                      {rec.type === 'trainer' && <Users className="w-5 h-5 text-purple-600" />}
+                      {rec.type === 'pricing' && <DollarSign className="w-5 h-5 text-emerald-600" />}
+                    </div>
+                  </div>
+
+                  {/* Metrics Row */}
+                  <div className="grid grid-cols-3 gap-4 mb-3">
+                    {/* Confidence Score */}
+                    <div>
+                      <p className="text-xs text-gray-600 font-semibold mb-1">CONFIDENCE</p>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full transition-all ${
+                              rec.confidence >= 80 ? 'bg-green-600' :
+                              rec.confidence >= 60 ? 'bg-yellow-600' :
+                              'bg-red-600'
+                            }`}
+                            style={{ width: `${rec.confidence}%` }}
+                          />
+                        </div>
+                        <span className="text-sm font-bold text-gray-900">{rec.confidence}%</span>
+                      </div>
+                    </div>
+
+                    {/* Expected Impact */}
+                    <div>
+                      <p className="text-xs text-gray-600 font-semibold mb-1">EXPECTED IMPACT</p>
+                      <p className="text-lg font-bold text-blue-700">{rec.expectedImpact}</p>
+                    </div>
+
+                    {/* Estimated ROI */}
+                    {rec.estimatedROI && (
+                      <div>
+                        <p className="text-xs text-gray-600 font-semibold mb-1">EST. ROI</p>
+                        <p className="text-lg font-bold text-emerald-700">{rec.estimatedROI}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action Required */}
+                  <div className="flex items-center justify-between pt-3 border-t border-gray-200">
+                    <div className="flex items-center gap-2">
+                      <Shield className={`w-4 h-4 ${
+                        rec.riskLevel === 'low' ? 'text-green-600' :
+                        rec.riskLevel === 'medium' ? 'text-yellow-600' :
+                        'text-red-600'
+                      }`} />
+                      <span className="text-xs text-gray-600 font-semibold">
+                        {rec.riskLevel.toUpperCase()} RISK
+                      </span>
+                    </div>
+                    <button className="px-4 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-purple-700 text-white text-sm font-bold hover:from-purple-700 hover:to-purple-800 transition-all shadow-md hover:shadow-lg">
+                      {rec.actionRequired}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Expandable Rationale */}
+              {selectedRecommendation === rec && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  className="mt-4 pt-4 border-t border-gray-200"
+                >
+                  <p className="text-sm text-gray-700 font-medium mb-2">📊 Analysis:</p>
+                  <p className="text-sm text-gray-600">{rec.rationale}</p>
+                </motion.div>
+              )}
+            </motion.div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderAnomaliesTab = () => (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="glass-card rounded-2xl p-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-xl bg-gradient-to-r from-orange-600 to-orange-700 shadow-lg">
+              <AlertTriangle className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Anomaly Detection</h2>
+              <p className="text-gray-600 text-sm">Statistical outliers and unusual patterns</p>
+            </div>
+          </div>
+          {isGeneratingInsights && (
+            <div className="flex items-center gap-2 text-orange-600">
+              <div className="animate-spin w-5 h-5 border-2 border-orange-600 border-t-transparent rounded-full"></div>
+              <span className="text-sm font-semibold">Detecting...</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Anomalies Grid */}
+      {detectedAnomalies.length === 0 ? (
+        <div className="glass-card rounded-2xl p-12 text-center">
+          <CheckCircle2 className="w-16 h-16 text-green-600 mx-auto mb-4" />
+          <h3 className="text-xl font-bold text-gray-700 mb-2">No Anomalies Detected</h3>
+          <p className="text-gray-600">All classes are performing within expected ranges. Great job!</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {detectedAnomalies.map((anomaly, idx) => (
+            <motion.div
+              key={idx}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: idx * 0.05 }}
+              className="glass-card rounded-2xl p-6 hover:shadow-xl transition-all cursor-pointer"
+              onClick={() => setSelectedAnomaly(anomaly)}
+            >
+              <div className="flex items-start gap-4">
+                {/* Severity Badge */}
+                <div className={`px-3 py-1 rounded-lg font-bold text-sm whitespace-nowrap ${
+                  anomaly.severity === 'critical' ? 'bg-red-100 text-red-700' :
+                  anomaly.severity === 'moderate' ? 'bg-orange-100 text-orange-700' :
+                  'bg-yellow-100 text-yellow-700'
+                }`}>
+                  {anomaly.severity.toUpperCase()}
+                </div>
+
+                {/* Content */}
+                <div className="flex-1">
+                  <div className="mb-3">
+                    <h3 className="text-lg font-bold text-gray-900 mb-1">{anomaly.class}</h3>
+                    <p className="text-sm text-gray-600">
+                      {anomaly.location} • {anomaly.timeSlot}
+                    </p>
+                  </div>
+
+                  {/* Metrics Comparison */}
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    {Object.entries(anomaly.metrics).map(([metric, data]) => (
+                      <div key={metric} className="bg-white bg-opacity-50 rounded-lg p-3">
+                        <p className="text-xs text-gray-600 font-semibold mb-2 uppercase">{metric}</p>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs text-gray-600">Expected:</span>
+                          <span className="text-sm font-bold text-gray-700">{formatNumber(data.expected, 1)}</span>
+                        </div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs text-gray-600">Actual:</span>
+                          <span className={`text-sm font-bold ${
+                            Math.abs(data.deviation) > 30 ? 'text-red-700' :
+                            Math.abs(data.deviation) > 15 ? 'text-orange-700' :
+                            'text-gray-700'
+                          }`}>
+                            {formatNumber(data.actual, 1)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-gray-600">Deviation:</span>
+                          <span className={`text-sm font-bold ${
+                            Math.abs(data.deviation) > 30 ? 'text-red-700' :
+                            Math.abs(data.deviation) > 15 ? 'text-orange-700' :
+                            'text-yellow-700'
+                          }`}>
+                            {data.deviation > 0 ? '+' : ''}{formatNumber(data.deviation, 1)}%
+                          </span>
+                        </div>
+                        <div className="mt-2 pt-2 border-t border-gray-200">
+                          <span className="text-xs text-gray-600">Z-Score: </span>
+                          <span className="text-xs font-bold text-gray-900">{formatNumber(data.zScore, 2)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Context */}
+                  <div className="bg-blue-50 rounded-lg p-3 mb-3">
+                    <p className="text-sm text-gray-700 font-medium mb-1">📍 Context:</p>
+                    <p className="text-sm text-gray-600">{anomaly.context}</p>
+                  </div>
+
+                  {/* Suggested Actions */}
+                  <div className="space-y-2">
+                    <p className="text-sm text-gray-700 font-medium">✅ Suggested Actions:</p>
+                    <div className="space-y-1">
+                      {anomaly.suggestedActions.map((action, i) => (
+                        <div key={i} className="flex items-start gap-2 text-sm text-gray-600">
+                          <Zap className="w-4 h-4 text-orange-600 mt-0.5 flex-shrink-0" />
+                          <span>{action}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Related Factors */}
+                  {anomaly.relatedFactors.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <p className="text-xs text-gray-600 font-semibold mb-2">RELATED FACTORS:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {anomaly.relatedFactors.map((factor, i) => (
+                          <span key={i} className="px-2 py-1 rounded-lg bg-gray-100 text-gray-700 text-xs font-medium">
+                            {factor}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -1648,6 +1981,42 @@ export function FormatIntelligence() {
             Reports
           </div>
         </button>
+        <button
+          onClick={() => setActiveTab('insights')}
+          className={`px-6 py-3 rounded-xl font-bold transition-all ${
+            activeTab === 'insights'
+              ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
+              : 'text-gray-700 hover:bg-gray-100'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Lightbulb className="w-5 h-5" />
+            AI Insights
+            {smartRecommendations.length > 0 && (
+              <span className="ml-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-xs font-bold">
+                {smartRecommendations.length}
+              </span>
+            )}
+          </div>
+        </button>
+        <button
+          onClick={() => setActiveTab('anomalies')}
+          className={`px-6 py-3 rounded-xl font-bold transition-all ${
+            activeTab === 'anomalies'
+              ? 'bg-gradient-to-r from-orange-600 to-orange-700 text-white shadow-lg'
+              : 'text-gray-700 hover:bg-gray-100'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5" />
+            Anomalies
+            {detectedAnomalies.length > 0 && (
+              <span className="ml-1 px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-xs font-bold">
+                {detectedAnomalies.length}
+              </span>
+            )}
+          </div>
+        </button>
       </div>
 
       {/* Tab Content */}
@@ -1663,6 +2032,8 @@ export function FormatIntelligence() {
           {activeTab === 'formats' && renderFormatsTab()}
           {activeTab === 'trainers' && renderTrainersTab()}
           {activeTab === 'reports' && renderReportsTab()}
+          {activeTab === 'insights' && renderInsightsTab()}
+          {activeTab === 'anomalies' && renderAnomaliesTab()}
         </motion.div>
       </AnimatePresence>
 
