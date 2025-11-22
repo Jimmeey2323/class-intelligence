@@ -120,6 +120,31 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     
     let debugLogged = false; // Flag to log only once
     
+    // Helper to convert time formats for comparison
+    const normalizeTime = (timeStr: string): string => {
+      if (!timeStr) return '';
+      
+      // Handle 12-hour format (7:15 AM) -> 24-hour (07:15)
+      const time12Match = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+      if (time12Match) {
+        let [, hours, minutes, period] = time12Match;
+        let hour24 = parseInt(hours, 10);
+        
+        if (period.toUpperCase() === 'PM' && hour24 !== 12) hour24 += 12;
+        if (period.toUpperCase() === 'AM' && hour24 === 12) hour24 = 0;
+        
+        return `${hour24.toString().padStart(2, '0')}:${minutes}`;
+      }
+      
+      // Handle 24-hour format (11:30:00) -> (11:30)
+      const time24Match = timeStr.match(/^(\d{1,2}):(\d{2})(:\d{2})?/);
+      if (time24Match) {
+        return `${time24Match[1].padStart(2, '0')}:${time24Match[2]}`;
+      }
+      
+      return timeStr.toLowerCase().trim();
+    };
+    
     // Calculate Status and FillRate for each session
     const enrichedData = data.map((session, index) => {
       const fillRate = session.Capacity > 0 ? (session.CheckedIn / session.Capacity) * 100 : 0;
@@ -136,14 +161,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           
           const normalizedSessionClass = normalizeString(session.Class);
           const normalizedSessionLocation = normalizeString(session.Location);
-          const normalizedSessionTime = session.Time.toLowerCase().trim();
+          const normalizedSessionTime = normalizeTime(session.Time);
           
           const dayClasses = activeClassesData[sessionDay] || [];
           
           const isActive = dayClasses.some((activeClass: any) => {
             const normalizedActiveClass = normalizeString(activeClass.className);
             const normalizedActiveLocation = normalizeString(activeClass.location);
-            const normalizedActiveTime = activeClass.time.toLowerCase().trim();
+            const normalizedActiveTime = normalizeTime(activeClass.time);
             
             // More flexible class name matching - remove common prefixes
             const cleanClassName = (name: string) => {
@@ -166,29 +191,28 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
             const locationMatch = normalizedActiveLocation.includes(normalizedSessionLocation) ||
                                   normalizedSessionLocation.includes(normalizedActiveLocation);
             
-            // Time match: compare first 5 characters (HH:MM)
-            const timeMatch = normalizedActiveTime.startsWith(normalizedSessionTime.substring(0, 5)) ||
-                              normalizedSessionTime.startsWith(normalizedActiveTime.substring(0, 5));
+            // Time match: compare normalized times directly
+            const timeMatch = normalizedActiveTime === normalizedSessionTime;
             
-            // Log matching attempts for debugging (first session only)
-            if (!debugLogged && index === 0 && (classMatch || locationMatch || timeMatch)) {
-              console.log('🔍 Matching attempt:', {
+            // Log matching attempts for debugging (expanded to first 5 sessions)
+            if (!debugLogged && index < 5) {
+              console.log(`🔍 Session ${index + 1} matching:`, {
                 session: { 
                   class: session.Class, 
                   cleanClass: cleanedSessionClass,
                   location: session.Location, 
-                  time: session.Time, 
+                  time: session.Time + ' → ' + normalizedSessionTime, 
                   day: session.Day 
                 },
                 active: { 
                   class: activeClass.className, 
                   cleanClass: cleanedActiveClass,
                   location: activeClass.location, 
-                  time: activeClass.time 
+                  time: activeClass.time + ' → ' + normalizedActiveTime 
                 },
                 matches: { classMatch, locationMatch, timeMatch, overall: classMatch && locationMatch && timeMatch }
               });
-              debugLogged = true;
+              if (index === 4) debugLogged = true;
             }
             
             return classMatch && locationMatch && timeMatch;

@@ -115,7 +115,7 @@ export function FormatIntelligence() {
   const [smartRecommendations, setSmartRecommendations] = useState<SmartRecommendation[]>([]);
   const [detectedAnomalies, setDetectedAnomalies] = useState<EnhancedAnomaly[]>([]);
   const [selectedRecommendation, setSelectedRecommendation] = useState<SmartRecommendation | null>(null);
-  const [selectedAnomaly, setSelectedAnomaly] = useState<EnhancedAnomaly | null>(null);
+  // anomalySelection state removed (anomalies tab currently unreachable)
   const [isGeneratingInsights, setIsGeneratingInsights] = useState(false);
 
   // Use the global filtered data from the store
@@ -238,7 +238,7 @@ export function FormatIntelligence() {
             
             // Confidence score
             const sampleSize = beforeValues.length + afterValues.length;
-            const variance = Math.abs(significance.tStatistic);
+            // Removed unused variance variable
             const confidenceScore = Math.round((significance.isSignificant ? 80 : 50) * (Math.min(sampleSize / 10, 1)));
             
             changes.push({
@@ -1628,7 +1628,7 @@ export function FormatIntelligence() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: idx * 0.05 }}
-              className="glass-card rounded-2xl p-6 hover:shadow-xl transition-all cursor-pointer"
+              className={`glass-card rounded-2xl p-6 hover:shadow-xl transition-all cursor-pointer ${selectedRecommendation === rec ? 'ring-2 ring-purple-500' : ''}`}
               onClick={() => setSelectedRecommendation(rec)}
             >
               <div className="flex items-start gap-4">
@@ -1679,7 +1679,9 @@ export function FormatIntelligence() {
                     {/* Expected Impact */}
                     <div>
                       <p className="text-xs text-gray-600 font-semibold mb-1">EXPECTED IMPACT</p>
-                      <p className="text-lg font-bold text-blue-700">{rec.expectedImpact}</p>
+                      <p className="text-lg font-bold text-blue-700">
+                        {rec.expectedImpact.change}{rec.expectedImpact.unit} {rec.expectedImpact.metric}
+                      </p>
                     </div>
 
                     {/* Estimated ROI */}
@@ -1767,7 +1769,7 @@ export function FormatIntelligence() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: idx * 0.05 }}
               className="glass-card rounded-2xl p-6 hover:shadow-xl transition-all cursor-pointer"
-              onClick={() => setSelectedAnomaly(anomaly)}
+              onClick={() => {}}
             >
               <div className="flex items-start gap-4">
                 {/* Severity Badge */}
@@ -1782,47 +1784,40 @@ export function FormatIntelligence() {
                 {/* Content */}
                 <div className="flex-1">
                   <div className="mb-3">
-                    <h3 className="text-lg font-bold text-gray-900 mb-1">{anomaly.class}</h3>
+                    <h3 className="text-lg font-bold text-gray-900 mb-1">{anomaly.affectedClass}</h3>
                     <p className="text-sm text-gray-600">
-                      {anomaly.location} • {anomaly.timeSlot}
+                      {anomaly.affectedLocation} • {formatDate(parseISO(anomaly.detected), 'MMM dd')}
                     </p>
                   </div>
 
-                  {/* Metrics Comparison */}
+                  {/* Metrics Summary */}
                   <div className="grid grid-cols-2 gap-4 mb-4">
-                    {Object.entries(anomaly.metrics).map(([metric, data]) => (
-                      <div key={metric} className="bg-white bg-opacity-50 rounded-lg p-3">
-                        <p className="text-xs text-gray-600 font-semibold mb-2 uppercase">{metric}</p>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-gray-600">Expected:</span>
-                          <span className="text-sm font-bold text-gray-700">{formatNumber(data.expected, 1)}</span>
-                        </div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-gray-600">Actual:</span>
-                          <span className={`text-sm font-bold ${
-                            Math.abs(data.deviation) > 30 ? 'text-red-700' :
-                            Math.abs(data.deviation) > 15 ? 'text-orange-700' :
-                            'text-gray-700'
-                          }`}>
-                            {formatNumber(data.actual, 1)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-gray-600">Deviation:</span>
-                          <span className={`text-sm font-bold ${
-                            Math.abs(data.deviation) > 30 ? 'text-red-700' :
-                            Math.abs(data.deviation) > 15 ? 'text-orange-700' :
-                            'text-yellow-700'
-                          }`}>
-                            {data.deviation > 0 ? '+' : ''}{formatNumber(data.deviation, 1)}%
-                          </span>
-                        </div>
-                        <div className="mt-2 pt-2 border-t border-gray-200">
-                          <span className="text-xs text-gray-600">Z-Score: </span>
-                          <span className="text-xs font-bold text-gray-900">{formatNumber(data.zScore, 2)}</span>
-                        </div>
-                      </div>
-                    ))}
+                    <div className="bg-white bg-opacity-50 rounded-lg p-3">
+                      <p className="text-xs text-gray-600 font-semibold mb-2 uppercase">Expected</p>
+                      <p className="text-sm font-bold text-gray-700">{formatNumber(anomaly.metrics.expected, 1)}</p>
+                    </div>
+                    <div className="bg-white bg-opacity-50 rounded-lg p-3">
+                      <p className="text-xs text-gray-600 font-semibold mb-2 uppercase">Actual</p>
+                      <p className={`text-sm font-bold ${
+                        Math.abs(anomaly.metrics.deviation) > 30 ? 'text-red-700' :
+                        Math.abs(anomaly.metrics.deviation) > 15 ? 'text-orange-700' :
+                        'text-gray-700'
+                      }`}>{formatNumber(anomaly.metrics.actual, 1)}</p>
+                    </div>
+                    <div className="bg-white bg-opacity-50 rounded-lg p-3">
+                      <p className="text-xs text-gray-600 font-semibold mb-2 uppercase">Deviation</p>
+                      <p className={`text-sm font-bold ${
+                        Math.abs(anomaly.metrics.deviation) > 30 ? 'text-red-700' :
+                        Math.abs(anomaly.metrics.deviation) > 15 ? 'text-orange-700' :
+                        'text-yellow-700'
+                      }`}>
+                        {anomaly.metrics.deviation > 0 ? '+' : ''}{formatNumber(anomaly.metrics.deviation, 1)}%
+                      </p>
+                    </div>
+                    <div className="bg-white bg-opacity-50 rounded-lg p-3">
+                      <p className="text-xs text-gray-600 font-semibold mb-2 uppercase">Z-Score</p>
+                      <p className="text-sm font-bold text-gray-700">{formatNumber(anomaly.metrics.zScore, 2)}</p>
+                    </div>
                   </div>
 
                   {/* Context */}

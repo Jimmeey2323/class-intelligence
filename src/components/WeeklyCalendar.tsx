@@ -2,10 +2,20 @@ import { useState, useMemo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { SessionData } from '../types';
 import { format, startOfWeek, addDays, parseISO, isWithinInterval, isSameDay, addMonths, subMonths } from 'date-fns';
-import { ChevronLeft, ChevronRight, Calendar, Calendar as CalendarIcon, MapPin, Filter, Sparkles, Grid, List, BarChart3, Building, AlertTriangle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar, Calendar as CalendarIcon, MapPin, Filter, Sparkles, Grid, List, BarChart3, Building, AlertTriangle, Users, Layers } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EnhancedDrilldownModal from './EnhancedDrilldownModal2';
 import CreateClassModal from './CreateClassModal';
+import { getUniqueValues } from '../utils/calculations';
+
+// Calendar-specific filter interface
+interface CalendarFilters {
+  trainers: string[];
+  locations: string[];
+  classTypes: string[];
+  classes: string[];
+  activeOnly: boolean;
+}
 
 interface CalendarClass {
   session: SessionData;
@@ -191,7 +201,14 @@ const CALENDAR_END_HOUR = 22;
 const TIME_SLOT_HEIGHT = 100; // px per 30min slot
 
 export default function WeeklyCalendar() {
-  const { filteredData, rawData, setRawData, getAverageCheckIns, filters, activeClassesData } = useDashboardStore();
+  // Safe destructuring with fallback values
+  const store = useDashboardStore();
+  const { 
+    rawData = [], 
+    activeClassesData = {}, 
+    getAverageCheckIns = () => null, 
+    setRawData = () => {} 
+  } = store || {};
   
   // Early return if no data to prevent crashes
   if (!rawData || rawData.length === 0) {
@@ -206,8 +223,32 @@ export default function WeeklyCalendar() {
     );
   }
   
-  console.log('📊 WeeklyCalendar filteredData count:', filteredData.length);
-  console.log('🎯 Global filters:', filters);
+  // Calendar-specific filter state - independent of global filters
+  const [calendarFilters, setCalendarFilters] = useState<CalendarFilters>(() => {
+    try {
+      return {
+        trainers: [],
+        locations: [],
+        classTypes: [],
+        classes: [],
+        activeOnly: false
+      };
+    } catch (error) {
+      console.error('Error initializing calendar filters:', error);
+      return {
+        trainers: [],
+        locations: [],
+        classTypes: [],
+        classes: [],
+        activeOnly: false
+      };
+    }
+  });
+  
+  const [showCalendarFilters, setShowCalendarFilters] = useState(false);
+  
+  console.log('📊 WeeklyCalendar rawData count:', rawData?.length || 0);
+  console.log('🎯 Calendar filters:', calendarFilters);
   
   // Consolidated date state - single source of truth
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -219,7 +260,7 @@ export default function WeeklyCalendar() {
   const [selectedSlot, setSelectedSlot] = useState<{ day: Date; time: string } | null>(null);
   const [isAutoPopulating, setIsAutoPopulating] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
-  const [activeOnly, setActiveOnly] = useState(false); // Active filter for calendar
+  // Remove the old activeOnly state as it's now part of calendarFilters
 
   // Derived date values from single source of truth
   const selectedWeekStart = useMemo(() => startOfWeek(currentDate, { weekStartsOn: 1 }), [currentDate]);
@@ -297,43 +338,80 @@ export default function WeeklyCalendar() {
     return Array.from({ length: 7 }, (_, i) => addDays(selectedWeekStart, i));
   }, [selectedWeekStart]);
 
-  // Use globally filtered data directly - no local calendar filters
+  // Calendar-specific filtered data - independent of global filters
   const locallyFilteredData = useMemo(() => {
-    if (!filteredData || filteredData.length === 0) {
-      return [];
-    }
+    try {
+      if (!rawData || rawData.length === 0) {
+        return [];
+      }
 
-    // Validate that we're working with real session data
-    const validFilteredData = filteredData.filter(session => {
-      return session && 
-             session.Date && 
-             session.Time && 
-             session.Class && 
-             session.Location &&
-             typeof session.CheckedIn === 'number' &&
-             typeof session.Capacity === 'number';
-    });
+      // Validate that we're working with real session data
+      const validData = rawData.filter(session => {
+        return session && 
+               session.Date && 
+               session.Time && 
+               session.Class && 
+               session.Location &&
+               typeof session.CheckedIn === 'number' &&
+               typeof session.Capacity === 'number';
+      });
 
-    if (validFilteredData.length === 0) {
-      return [];
-    }
-    
-    return validFilteredData.filter(session => {
-      // Date filter - ensure valid date
-      let sessionDate;
-      try {
-        sessionDate = parseISO(session.Date);
-      } catch (e) {
-        return false;
+      if (validData.length === 0) {
+        return [];
       }
       
-      // Check if in current week
-      const inWeek = weekDays.some(day => isSameDay(day, sessionDate));
-      if (!inWeek) return false;
-      
-      return true;
-    });
-  }, [filteredData, weekDays]);
+      return validData.filter(session => {
+        try {
+          // Date filter - ensure valid date
+          let sessionDate;
+          try {
+            sessionDate = parseISO(session.Date);
+          } catch (e) {
+            return false;
+          }
+          
+          // Check if in current week
+          const inWeek = weekDays?.some(day => isSameDay(day, sessionDate)) || false;
+          if (!inWeek) return false;
+          
+          // Apply calendar-specific filters
+          
+          // Trainer filter
+          if (calendarFilters.trainers.length > 0 && !calendarFilters.trainers.includes(session.Trainer)) {
+            return false;
+          }
+          
+          // Location filter
+          if (calendarFilters.locations.length > 0 && !calendarFilters.locations.includes(session.Location)) {
+            return false;
+          }
+          
+          // Class type filter
+          if (calendarFilters.classTypes.length > 0 && !calendarFilters.classTypes.includes(session.Type)) {
+            return false;
+          }
+          
+          // Class name filter
+          if (calendarFilters.classes.length > 0 && !calendarFilters.classes.includes(session.Class)) {
+            return false;
+          }
+          
+          // Active only filter
+          if (calendarFilters.activeOnly) {
+            return isClassActiveSimple(session, activeClassesData);
+          }
+          
+          return true;
+        } catch (sessionError) {
+          console.error('Error filtering session:', sessionError, session);
+          return false;
+        }
+      });
+    } catch (error) {
+      console.error('Error in locallyFilteredData:', error);
+      return [];
+    }
+  }, [rawData, weekDays, calendarFilters, activeClassesData]);
 
   // Get unique locations for multi-location view (filtered to specific locations only)
   const multiLocationUniqueLocations = useMemo(() => {
@@ -355,15 +433,16 @@ export default function WeeklyCalendar() {
 
   // Filter and organize classes
   const calendarClasses = useMemo(() => {
-    console.log('🔍 Calendar Debug:', {
-      totalSessions: filteredData.length,
-      weekDays: weekDays.map(d => format(d, 'yyyy-MM-dd')),
-      sampleSessionDate: filteredData[0]?.Date,
-      sampleSessionTime: filteredData[0]?.Time,
-    });
-    
-    // Use the locally filtered data
-    const filtered = locallyFilteredData;
+    try {
+      console.log('🔍 Calendar Debug:', {
+        totalSessions: rawData?.length || 0,
+        weekDays: weekDays?.map(d => format(d, 'yyyy-MM-dd')) || [],
+        sampleSessionDate: rawData?.[0]?.Date,
+        sampleSessionTime: rawData?.[0]?.Time,
+      });
+      
+      // Use the locally filtered data
+      const filtered = locallyFilteredData;
 
     console.log('✅ Filtered sessions:', filtered.length);
     if (filtered.length > 0) {
@@ -517,6 +596,10 @@ export default function WeeklyCalendar() {
     }
 
     return classes;
+    } catch (error) {
+      console.error('Error computing calendar classes:', error);
+      return [];
+    }
   }, [locallyFilteredData, weekDays]);
 
   // Multi-location calendar classes - filters all sessions for the selected 7-day range
@@ -526,8 +609,8 @@ export default function WeeklyCalendar() {
     }
     
     try {
-      // Use activeOnly state instead of multiLocationActiveOnly
-      const dataToUse = activeOnly 
+      // Use calendarFilters.activeOnly state instead of multiLocationActiveOnly
+      const dataToUse = calendarFilters.activeOnly 
         ? multiLocationDataProcessed.filter(session => session.Status === 'Active')
         : multiLocationDataProcessed;
       
@@ -585,7 +668,7 @@ export default function WeeklyCalendar() {
       console.error('Error processing multi-location calendar classes:', error);
       return [];
     }
-  }, [multiLocationDataProcessed, selectedDay, activeOnly]);
+  }, [multiLocationDataProcessed, selectedDay, calendarFilters.activeOnly]);
 
   // Calculate class format distribution for each day
   const dailyFormatDistribution = useMemo(() => {
@@ -872,18 +955,18 @@ export default function WeeklyCalendar() {
   const isActive = session.Status === 'Active';
   const classColor = getClassColor(session.Class);
   
-  // When activeOnly is true: highlight active classes normally, gray out inactive classes
-  // When activeOnly is false: show all classes with their normal colors
+  // When calendarFilters.activeOnly is true: highlight active classes normally, gray out inactive classes
+  // When calendarFilters.activeOnly is false: show all classes with their normal colors
   let bgColor, borderColor, textColor, additionalClasses = '';
   
-  if (activeOnly && !isActive) {
-    // Gray out inactive classes when activeOnly is enabled
+  if (calendarFilters.activeOnly && !isActive) {
+    // Gray out inactive classes when calendarFilters.activeOnly is enabled
     bgColor = 'bg-gray-400';
     borderColor = 'border-t-gray-500';
     textColor = 'text-gray-100';
     additionalClasses = 'opacity-60';
   } else {
-    // Normal coloring for active classes or when activeOnly is disabled
+    // Normal coloring for active classes or when calendarFilters.activeOnly is disabled
     bgColor = isActive ? classColor.bg : 'bg-gray-400';
     borderColor = isActive ? classColor.border : 'border-t-gray-600';
     textColor = isActive ? classColor.text : 'text-white';
@@ -1097,10 +1180,31 @@ export default function WeeklyCalendar() {
               {isAutoPopulating ? 'Optimizing...' : 'Auto-Populate'}
             </button>
             
+            <div className="h-6 w-px bg-gray-300 mx-1"></div>
+            
+            {/* Calendar Filters Toggle */}
             <button
-              onClick={() => setActiveOnly(!activeOnly)}
+              onClick={() => setShowCalendarFilters(!showCalendarFilters)}
               className={`px-4 py-2 text-sm rounded-xl transition-all flex items-center gap-2 ${
-                activeOnly
+                showCalendarFilters 
+                  ? 'bg-blue-500 text-white shadow-lg' 
+                  : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+              }`}
+              title="Toggle Calendar Filters"
+            >
+              <Filter className="w-4 h-4" />
+              Filters
+              {Object.values(calendarFilters).some(v => Array.isArray(v) ? v.length > 0 : v) && (
+                <span className="bg-white/20 px-1.5 py-0.5 rounded text-xs">
+                  {calendarFilters.trainers.length + calendarFilters.locations.length + calendarFilters.classTypes.length + calendarFilters.classes.length + (calendarFilters.activeOnly ? 1 : 0)}
+                </span>
+              )}
+            </button>
+            
+            <button
+              onClick={() => setCalendarFilters(prev => ({ ...prev, activeOnly: !prev.activeOnly }))}
+              className={`px-4 py-2 text-sm rounded-xl transition-all flex items-center gap-2 ${
+                calendarFilters.activeOnly
                   ? 'bg-green-500 text-white shadow-lg'
                   : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
               }`}
@@ -1113,17 +1217,193 @@ export default function WeeklyCalendar() {
         </div>
       </div>
 
+      {/* Private Calendar Filter Section */}
+      {showCalendarFilters && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -20 }}
+          className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-xl border border-white/50 p-6"
+        >
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 rounded-xl gradient-blue">
+              <Layers className="w-5 h-5 text-white" />
+            </div>
+            <h3 className="text-lg font-bold text-gray-800">Calendar Filters</h3>
+            <span className="text-sm text-gray-500">
+              (Independent of global filters • applies only to calendar view)
+            </span>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Trainers */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
+                <Users className="w-4 h-4 text-blue-600" />
+                Trainers ({calendarFilters.trainers.length} selected)
+              </label>
+              <div className="border border-gray-300 rounded-xl max-h-[120px] overflow-y-auto bg-white">
+                {(rawData ? getUniqueValues(rawData, 'Trainer') : []).map((trainer) => (
+                  <div
+                    key={trainer}
+                    onClick={() => {
+                      const isSelected = calendarFilters.trainers.includes(trainer);
+                      setCalendarFilters((prev: CalendarFilters) => ({
+                        ...prev,
+                        trainers: isSelected
+                          ? prev.trainers.filter((t: string) => t !== trainer)
+                          : [...prev.trainers, trainer]
+                      }));
+                    }}
+                    className={`px-3 py-2 text-sm cursor-pointer hover:bg-gray-50 border-b border-gray-100 last:border-b-0 flex items-center justify-between ${
+                      calendarFilters.trainers.includes(trainer) ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'
+                    }`}
+                  >
+                    <span className="truncate">{trainer || 'No Trainer'}</span>
+                    {calendarFilters.trainers.includes(trainer) && (
+                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Locations */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
+                <MapPin className="w-4 h-4 text-blue-600" />
+                Locations ({calendarFilters.locations.length} selected)
+              </label>
+              <div className="border border-gray-300 rounded-xl max-h-[120px] overflow-y-auto bg-white">
+                {(rawData ? getUniqueValues(rawData, 'Location') : []).map((location) => (
+                  <div
+                    key={location}
+                    onClick={() => {
+                      const isSelected = calendarFilters.locations.includes(location);
+                      setCalendarFilters((prev: CalendarFilters) => ({
+                        ...prev,
+                        locations: isSelected
+                          ? prev.locations.filter((l: string) => l !== location)
+                          : [...prev.locations, location]
+                      }));
+                    }}
+                    className={`px-3 py-2 text-sm cursor-pointer hover:bg-gray-50 border-b border-gray-100 last:border-b-0 flex items-center justify-between ${
+                      calendarFilters.locations.includes(location) ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'
+                    }`}
+                  >
+                    <span className="truncate">{location}</span>
+                    {calendarFilters.locations.includes(location) && (
+                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Class Types */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
+                <Layers className="w-4 h-4 text-blue-600" />
+                Class Types ({calendarFilters.classTypes.length} selected)
+              </label>
+              <div className="border border-gray-300 rounded-xl max-h-[120px] overflow-y-auto bg-white">
+                {(rawData ? getUniqueValues(rawData, 'Type') : []).map((classType) => (
+                  <div
+                    key={classType}
+                    onClick={() => {
+                      const isSelected = calendarFilters.classTypes.includes(classType);
+                      setCalendarFilters((prev: CalendarFilters) => ({
+                        ...prev,
+                        classTypes: isSelected
+                          ? prev.classTypes.filter((ct: string) => ct !== classType)
+                          : [...prev.classTypes, classType]
+                      }));
+                    }}
+                    className={`px-3 py-2 text-sm cursor-pointer hover:bg-gray-50 border-b border-gray-100 last:border-b-0 flex items-center justify-between ${
+                      calendarFilters.classTypes.includes(classType) ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'
+                    }`}
+                  >
+                    <span className="truncate">{classType || 'No Type'}</span>
+                    {calendarFilters.classTypes.includes(classType) && (
+                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Classes */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
+                <Calendar className="w-4 h-4 text-blue-600" />
+                Classes ({calendarFilters.classes.length} selected)
+              </label>
+              <div className="border border-gray-300 rounded-xl max-h-[120px] overflow-y-auto bg-white">
+                {(rawData ? getUniqueValues(rawData, 'Class') : []).map((className) => (
+                  <div
+                    key={className}
+                    onClick={() => {
+                      const isSelected = calendarFilters.classes.includes(className);
+                      setCalendarFilters((prev: CalendarFilters) => ({
+                        ...prev,
+                        classes: isSelected
+                          ? prev.classes.filter((c: string) => c !== className)
+                          : [...prev.classes, className]
+                      }));
+                    }}
+                    className={`px-3 py-2 text-sm cursor-pointer hover:bg-gray-50 border-b border-gray-100 last:border-b-0 flex items-center justify-between ${
+                      calendarFilters.classes.includes(className) ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'
+                    }`}
+                  >
+                    <span className="truncate">{className}</span>
+                    {calendarFilters.classes.includes(className) && (
+                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Filter Actions */}
+          <div className="flex items-center gap-4 mt-4 pt-4 border-t border-gray-200">
+            <button
+              onClick={() => setCalendarFilters({
+                trainers: [],
+                locations: [],
+                classTypes: [],
+                classes: [],
+                activeOnly: false
+              })}
+              className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              Clear All
+            </button>
+            <button
+              onClick={() => setCalendarFilters((prev: CalendarFilters) => ({ ...prev, activeOnly: true }))}
+              className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                calendarFilters.activeOnly
+                  ? 'bg-green-100 text-green-700 font-medium'
+                  : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'
+              }`}
+            >
+              Show Active Only
+            </button>
+            <div className="text-sm text-gray-500">
+              Showing {locallyFilteredData.length} classes this week
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* Empty State */}
-      {filteredData.length === 0 && (
+      {!rawData || rawData.length === 0 ? (
         <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-xl border border-white/50 p-12 text-center">
           <CalendarIcon className="w-16 h-16 text-gray-300 mx-auto mb-4" />
           <h3 className="text-xl font-bold text-gray-700 mb-2">No Data Loaded</h3>
           <p className="text-gray-500">Please upload your CSV file to view the weekly calendar.</p>
         </div>
-      )}
-
-      {/* No Classes This Week */}
-      {filteredData.length > 0 && calendarClasses.length === 0 && (
+      ) : locallyFilteredData.length === 0 ? (
         <div className="bg-white/80 backdrop-blur-xl rounded-3xl shadow-xl border border-white/50 p-12 text-center">
           <CalendarIcon className="w-16 h-16 text-yellow-300 mx-auto mb-4" />
           <h3 className="text-xl font-bold text-gray-700 mb-2">No Classes Found</h3>
@@ -1134,7 +1414,7 @@ export default function WeeklyCalendar() {
             Try adjusting your filters or selecting a different week.
           </p>
         </div>
-      )}
+      ) : null}
 
       {/* Calendar Views */}
       {calendarClasses.length > 0 && (
@@ -1566,15 +1846,15 @@ export default function WeeklyCalendar() {
                   <div className="flex items-center gap-4">
                     {/* Active Only Toggle */}
                     <button
-                      onClick={() => setActiveOnly(!activeOnly)}
+                      onClick={() => setCalendarFilters((prev: CalendarFilters) => ({ ...prev, activeOnly: !prev.activeOnly }))}
                       className={`px-4 py-2 rounded-xl transition-all font-semibold text-sm ${
-                        activeOnly
+                        calendarFilters.activeOnly
                           ? 'bg-green-500 text-white shadow-lg'
                           : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                       }`}
-                      title={activeOnly ? 'Show all classes' : 'Show active classes only'}
+                      title={calendarFilters.activeOnly ? 'Show all classes' : 'Show active classes only'}
                     >
-                      {activeOnly ? '✓ Active Only' : 'Active Only'}
+                      {calendarFilters.activeOnly ? '✓ Active Only' : 'Active Only'}
                     </button>
                     <div className="text-sm text-gray-600">
                       Showing <span className="font-semibold text-blue-600">{multiLocationUniqueLocations.length}</span> locations
@@ -1745,7 +2025,7 @@ export default function WeeklyCalendar() {
                                 
                                 // Determine styling based on active filter and status
                                 const isActive = session.Status === 'Active';
-                                const shouldGrayOut = activeOnly && !isActive;
+                                const shouldGrayOut = calendarFilters.activeOnly && !isActive;
                                 const fillRate = session.Capacity > 0 ? (session.CheckedIn / session.Capacity) * 100 : 0;
 
                                 return (
@@ -1760,7 +2040,7 @@ export default function WeeklyCalendar() {
                                         : shouldGrayOut
                                           ? 'bg-gray-100 border-gray-400 opacity-50 shadow-sm'
                                           : isActive
-                                            ? `bg-gradient-to-br from-white via-blue-50 to-indigo-50 border-blue-500 shadow-md hover:shadow-xl ${activeOnly ? 'ring-2 ring-green-400' : ''}`
+                                            ? `bg-gradient-to-br from-white via-blue-50 to-indigo-50 border-blue-500 shadow-md hover:shadow-xl ${calendarFilters.activeOnly ? 'ring-2 ring-green-400' : ''}`
                                             : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-400 shadow-sm'
                                     }`}
                                     onClick={() => {
@@ -1790,7 +2070,7 @@ export default function WeeklyCalendar() {
                                     }}
                                   >
                                     {/* Status Badge */}
-                                    {activeOnly && isActive && (
+                                    {calendarFilters.activeOnly && isActive && (
                                       <div className="absolute -top-1 -right-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center shadow-md">
                                         <span className="text-white text-xs font-bold">✓</span>
                                       </div>

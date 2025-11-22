@@ -5,17 +5,9 @@
 
 import { SessionData } from '../types';
 import {
-  tTest,
-  confidenceInterval,
   detectAnomaly,
-  forecastLinear,
-  correlation,
   mean,
-  standardDeviation,
   percentageChange,
-  calculateConfidenceScore,
-  TTestResult,
-  ForecastResult,
   AnomalyResult
 } from '../utils/statistics';
 
@@ -198,7 +190,7 @@ export class AdvancedInsightsService {
               zScore: attendanceAnomaly.score
             },
             context,
-            suggestedActions: this.generateAnomalyActions(attendanceAnomaly, session),
+            suggestedActions: this.generateAnomalyActions(attendanceAnomaly),
             relatedFactors
           });
         }
@@ -356,7 +348,7 @@ export class AdvancedInsightsService {
     
     return {
       trainer,
-      strengths: this.identifyTrainerStrengths(trainerSessions, allTrainersSessions),
+      strengths: this.identifyTrainerStrengths(trainerSessions),
       improvements: this.identifyImprovementAreas(trainerSessions, allTrainersSessions),
       optimalSlots,
       peerComparison: {
@@ -609,7 +601,7 @@ export class AdvancedInsightsService {
     return recommendations;
   }
 
-  private static generateAnomalyActions(anomaly: AnomalyResult, session: SessionData): string[] {
+  private static generateAnomalyActions(anomaly: AnomalyResult): string[] {
     const actions: string[] = [];
     
     if (anomaly.deviationPercent < 0) {
@@ -655,7 +647,7 @@ export class AdvancedInsightsService {
     return recs.length > 0 ? recs : ['Continue monitoring and gather more data'];
   }
 
-  private static identifyTrainerStrengths(trainerSessions: SessionData[], allSessions: SessionData[]): string[] {
+  private static identifyTrainerStrengths(trainerSessions: SessionData[]): string[] {
     const strengths: string[] = [];
     
     // Check if strong in specific class types

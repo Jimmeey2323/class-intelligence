@@ -324,7 +324,7 @@ export function forecastLinear(values: number[], periodsAhead: number = 1): Fore
 /**
  * Exponential smoothing forecast
  */
-export function forecastExponential(values: number[], alpha: number = 0.3, periodsAhead: number = 1): number {
+export function forecastExponential(values: number[], alpha: number = 0.3): number {
   if (values.length === 0) return 0;
   
   let forecast = values[0];
@@ -341,7 +341,7 @@ export function forecastExponential(values: number[], alpha: number = 0.3, perio
 export function correlation(x: number[], y: number[]): number {
   if (x.length !== y.length || x.length < 2) return 0;
   
-  const n = x.length;
+  // length omitted (was unused)
   const meanX = mean(x);
   const meanY = mean(y);
   

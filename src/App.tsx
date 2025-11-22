@@ -7,11 +7,12 @@ import Rankings from './components/Rankings';
 import MetricsCardsEnhanced from './components/MetricsCardsEnhanced';
 import { FormatIntelligence } from './components/FormatIntelligence';
 import WeeklyCalendar from './components/WeeklyCalendar';
+import ProScheduler from './components/ProScheduler';
 import AIInsights from './components/AIInsights';
 import SmartScheduling from './components/SmartScheduling';
-import { LayoutDashboard, TrendingUp, Calendar, Brain, Zap } from 'lucide-react';
+import { LayoutDashboard, TrendingUp, Calendar, Brain, Zap, Target } from 'lucide-react';
 
-type ViewTab = 'dashboard' | 'formats' | 'calendar' | 'ai-insights' | 'smart-scheduling';
+type ViewTab = 'dashboard' | 'formats' | 'calendar' | 'pro-scheduler' | 'ai-insights' | 'smart-scheduling';
 
 function App() {
   const { rawData } = useDashboardStore();
@@ -88,6 +89,17 @@ function App() {
             Weekly Calendar
           </button>
           <button
+            onClick={() => setActiveView('pro-scheduler')}
+            className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
+              activeView === 'pro-scheduler'
+                ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
+                : 'text-gray-700 hover:bg-gray-100'
+            }`}
+          >
+            <Target className="w-5 h-5" />
+            Pro Scheduler
+          </button>
+          <button
             onClick={() => setActiveView('ai-insights')}
             className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
               activeView === 'ai-insights'
@@ -140,6 +152,11 @@ function App() {
       {/* Weekly Calendar View */}
       {hasData && activeView === 'calendar' && (
         <WeeklyCalendar />
+      )}
+
+      {/* Pro Scheduler View */}
+      {hasData && activeView === 'pro-scheduler' && (
+        <ProScheduler />
       )}
 
       {/* AI Insights View */}
