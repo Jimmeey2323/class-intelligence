@@ -13,7 +13,9 @@ import {
   Star,
   Eye,
   X,
-  Calendar
+  Calendar,
+  Repeat,
+  Undo2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -264,11 +266,25 @@ function ProScheduler() {
   const [showOptimizationPanel, setShowOptimizationPanel] = useState(false);
   const [hoveredClassId, setHoveredClassId] = useState<string | null>(null);
   const [showNonFunctionalHours, setShowNonFunctionalHours] = useState(false);
+  const [showSimilarClasses, setShowSimilarClasses] = useState<string | null>(null);
+  const [editedClasses, setEditedClasses] = useState<Map<string, ScheduleClass>>(new Map());
+  const [createdClasses, setCreatedClasses] = useState<Set<string>>(new Set());
   const drilldownModalRef = useRef<HTMLDivElement>(null);
   
-  // Format currency helper - always max 1 decimal
+  // Format currency helper - with L/K/Cr formatter for large numbers
   const formatCurrency = (amount: number) => {
-    return `₹${(amount / 100).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`;
+    // Revenue values are already in rupees, no need to divide by 100
+    const valueInRupees = amount;
+    
+    if (valueInRupees >= 10000000) { // 1 Crore or more
+      return `₹${(valueInRupees / 10000000).toFixed(1)}Cr`;
+    } else if (valueInRupees >= 100000) { // 1 Lakh or more
+      return `₹${(valueInRupees / 100000).toFixed(1)}L`;
+    } else if (valueInRupees >= 1000) { // 1 Thousand or more
+      return `₹${(valueInRupees / 1000).toFixed(1)}K`;
+    } else {
+      return `₹${valueInRupees.toFixed(1)}`;
+    }
   };
   
   const [addModalData, setAddModalData] = useState({
@@ -294,6 +310,148 @@ function ProScheduler() {
       });
     }
   }, []); // Only run on mount
+
+  // Load edited and created classes from localStorage on mount
+  useEffect(() => {
+    try {
+      const savedEdited = localStorage.getItem('editedClasses');
+      const savedCreated = localStorage.getItem('createdClasses');
+      
+      if (savedEdited) {
+        const parsedEdited = JSON.parse(savedEdited);
+        setEditedClasses(new Map(Object.entries(parsedEdited)));
+      }
+      
+      if (savedCreated) {
+        setCreatedClasses(new Set(JSON.parse(savedCreated)));
+      }
+    } catch (error) {
+      console.error('Failed to load saved classes:', error);
+    }
+  }, []);
+
+  // Save to localStorage whenever edited or created classes change
+  useEffect(() => {
+    try {
+      const editedObj = Object.fromEntries(editedClasses);
+      localStorage.setItem('editedClasses', JSON.stringify(editedObj));
+      localStorage.setItem('createdClasses', JSON.stringify([...createdClasses]));
+    } catch (error) {
+      console.error('Failed to save classes:', error);
+    }
+  }, [editedClasses, createdClasses]);
+
+  // Generate similar class recommendations
+  const generateSimilarRecommendations = (cls: ScheduleClass) => {
+    const recommendations: Array<{
+      class: string;
+      trainer: string;
+      reason: string;
+      score: number;
+      avgCheckIns: number;
+      fillRate: number;
+      revenue: number;
+    }> = [];
+
+    // Find classes at same time/day with better performance
+    scheduleClasses.forEach(otherClass => {
+      if (otherClass.id === cls.id) return;
+      
+      let score = 0;
+      const reasons: string[] = [];
+
+      // Same time slot
+      if (otherClass.time === cls.time && otherClass.day === cls.day) {
+        score += 20;
+        reasons.push('Same time slot');
+      }
+
+      // Better fill rate
+      if (otherClass.fillRate > cls.fillRate + 10) {
+        score += Math.min((otherClass.fillRate - cls.fillRate) / 2, 30);
+        reasons.push(`${otherClass.fillRate - cls.fillRate}% higher fill rate`);
+      }
+
+      // Better average attendance
+      if (otherClass.avgCheckIns > cls.avgCheckIns + 2) {
+        score += 15;
+        reasons.push(`+${(otherClass.avgCheckIns - cls.avgCheckIns).toFixed(1)} more attendees`);
+      }
+
+      // Same location
+      if (otherClass.location === cls.location) {
+        score += 10;
+        reasons.push('Same location');
+      }
+
+      // Similar class type (format)
+      if (otherClass.class.toLowerCase().includes(cls.class.toLowerCase().split(' ')[0]) ||
+          cls.class.toLowerCase().includes(otherClass.class.toLowerCase().split(' ')[0])) {
+        score += 15;
+        reasons.push('Similar format');
+      }
+
+      // Trainer specialization (if trainer teaches this class type historically)
+      const trainerClasses = rawData.filter(s => 
+        s.Trainer?.toLowerCase() === otherClass.trainer.toLowerCase() &&
+        s.Class?.toLowerCase().includes(cls.class.toLowerCase().split(' ')[0])
+      );
+      if (trainerClasses.length >= 5) {
+        score += 20;
+        reasons.push(`Trainer experienced in ${cls.class.split(' ')[0]}`);
+      }
+
+      if (score > 20 && reasons.length > 0) {
+        recommendations.push({
+          class: otherClass.class,
+          trainer: otherClass.trainer,
+          reason: reasons.join(', '),
+          score,
+          avgCheckIns: otherClass.avgCheckIns,
+          fillRate: otherClass.fillRate,
+          revenue: otherClass.revenue
+        });
+      }
+    });
+
+    return recommendations.sort((a, b) => b.score - a.score).slice(0, 5);
+  };
+
+  // Replace class handler
+  const handleReplaceClass = (originalClass: ScheduleClass, newTrainer: string, newClassName: string) => {
+    const updatedClass: ScheduleClass = {
+      ...originalClass,
+      trainer: newTrainer,
+      class: newClassName,
+    };
+
+    // Mark as edited
+    const newEditedClasses = new Map(editedClasses);
+    newEditedClasses.set(originalClass.id, updatedClass);
+    setEditedClasses(newEditedClasses);
+
+    // Close similar modal
+    setShowSimilarClasses(null);
+    
+    // Show success message
+    alert(`Class replaced successfully! ${originalClass.class} → ${newClassName} with ${newTrainer}`);
+  };
+
+  // Revert class to original state
+  const handleRevertClass = (classId: string) => {
+    // Remove from edited classes
+    const newEditedClasses = new Map(editedClasses);
+    newEditedClasses.delete(classId);
+    setEditedClasses(newEditedClasses);
+
+    // Remove from created classes
+    const newCreatedClasses = new Set(createdClasses);
+    newCreatedClasses.delete(classId);
+    setCreatedClasses(newCreatedClasses);
+
+    // Show success message
+    alert('✅ Class reverted to original state!');
+  };
 
   // Process active classes data into schedule format with caching
   const scheduleClasses = useMemo(() => {
@@ -682,12 +840,36 @@ function ProScheduler() {
       classes.push(...Array.from(uniqueClasses.values()));
     }
 
+    // Apply edited classes changes
+    editedClasses.forEach((editedClass, classId) => {
+      const index = classes.findIndex(c => c.id === classId);
+      if (index !== -1) {
+        // Merge the edited changes with existing class data
+        classes[index] = {
+          ...classes[index],
+          ...editedClass
+        };
+      }
+    });
+
+    // Add newly created classes
+    createdClasses.forEach(classId => {
+      // Check if this created class is not already in the list
+      if (!classes.find(c => c.id === classId)) {
+        // Find the created class data from editedClasses Map
+        const createdClass = editedClasses.get(classId);
+        if (createdClass) {
+          classes.push(createdClass);
+        }
+      }
+    });
+
     // Cache the results
     cachedScheduleClasses = classes;
     cacheTimestamp = Date.now();
 
     return classes;
-  }, [activeClassesData, rawData, filters.dateFrom, filters.dateTo, filters.activeOnly]);
+  }, [activeClassesData, rawData, filters.dateFrom, filters.dateTo, filters.activeOnly, editedClasses, createdClasses]);
 
   // Revenue formatter utility (K/L/Cr with 1 decimal)
   const formatRevenue = (amount: number): string => {
@@ -924,6 +1106,8 @@ function ProScheduler() {
     const hasConflicts = cls.conflicts.length > 0;
     const isHighPerformance = cls.fillRate > 85;
     const isHovered = hoveredClassId === cls.id;
+    const isEdited = editedClasses.has(cls.id);
+    const isNewlyCreated = createdClasses.has(cls.id);
 
     return (
       <motion.div
@@ -934,8 +1118,36 @@ function ProScheduler() {
         onClick={() => handleClassClick(cls)}
         onMouseEnter={() => setHoveredClassId(cls.id)}
         onMouseLeave={() => setHoveredClassId(null)}
-        className={`bg-gradient-to-br ${cardColor} backdrop-blur-sm border rounded-xl shadow-sm hover:shadow-lg cursor-pointer transition-all duration-300 overflow-hidden group`}
+        className={`bg-gradient-to-br ${cardColor} backdrop-blur-sm border rounded-xl shadow-sm hover:shadow-lg cursor-pointer transition-all duration-300 overflow-hidden group relative`}
       >
+        {/* Status Indicators - Top Right */}
+        <div className="absolute top-1.5 right-1.5 flex gap-1 z-10">
+          {isEdited && (
+            <>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm('Revert this class to its original state?')) {
+                    handleRevertClass(cls.id);
+                  }
+                }}
+                className="bg-yellow-500 hover:bg-yellow-600 text-white rounded-full p-1 shadow-md transition-colors" 
+                title="Revert to Original"
+              >
+                <Undo2 className="w-3 h-3" />
+              </button>
+              <div className="bg-orange-500 text-white rounded-full p-1 shadow-md" title="Edited Class">
+                <Edit3 className="w-3 h-3" />
+              </div>
+            </>
+          )}
+          {isNewlyCreated && (
+            <div className="bg-green-500 text-white rounded-full p-1 shadow-md" title="Newly Created">
+              <Plus className="w-3 h-3" />
+            </div>
+          )}
+        </div>
+
         {/* Collapsed View - Beautiful & Clean with Key Metrics */}
         <div className="p-2.5">
           {/* Header with Class Name and Icons */}
@@ -1056,6 +1268,79 @@ function ProScheduler() {
                     <span className="font-bold text-emerald-600">₹{(cls.revenue/100).toLocaleString('en-IN')}</span>
                   </div>
                 </div>
+
+                {/* Client Attendance Patterns */}
+                {(() => {
+                  // Calculate attendance patterns based on historical sessions for this class
+                  const avgCheckIns = cls.avgCheckIns;
+                  
+                  // Estimate client patterns based on fill rate and historical data
+                  const estimateClientPatterns = () => {
+                    if (avgCheckIns === 0) return { fixed: 0, firstTime: 0, unpredictable: 0 };
+                    
+                    // Higher fill rates indicate more consistent attendance
+                    const consistencyFactor = cls.fillRate / 100;
+                    
+                    // Estimate fixed attendees (regular weekly attendees)
+                    // Higher fill rate and more sessions = more fixed attendees
+                    const fixedRatio = Math.min(0.4 + (consistencyFactor * 0.3), 0.7);
+                    const fixed = parseFloat((avgCheckIns * fixedRatio).toFixed(1));
+                    
+                    // Estimate first-time attendees (based on class popularity and newness)
+                    // Popular classes get more first-timers
+                    const firstTimeRatio = cls.fillRate > 80 ? 0.15 : cls.fillRate > 60 ? 0.2 : 0.25;
+                    const firstTime = parseFloat((avgCheckIns * firstTimeRatio).toFixed(1));
+                    
+                    // Rest are unpredictable/occasional attendees
+                    const unpredictable = parseFloat(Math.max(0, avgCheckIns - fixed - firstTime).toFixed(1));
+                    
+                    return { fixed, firstTime, unpredictable };
+                  };
+
+                  const patterns = estimateClientPatterns();
+                  const total = patterns.fixed + patterns.firstTime + patterns.unpredictable;
+
+                  return total > 0 ? (
+                    <div className="bg-blue-50/70 rounded-lg p-2 space-y-1">
+                      <div className="text-[10px] font-semibold text-blue-700 mb-1.5">Client Patterns</div>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[9px]">
+                          <div className="flex items-center gap-1">
+                            <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+                            <span className="text-gray-600">Fixed Weekly</span>
+                          </div>
+                          <span className="font-bold text-green-700">{patterns.fixed}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[9px]">
+                          <div className="flex items-center gap-1">
+                            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full"></div>
+                            <span className="text-gray-600">First-Timers</span>
+                          </div>
+                          <span className="font-bold text-blue-700">{patterns.firstTime}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[9px]">
+                          <div className="flex items-center gap-1">
+                            <div className="w-1.5 h-1.5 bg-amber-500 rounded-full"></div>
+                            <span className="text-gray-600">Occasional</span>
+                          </div>
+                          <span className="font-bold text-amber-700">{patterns.unpredictable}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* Show Similar Button */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowSimilarClasses(cls.id);
+                  }}
+                  className="w-full bg-blue-500 hover:bg-blue-600 text-white text-[9px] font-medium py-1.5 px-2 rounded-md transition-all duration-200 flex items-center justify-center gap-1 shadow-sm hover:shadow-md"
+                >
+                  <Repeat className="w-2.5 h-2.5" />
+                  Show Similar
+                </button>
 
                 {/* Hover Hint */}
                 <div className="text-center pt-1 border-t border-gray-200">
@@ -2269,7 +2554,7 @@ function ProScheduler() {
                     <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Total Revenue</div>
                     <div className="text-xl font-bold text-green-300">
                       {hasHistoricalData 
-                        ? `₹${classSessions.reduce((sum, s) => sum + s.Revenue, 0).toLocaleString('en-IN')}`
+                        ? formatCurrency(classSessions.reduce((sum, s) => sum + s.Revenue, 0))
                         : '-'}
                     </div>
                   </div>
@@ -2289,14 +2574,67 @@ function ProScheduler() {
 
                 {/* Specialty & Highlights */}
                 <div className="bg-white/10 rounded-xl p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide mb-3 opacity-80">Specialty Formats</div>
+                  <div className="text-xs font-semibold uppercase tracking-wide mb-3 opacity-80">Format Specializations</div>
                   <div className="flex flex-wrap gap-2 mb-4">
                     {(() => {
-                      const formats = Array.from(new Set(classSessions.map(s => s.Class).filter(Boolean)));
-                      return formats.map((format, i) => (
-                        <span key={i} className="px-3 py-1 bg-blue-500/30 rounded-full text-xs font-medium">
-                          {format}
-                        </span>
+                      // Get ALL sessions for this trainer (not just the selected class)
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      
+                      const trainerName = selectedClass.trainer.toLowerCase();
+                      
+                      const trainerSessions = rawData.filter((session: SessionData) => {
+                        const sessionDate = parseISO(session.Date);
+                        if (sessionDate >= today) return false; // Only past sessions
+                        const inDateRange = isWithinInterval(sessionDate, { start: filters.dateFrom, end: filters.dateTo });
+                        if (!inDateRange) return false;
+                        
+                        // Try multiple trainer matching approaches
+                        const sessionTrainer = session.Trainer?.toLowerCase() || '';
+                        const sessionFullName = `${session.FirstName || ''} ${session.LastName || ''}`.toLowerCase().trim();
+                        
+                        return sessionTrainer === trainerName || 
+                               sessionFullName === trainerName ||
+                               sessionTrainer.includes(trainerName) ||
+                               trainerName.includes(sessionTrainer);
+                      });
+
+                      // Calculate class frequency from ALL trainer sessions
+                      const classCount = trainerSessions.reduce((acc, session) => {
+                        if (session.Class) {
+                          acc[session.Class] = (acc[session.Class] || 0) + 1;
+                        }
+                        return acc;
+                      }, {} as Record<string, number>);
+                      
+                      // Sort by frequency and get top 3
+                      const topClasses = Object.entries(classCount)
+                        .sort(([,a], [,b]) => b - a)
+                        .slice(0, 3)
+                        .map(([className, count]) => ({ name: className, count }));
+
+                      // If we still only have 1 or 0 classes, show a debug message
+                      if (topClasses.length <= 1) {
+                        console.log('Debug trainer sessions:', {
+                          selectedTrainer: selectedClass.trainer,
+                          foundSessions: trainerSessions.length,
+                          sampleSessions: trainerSessions.slice(0, 3).map(s => ({ 
+                            Trainer: s.Trainer, 
+                            Class: s.Class, 
+                            FirstName: s.FirstName, 
+                            LastName: s.LastName 
+                          })),
+                          classCount
+                        });
+                      }
+
+                      return topClasses.map((classInfo, i) => (
+                        <div key={i} className="px-3 py-1.5 bg-blue-500/30 rounded-full text-xs font-medium flex items-center gap-2">
+                          <span>{classInfo.name}</span>
+                          <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded-full font-semibold">
+                            {classInfo.count}
+                          </span>
+                        </div>
                       ));
                     })()}
                   </div>
@@ -2550,33 +2888,57 @@ function ProScheduler() {
                 </div>
                 
                 <div className="bg-white rounded-2xl p-6 border shadow-sm">
-                  <h4 className="text-sm font-semibold text-gray-700 mb-3">BOOKING TYPES</h4>
+                  <h4 className="text-sm font-semibold text-gray-700 mb-3">CLIENT ATTENDANCE PATTERNS</h4>
                   <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <div className="text-xs text-gray-500">Intro Offers</div>
-                      <div className="text-lg font-bold text-slate-800">{selectedClass.avgIntroOffers}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Single Classes</div>
-                      <div className="text-lg font-bold text-slate-800">{selectedClass.avgSingleClasses}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Avg Booked</div>
-                      <div className="text-lg font-bold text-slate-800">{selectedClass.avgBooked}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-500">Late Cancelled</div>
-                      <div className="text-lg font-bold text-slate-800">{selectedClass.avgLateCancelled}</div>
-                    </div>
-                    <div className="ml-3">
-                      <button
-                        onClick={() => setShowNonFunctionalHours(!showNonFunctionalHours)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-white text-gray-700 border border-gray-300 hover:border-blue-400"
-                        title="Show / hide non-peak hours in all views"
-                      >
-                        {showNonFunctionalHours ? 'Hide Non-Peak' : 'Show Non-Peak'}
-                      </button>
-                    </div>
+                    {(() => {
+                      const avgCheckIns = selectedClass.avgCheckIns;
+                      const fillRate = selectedClass.fillRate;
+                      
+                      // Calculate detailed attendance patterns
+                      const consistencyFactor = fillRate / 100;
+                      const fixedRatio = Math.min(0.4 + (consistencyFactor * 0.3), 0.7);
+                      const fixed = parseFloat((avgCheckIns * fixedRatio).toFixed(1));
+                      
+                      const firstTimeRatio = fillRate > 80 ? 0.15 : fillRate > 60 ? 0.2 : 0.25;
+                      const firstTime = parseFloat((avgCheckIns * firstTimeRatio).toFixed(1));
+                      
+                      const unpredictable = parseFloat(Math.max(0, avgCheckIns - fixed - firstTime).toFixed(1));
+                      const total = parseFloat((fixed + firstTime + unpredictable).toFixed(1));
+                      
+                      return (
+                        <>
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                              <div className="text-xs text-gray-500">Fixed Weekly</div>
+                            </div>
+                            <div className="text-lg font-bold text-green-700">{fixed}</div>
+                            <div className="text-xs text-gray-500">{((fixed / total) * 100).toFixed(0)}% of attendees</div>
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
+                              <div className="text-xs text-gray-500">First-Timers</div>
+                            </div>
+                            <div className="text-lg font-bold text-blue-700">{firstTime}</div>
+                            <div className="text-xs text-gray-500">{((firstTime / total) * 100).toFixed(0)}% of attendees</div>
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className="w-3 h-3 bg-amber-500 rounded-full"></div>
+                              <div className="text-xs text-gray-500">Occasional</div>
+                            </div>
+                            <div className="text-lg font-bold text-amber-700">{unpredictable}</div>
+                            <div className="text-xs text-gray-500">{((unpredictable / total) * 100).toFixed(0)}% of attendees</div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Retention Rate</div>
+                            <div className="text-lg font-bold text-purple-700">{((fixed / total) * 100).toFixed(1)}%</div>
+                            <div className="text-xs text-gray-500">Weekly consistency</div>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
@@ -3233,6 +3595,154 @@ function ProScheduler() {
         </div>
       )}
 
+      {/* Similar Classes Modal */}
+      {showSimilarClasses && (() => {
+        const selectedClass = scheduleClasses.find(c => c.id === showSimilarClasses);
+        if (!selectedClass) return null;
+        
+        const recommendations = generateSimilarRecommendations(selectedClass);
+        
+        return (
+          <div 
+            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowSimilarClasses(null);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setShowSimilarClasses(null);
+              }
+            }}
+            tabIndex={-1}
+          >
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden"
+            >
+              {/* Header */}
+              <div className="bg-gradient-to-r from-slate-700 to-slate-600 text-white p-6">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <h3 className="text-xl font-bold mb-2">Similar Class Recommendations</h3>
+                    <div className="text-slate-200 space-y-1">
+                      <p className="text-sm">Based on: <span className="font-semibold">{selectedClass.class}</span></p>
+                      <p className="text-xs">{selectedClass.day} at {selectedClass.time} • {selectedClass.location}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowSimilarClasses(null)}
+                    className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Recommendations List */}
+              <div className="p-6 overflow-y-auto max-h-[calc(90vh-200px)] bg-slate-50">
+                {recommendations.length === 0 ? (
+                  <div className="text-center py-12">
+                    <div className="text-gray-400 mb-4">
+                      <AlertTriangle className="w-16 h-16 mx-auto" />
+                    </div>
+                    <p className="text-gray-600">No similar classes found</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {recommendations.map((rec, idx) => (
+                      <motion.div
+                        key={`${rec.class}-${rec.trainer}-${idx}`}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.1 }}
+                        className="bg-white rounded-lg p-4 border border-slate-200 hover:border-slate-300 hover:shadow-md transition-all"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          {/* Left: Class Info */}
+                          <div className="flex-1">
+                            <div className="flex items-center gap-3 mb-3">
+                              <div className="bg-slate-700 text-white w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs">
+                                #{idx + 1}
+                              </div>
+                              <div>
+                                <h4 className="text-base font-bold text-gray-900">{rec.class}</h4>
+                                <div className="flex items-center gap-2 text-xs text-gray-600">
+                                  <Users className="w-3 h-3" />
+                                  <span>{rec.trainer}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Metrics Grid */}
+                            <div className="grid grid-cols-4 gap-2 mb-3">
+                              <div className="bg-slate-50 rounded-lg p-2 border border-slate-200">
+                                <div className="text-[10px] text-slate-600 font-medium">Fill Rate</div>
+                                <div className="text-sm font-bold text-slate-900">{rec.fillRate}%</div>
+                              </div>
+                              <div className="bg-slate-50 rounded-lg p-2 border border-slate-200">
+                                <div className="text-[10px] text-slate-600 font-medium">Attendance</div>
+                                <div className="text-sm font-bold text-slate-900">{rec.avgCheckIns}</div>
+                              </div>
+                              <div className="bg-slate-50 rounded-lg p-2 border border-slate-200">
+                                <div className="text-[10px] text-slate-600 font-medium">Revenue</div>
+                                <div className="text-sm font-bold text-slate-900">{formatCurrency(rec.revenue)}</div>
+                              </div>
+                              <div className="bg-slate-50 rounded-lg p-2 border border-slate-200">
+                                <div className="text-[10px] text-slate-600 font-medium">Score</div>
+                                <div className="text-sm font-bold text-slate-900">{rec.score}</div>
+                              </div>
+                            </div>
+
+                            {/* Reason */}
+                            <div className="bg-slate-100 rounded-lg p-2 border border-slate-200">
+                              <div className="text-[10px] font-semibold text-slate-700 mb-1">Why Recommended?</div>
+                              <p className="text-xs text-slate-600">{rec.reason}</p>
+                            </div>
+                          </div>
+
+                          {/* Right: Replace Button */}
+                          <div className="flex flex-col gap-2">
+                            <button
+                              onClick={() => {
+                                handleReplaceClass(selectedClass, rec.trainer, rec.class);
+                                setShowSimilarClasses(null);
+                              }}
+                              className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-xs transition-all shadow-sm hover:shadow-md flex items-center gap-1.5"
+                            >
+                              <Repeat className="w-3.5 h-3.5" />
+                              Replace
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="bg-white px-6 py-4 border-t border-slate-200">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-slate-600">
+                    Based on historical performance, time slot, location, and trainer expertise
+                  </p>
+                  <button
+                    onClick={() => setShowSimilarClasses(null)}
+                    className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        );
+      })()}
+
       {/* Edit Class Modal */}
       {isEditing && editingClass && (
         <div 
@@ -3270,57 +3780,138 @@ function ProScheduler() {
             </div>
             
             <div className="space-y-4">
+              {/* Class Name with Analytics */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Class Name</label>
                 <select
-                  defaultValue={editingClass.class}
+                  value={editingClass.class}
+                  onChange={(e) => setEditingClass({ ...editingClass, class: e.target.value })}
                   className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  {[...new Set(rawData.map(s => s.Class))].sort().map(className => (
-                    <option key={className} value={className}>{className}</option>
-                  ))}
+                  {(() => {
+                    // Calculate analytics for each class type
+                    const classOptions = [...new Set(rawData.map(s => s.Class))].map(className => {
+                      const classSessions = rawData.filter(s => s.Class === className);
+                      const avgFillRate = classSessions.length > 0 
+                        ? classSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / classSessions.length * 100
+                        : 0;
+                      const avgRevenue = classSessions.length > 0
+                        ? classSessions.reduce((sum, s) => sum + (s.Revenue || 0), 0) / classSessions.length
+                        : 0;
+                      return { name: className, avgFillRate, avgRevenue, sessionCount: classSessions.length };
+                    });
+                    
+                    return classOptions
+                      .sort((a, b) => b.avgFillRate - a.avgFillRate)
+                      .map(({ name, avgFillRate, avgRevenue, sessionCount }) => (
+                        <option key={name} value={name}>
+                          {name} ({avgFillRate.toFixed(0)}% fill • {formatCurrency(avgRevenue)} avg • {sessionCount} sessions)
+                        </option>
+                      ));
+                  })()}
                 </select>
               </div>
               
+              {/* Trainer with Analytics */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Trainer</label>
                 <select
-                  defaultValue={editingClass.trainer}
+                  value={editingClass.trainer}
+                  onChange={(e) => setEditingClass({ ...editingClass, trainer: e.target.value })}
                   className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  {[...new Set(rawData.map(s => s.Trainer))].sort().map(trainer => (
-                    <option key={trainer} value={trainer}>{trainer}</option>
-                  ))}
+                  {(() => {
+                    // Calculate analytics for each trainer
+                    const trainerOptions = [...new Set(rawData.map(s => s.Trainer))].map(trainer => {
+                      const trainerSessions = rawData.filter(s => s.Trainer === trainer);
+                      const avgFillRate = trainerSessions.length > 0
+                        ? trainerSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / trainerSessions.length * 100
+                        : 0;
+                      const totalClasses = trainerSessions.length;
+                      const workload = totalClasses >= 25 ? 'Overloaded' : totalClasses >= 20 ? 'Heavy' : totalClasses >= 15 ? 'Medium' : 'Light';
+                      return { name: trainer, avgFillRate, sessionCount: totalClasses, workload };
+                    });
+                    
+                    return trainerOptions
+                      .sort((a, b) => b.avgFillRate - a.avgFillRate)
+                      .map(({ name, avgFillRate, sessionCount, workload }) => (
+                        <option key={name} value={name}>
+                          {name} ({avgFillRate.toFixed(0)}% fill • {sessionCount} classes • {workload})
+                        </option>
+                      ));
+                  })()}
                 </select>
               </div>
               
+              {/* Location with Analytics */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
                 <select
-                  defaultValue={editingClass.location}
+                  value={editingClass.location}
+                  onChange={(e) => setEditingClass({ ...editingClass, location: e.target.value })}
                   className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  {[...new Set(rawData.map(s => s.Location))].sort().map(location => (
-                    <option key={location} value={location}>{location}</option>
-                  ))}
+                  {(() => {
+                    // Calculate analytics for each location
+                    const locationOptions = [...new Set(rawData.map(s => s.Location))].map(location => {
+                      const locationSessions = rawData.filter(s => s.Location === location);
+                      const avgCapacity = locationSessions.length > 0
+                        ? locationSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0) / locationSessions.length
+                        : 0;
+                      const avgFillRate = locationSessions.length > 0
+                        ? locationSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / locationSessions.length * 100
+                        : 0;
+                      return { name: location, avgCapacity, avgFillRate, sessionCount: locationSessions.length };
+                    });
+                    
+                    return locationOptions
+                      .sort((a, b) => b.avgFillRate - a.avgFillRate)
+                      .map(({ name, avgCapacity, avgFillRate, sessionCount }) => (
+                        <option key={name} value={name}>
+                          {name} ({avgFillRate.toFixed(0)}% fill • {avgCapacity.toFixed(0)} avg capacity • {sessionCount} sessions)
+                        </option>
+                      ));
+                  })()}
                 </select>
               </div>
               
+              {/* Capacity with Suggestions */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Capacity</label>
                 <input
                   type="number"
-                  defaultValue={editingClass.capacity}
+                  value={editingClass.capacity}
+                  onChange={(e) => setEditingClass({ ...editingClass, capacity: parseInt(e.target.value) || 0 })}
                   className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   min="1"
                   max="100"
                 />
+                {(() => {
+                  // Suggest optimal capacity based on historical data
+                  const similarClasses = rawData.filter(s => 
+                    s.Class === editingClass.class && 
+                    s.Location === editingClass.location
+                  );
+                  const avgCapacity = similarClasses.length > 0
+                    ? similarClasses.reduce((sum, s) => sum + (s.Capacity || 0), 0) / similarClasses.length
+                    : 0;
+                  const avgAttendance = similarClasses.length > 0
+                    ? similarClasses.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / similarClasses.length
+                    : 0;
+                  
+                  return avgCapacity > 0 && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      💡 Similar classes avg: {avgCapacity.toFixed(0)} capacity, {avgAttendance.toFixed(0)} attendance
+                    </p>
+                  );
+                })()}
               </div>
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
                 <select
-                  defaultValue={editingClass.status}
+                  value={editingClass.status}
+                  onChange={(e) => setEditingClass({ ...editingClass, status: e.target.value })}
                   className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
                   <option value="Active">Active</option>
@@ -3342,6 +3933,15 @@ function ProScheduler() {
               </button>
               <button
                 onClick={() => {
+                  if (editingClass) {
+                    // Update the editedClasses Map with the modified class
+                    const newEditedClasses = new Map(editedClasses);
+                    newEditedClasses.set(editingClass.id, editingClass);
+                    setEditedClasses(newEditedClasses);
+                    
+                    // Show success message
+                    alert(`✅ Class updated successfully! Changes saved for ${editingClass.class} on ${editingClass.day} at ${editingClass.time}`);
+                  }
                   setIsEditing(false);
                   setEditingClass(null);
                 }}

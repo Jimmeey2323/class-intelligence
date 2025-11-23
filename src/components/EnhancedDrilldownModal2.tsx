@@ -212,15 +212,15 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                     const avgCapacityUtilized = metrics.totalCapacity > 0 ? (metrics.totalCheckIns / metrics.totalCapacity) * 100 : 0;
                     const avgCancellationImpact = metrics.totalCancellations > 0 ? metrics.revenueLostToCancellation / metrics.totalCancellations : 0;
                     return (
-                      <div className="md:w-1/3 bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white p-8 flex flex-col gap-6">
+                      <div className="md:w-1/3 bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white p-8 flex flex-col gap-6 overflow-y-auto max-h-[90vh]">
                         <div className="flex items-start justify-between">
-                          <h2 className="text-2xl font-bold tracking-tight">{trainerName}</h2>
+                          <h2 className="text-2xl font-bold tracking-tight">{primaryClass}</h2>
                           <button onClick={onClose} className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors" aria-label="Close profile">
                             <X className="w-5 h-5" />
                           </button>
                         </div>
                         {/* 3D Animated Performance Graph */}
-                        <div className="relative w-full aspect-[3/4] rounded-2xl overflow-hidden shadow-xl border border-white/20 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                        <div className="relative w-full aspect-[3/4] rounded-2xl shadow-xl border border-white/20 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
                           <div className="absolute inset-0 flex items-center justify-center p-6">
                             <div className="w-full h-full relative" style={{ perspective: '1000px' }}>
                               {/* 3D Bar Chart Animation */}
@@ -327,9 +327,11 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                           <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 col-span-2"><div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Total Revenue</div><div className="text-xl font-bold text-green-300">{formatCurrency(metrics.totalRevenue)}</div></div>
                         </div>
                         <div className="space-y-3">
-                          <div className="bg-white/10 rounded-xl p-4" aria-label="Trainer profile summary">
-                            <div className="text-xs font-semibold uppercase tracking-wide mb-2 opacity-80">Profile Summary</div>
+                          <div className="bg-white/10 rounded-xl p-4" aria-label="Class profile summary">
+                            <div className="text-xs font-semibold uppercase tracking-wide mb-2 opacity-80">Class Details</div>
                             <ul className="space-y-1 text-sm">
+                              <li><span className="opacity-70">Class Name:</span> <span className="font-medium">{primaryClass}</span></li>
+                              <li><span className="opacity-70">Primary Trainer:</span> <span className="font-medium">{trainerName}</span></li>
                               <li><span className="opacity-70">Primary Location:</span> <span className="font-medium">{primaryLocation}</span></li>
                               <li><span className="opacity-70">Active Days:</span> <span className="font-medium">{activeDays}</span></li>
                               <li><span className="opacity-70">Waitlist Rate:</span> <span className="font-medium">{formatPercentage(metrics.waitlistRate)}</span></li>

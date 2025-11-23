@@ -5,20 +5,17 @@ import FilterSection from './components/FilterSection';
 import DataTableEnhanced from './components/DataTableEnhanced';
 import Rankings from './components/Rankings';
 import MetricsCardsEnhanced from './components/MetricsCardsEnhanced';
-import { FormatIntelligence } from './components/FormatIntelligence';
 import ProScheduler from './components/ProScheduler';
-import AIInsights from './components/AIInsights';
 import { MemberBehaviorAnalytics } from './components/MemberBehaviorAnalytics';
-import { LayoutDashboard, TrendingUp, Brain, Target, Users } from 'lucide-react';
+import { LayoutDashboard, Target, Users } from 'lucide-react';
 
-type ViewTab = 'dashboard' | 'formats' | 'pro-scheduler' | 'ai-insights' | 'members';
+type ViewTab = 'dashboard' | 'pro-scheduler' | 'members';
 
 function App() {
   const { rawData } = useDashboardStore();
-  const [showUpload, setShowUpload] = useState(false); // Start hidden, will show if no data loads
+  const [showUpload, setShowUpload] = useState(false);
   const [activeView, setActiveView] = useState<ViewTab>('dashboard');
 
-  // Hide upload once data is loaded
   const hasData = rawData.length > 0;
 
   return (
@@ -34,12 +31,8 @@ function App() {
               <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-900 via-blue-700 to-blue-500 bg-clip-text text-transparent">
                 Class Intelligence Dashboard
               </h1>
-              <p className="text-gray-600 mt-1 flex items-center gap-2">
+              <p className="text-gray-600 mt-1">
                 Comprehensive analytics for your fitness studio operations
-                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-purple-100 to-purple-200 text-purple-700 rounded-full text-xs font-semibold">
-                  <Brain className="w-3 h-3" />
-                  AI Powered
-                </span>
               </p>
             </div>
           </div>
@@ -76,17 +69,6 @@ function App() {
             Main Dashboard
           </button>
           <button
-            onClick={() => setActiveView('formats')}
-            className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
-              activeView === 'formats'
-                ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg'
-                : 'text-gray-700 hover:bg-gray-100'
-            }`}
-          >
-            <TrendingUp className="w-5 h-5" />
-            Format Intelligence
-          </button>
-          <button
             onClick={() => setActiveView('members')}
             className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
               activeView === 'members'
@@ -108,59 +90,26 @@ function App() {
             <Target className="w-5 h-5" />
             Pro Scheduler
           </button>
-          <button
-            onClick={() => setActiveView('ai-insights')}
-            className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
-              activeView === 'ai-insights'
-                ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
-                : 'text-gray-700 hover:bg-gray-100'
-            }`}
-          >
-            <Brain className="w-5 h-5" />
-            AI Insights
-          </button>
         </div>
       )}
 
-      {/* Main Dashboard */}
-            {/* Global Filter Section - applies to all tabs */}
-      {hasData && (
-        <FilterSection />
-      )}
+      {/* Global Filter Section */}
+      {hasData && <FilterSection />}
 
       {/* Main Dashboard View */}
       {hasData && activeView === 'dashboard' && (
         <div className="space-y-8">
-          {/* Metrics Cards */}
           <MetricsCardsEnhanced />
-
-          {/* Rankings */}
           <Rankings />
-
-          {/* Data Table */}
           <DataTableEnhanced />
         </div>
       )}
 
-      {/* Format Intelligence View */}
-      {hasData && activeView === 'formats' && (
-        <FormatIntelligence />
-      )}
-
       {/* Member Analytics View */}
-      {hasData && activeView === 'members' && (
-        <MemberBehaviorAnalytics />
-      )}
+      {hasData && activeView === 'members' && <MemberBehaviorAnalytics />}
 
       {/* Pro Scheduler View */}
-      {hasData && activeView === 'pro-scheduler' && (
-        <ProScheduler />
-      )}
-
-      {/* AI Insights View */}
-      {hasData && activeView === 'ai-insights' && (
-        <AIInsights />
-      )}
+      {hasData && activeView === 'pro-scheduler' && <ProScheduler />}
 
       {/* Footer */}
       {hasData && (
