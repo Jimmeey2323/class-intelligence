@@ -818,6 +818,15 @@ export default function DataTableEnhanced() {
 
   return (
     <div className="space-y-4">
+      {processedData.length === 0 && (
+        <div className="glass-card rounded-2xl p-6 border border-yellow-300 bg-yellow-50/70 text-yellow-800 text-sm">
+          <p className="font-semibold mb-1">No data within current filters.</p>
+          <p>
+            Your dataset dates may lie outside the default range. Date filters were auto-expanded if possible.
+            If still empty, upload a CSV or adjust filters manually.
+          </p>
+        </div>
+      )}
       {/* Control Bar */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}

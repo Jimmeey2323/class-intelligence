@@ -246,6 +246,30 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     console.log(`📈 Session status: ${activeCount} Active, ${inactiveCount} Inactive (${enrichedData.length} total)`);
     
     set({ rawData: enrichedData });
+    // Auto-adjust date filter if current window excludes all data
+    try {
+      const existingFilters = get().filters;
+      const minDate = enrichedData.reduce((min, s) => {
+        const d = new Date(s.Date);
+        return d < min ? d : min;
+      }, new Date(8640000000000000)); // far future sentinel
+      const maxDate = enrichedData.reduce((max, s) => {
+        const d = new Date(s.Date);
+        return d > max ? d : max;
+      }, new Date(0));
+      if (enrichedData.length > 0) {
+        // If existing filter range produces zero rows, expand to data range
+        const currentlyInRange = enrichedData.some(s => {
+          const d = new Date(s.Date);
+          return d >= existingFilters.dateFrom && d <= existingFilters.dateTo;
+        });
+        if (!currentlyInRange) {
+          set({ filters: { ...existingFilters, dateFrom: minDate, dateTo: maxDate } });
+        }
+      }
+    } catch (e) {
+      console.warn('Auto date range adjustment failed', e);
+    }
     get().applyFilters();
   },
   
