@@ -27,6 +27,7 @@ export interface SessionData {
   Class: string;
   Classes: number;
   Waitlisted?: number;
+  NoShow?: number;
   Status?: 'Active' | 'Inactive'; // Calculated field
   FillRate?: number; // Calculated field (CheckedIn/Capacity * 100)
 }

@@ -2190,290 +2190,339 @@ function ProScheduler() {
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-white/70 glass-card rounded-3xl p-6 md:p-8 max-w-6xl w-full max-h-[90vh] overflow-hidden shadow-2xl"
+              className="bg-white/80 glass-card rounded-3xl max-w-7xl w-full max-h-[90vh] overflow-hidden shadow-2xl flex flex-col md:flex-row"
             >
-              {/* Header */}
-              <div className="flex items-start justify-between mb-4 pb-4 border-b px-2">
-                <div>
-                  <div className="flex items-center gap-4">
-                    <div>
-                      <h2 className="text-2xl font-bold text-slate-800 mb-1">{selectedClass.class}</h2>
-                      <div className="flex items-center gap-2 text-sm text-slate-600">
-                        {(() => {
-                          const img = findTrainerImage(selectedClass.trainer);
-                          return img ? (
-                            // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                            <img src={img as string} alt={`${selectedClass.trainer} avatar`} className="w-10 h-10 rounded-full object-cover" />
-                          ) : (
-                            <div className="text-sm font-medium">{selectedClass.trainer}</div>
-                          );
-                        })()}
-                        <div className="text-sm text-slate-500">{selectedClass.trainer}</div>
+              {/* Left Profile Pane */}
+              <div className="md:w-1/3 bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white p-8 flex flex-col gap-6 overflow-y-auto">
+                <div className="flex items-start justify-between">
+                  <h2 className="text-2xl font-bold tracking-tight">{selectedClass.trainer}</h2>
+                  <button
+                    onClick={() => {
+                      setShowDrilldown(false);
+                      setSelectedClass(null);
+                    }}
+                    className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+                    aria-label="Close profile"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Trainer Image */}
+                <div className="relative w-full rounded-2xl overflow-hidden shadow-xl border border-white/20 bg-gradient-to-br from-blue-500 to-indigo-600" style={{ paddingBottom: '133.33%' }}>
+                  {(() => {
+                    const trainerImg = findTrainerImage(selectedClass.trainer);
+                    if (trainerImg) {
+                      return (
+                        <>
+                          <img 
+                            src={trainerImg as string}
+                            alt={selectedClass.trainer} 
+                            className="absolute inset-0 w-full h-full object-cover object-top" 
+                            loading="eager"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
+                        </>
+                      );
+                    }
+                    // Fallback to initials
+                    const initials = selectedClass.trainer.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+                    return (
+                      <div className="absolute inset-0 w-full h-full flex items-center justify-center">
+                        <span className="text-9xl font-bold text-white/90">{initials}</span>
                       </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 text-sm text-slate-500">
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-4 h-4" />
-                      {selectedClass.day} at {selectedClass.time}
-                    </span>
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                      selectedClass.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                    }`}>
-                      {selectedClass.status}
-                    </span>
-                    {hasHistoricalData && (
-                      <span className="text-xs text-gray-500">
-                        {classSessions.length} historical sessions
-                      </span>
-                    )}
+                    );
+                  })()}
+                  <div className="absolute bottom-4 left-4 right-4 flex flex-col gap-1 z-10">
+                    <span className="text-xs uppercase tracking-wider opacity-80">Primary Class</span>
+                    <span className="text-lg font-semibold">{selectedClass.class}</span>
                   </div>
                 </div>
-                <button
-                  onClick={() => setShowDrilldown(false)}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  <X className="w-6 h-6" />
-                </button>
-              </div>
-              
-              {/* Scrollable body */}
-              <div className="overflow-y-auto max-h-[76vh] pr-2">
-              
-              {/* Consolidated Metrics Cards - Silver Theme with Animations */}
-              {hasHistoricalData && (() => {
-                const totalCheckIns = classSessions.reduce((sum, s) => sum + s.CheckedIn, 0);
-                const totalBooked = classSessions.reduce((sum, s) => sum + s.Booked, 0);
-                
-                const totalCapacity = classSessions.reduce((sum, s) => sum + s.Capacity, 0);
-                const totalRevenue = classSessions.reduce((sum, s) => sum + s.Revenue, 0);
-                const emptyClasses = classSessions.filter(s => s.CheckedIn === 0).length;
-                const nonEmptySessions = classSessions.filter(s => s.CheckedIn > 0);
-                
-                const avgCheckInsExcludingEmpty = nonEmptySessions.length > 0 ? nonEmptySessions.reduce((sum, s) => sum + s.CheckedIn, 0) / nonEmptySessions.length : 0;
-                const fillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
-                
-                
-                return (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 px-2">
-                    {/* Sessions */}
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4 }}
-                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
-                    >
-                      <motion.div 
-                        className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-transparent"
-                        initial={{ x: '-100%' }}
-                        animate={{ x: '100%' }}
-                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
-                      />
-                      <div className="relative z-10">
-                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Sessions</div>
-                        <div className="text-3xl font-bold text-gray-900">{classSessions.length}</div>
-                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
-                          <motion.div 
-                            className="bg-gradient-to-r from-blue-500 to-blue-600 h-1.5 rounded-full"
-                            initial={{ width: 0 }}
-                            animate={{ width: '100%' }}
-                            transition={{ duration: 0.8, delay: 0.2 }}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
 
-                    {/* Check-ins */}
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4 }}
-                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
-                    >
-                      <motion.div 
-                        className="absolute inset-0 bg-gradient-to-r from-green-400/20 to-transparent"
-                        initial={{ x: '-100%' }}
-                        animate={{ x: '100%' }}
-                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
-                      />
-                      <div className="relative z-10">
-                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Check-ins</div>
-                        <div className="text-3xl font-bold text-gray-900">{totalCheckIns}</div>
-                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
-                          <motion.div 
-                            className="bg-gradient-to-r from-green-500 to-green-600 h-1.5 rounded-full"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${Math.min(fillRate, 100)}%` }}
-                            transition={{ duration: 0.8, delay: 0.2 }}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
-
-                    {/* Class Avg (Excluding Empty) */}
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4 }}
-                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
-                    >
-                      <motion.div 
-                        className="absolute inset-0 bg-gradient-to-r from-purple-400/20 to-transparent"
-                        initial={{ x: '-100%' }}
-                        animate={{ x: '100%' }}
-                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
-                      />
-                      <div className="relative z-10">
-                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Avg (No Empty)</div>
-                        <div className="text-3xl font-bold text-gray-900">{avgCheckInsExcludingEmpty.toFixed(1)}</div>
-                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
-                          <motion.div 
-                            className="bg-gradient-to-r from-purple-500 to-purple-600 h-1.5 rounded-full"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${Math.min((avgCheckInsExcludingEmpty / 30) * 100, 100)}%` }}
-                            transition={{ duration: 0.8, delay: 0.2 }}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
-
-                    {/* Revenue */}
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4 }}
-                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
-                    >
-                      <motion.div 
-                        className="absolute inset-0 bg-gradient-to-r from-emerald-400/20 to-transparent"
-                        initial={{ x: '-100%' }}
-                        animate={{ x: '100%' }}
-                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
-                      />
-                      <div className="relative z-10">
-                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Revenue</div>
-                        <div className="text-2xl font-bold text-gray-900">{formatCurrency(totalRevenue)}</div>
-                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
-                          <motion.div 
-                            className="bg-gradient-to-r from-emerald-500 to-emerald-600 h-1.5 rounded-full"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${Math.min((totalRevenue / 1000000) * 100, 100)}%` }}
-                            transition={{ duration: 0.8, delay: 0.2 }}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
-
-                    {/* Fill Rate */}
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4 }}
-                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
-                    >
-                      <motion.div 
-                        className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-transparent"
-                        initial={{ x: '-100%' }}
-                        animate={{ x: '100%' }}
-                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
-                      />
-                      <div className="relative z-10">
-                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Fill Rate</div>
-                        <div className="text-3xl font-bold text-gray-900">{fillRate.toFixed(0)}%</div>
-                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
-                          <motion.div 
-                            className="bg-gradient-to-r from-blue-500 to-blue-600 h-1.5 rounded-full"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${fillRate}%` }}
-                            transition={{ duration: 0.8, delay: 0.2 }}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
-
-                    {/* Capacity */}
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4 }}
-                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
-                    >
-                      <motion.div 
-                        className="absolute inset-0 bg-gradient-to-r from-indigo-400/20 to-transparent"
-                        initial={{ x: '-100%' }}
-                        animate={{ x: '100%' }}
-                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
-                      />
-                      <div className="relative z-10">
-                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Capacity</div>
-                        <div className="text-3xl font-bold text-gray-900">{totalCapacity}</div>
-                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
-                          <motion.div 
-                            className="bg-gradient-to-r from-indigo-500 to-indigo-600 h-1.5 rounded-full"
-                            initial={{ width: 0 }}
-                            animate={{ width: '100%' }}
-                            transition={{ duration: 0.8, delay: 0.2 }}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
-
-                    {/* Bookings */}
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4 }}
-                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
-                    >
-                      <motion.div 
-                        className="absolute inset-0 bg-gradient-to-r from-cyan-400/20 to-transparent"
-                        initial={{ x: '-100%' }}
-                        animate={{ x: '100%' }}
-                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
-                      />
-                      <div className="relative z-10">
-                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Booked</div>
-                        <div className="text-3xl font-bold text-gray-900">{totalBooked}</div>
-                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
-                          <motion.div 
-                            className="bg-gradient-to-r from-cyan-500 to-cyan-600 h-1.5 rounded-full"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${totalCapacity > 0 ? (totalBooked / totalCapacity) * 100 : 0}%` }}
-                            transition={{ duration: 0.8, delay: 0.2 }}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
-
-                    {/* Empty Classes */}
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4 }}
-                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
-                    >
-                      <motion.div 
-                        className="absolute inset-0 bg-gradient-to-r from-red-400/20 to-transparent"
-                        initial={{ x: '-100%' }}
-                        animate={{ x: '100%' }}
-                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
-                      />
-                      <div className="relative z-10">
-                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Empty</div>
-                        <div className="text-3xl font-bold text-gray-900">{emptyClasses}</div>
-                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
-                          <motion.div 
-                            className="bg-gradient-to-r from-red-500 to-red-600 h-1.5 rounded-full"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${classSessions.length > 0 ? (emptyClasses / classSessions.length) * 100 : 0}%` }}
-                            transition={{ duration: 0.8, delay: 0.2 }}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
+                {/* Core Stats Grid */}
+                <div className="grid grid-cols-2 gap-3" aria-label="Core trainer stats">
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Sessions</div>
+                    <div className="text-xl font-bold">{hasHistoricalData ? classSessions.length : '-'}</div>
                   </div>
-                );
-              })()}
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Avg Check-In</div>
+                    <div className="text-xl font-bold">
+                      {hasHistoricalData && classSessions.length > 0 
+                        ? (classSessions.reduce((sum, s) => sum + s.CheckedIn, 0) / classSessions.length).toFixed(1)
+                        : '-'}
+                    </div>
+                  </div>
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Fill Rate</div>
+                    <div className="text-xl font-bold">{selectedClass.fillRate > 0 ? `${selectedClass.fillRate}%` : '-'}</div>
+                  </div>
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Cancel Rate</div>
+                    <div className="text-xl font-bold text-red-300">
+                      {hasHistoricalData && selectedClass.avgBooked > 0
+                        ? `${(selectedClass.avgLateCancelled / selectedClass.avgBooked * 100).toFixed(1)}%`
+                        : '-'}
+                    </div>
+                  </div>
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 col-span-2">
+                    <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Total Revenue</div>
+                    <div className="text-xl font-bold text-green-300">
+                      {hasHistoricalData 
+                        ? `₹${classSessions.reduce((sum, s) => sum + s.Revenue, 0).toLocaleString('en-IN')}`
+                        : '-'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Profile Summary */}
+                <div className="bg-white/10 rounded-xl p-4" aria-label="Trainer profile summary">
+                  <div className="text-xs font-semibold uppercase tracking-wide mb-2 opacity-80">Profile Summary</div>
+                  <ul className="space-y-1 text-sm">
+                    <li><span className="opacity-70">Class:</span> <span className="font-medium">{selectedClass.class}</span></li>
+                    <li><span className="opacity-70">Location:</span> <span className="font-medium">{selectedClass.location}</span></li>
+                    <li><span className="opacity-70">Schedule:</span> <span className="font-medium">{selectedClass.day} at {selectedClass.time}</span></li>
+                    <li><span className="opacity-70">Status:</span> <span className={`font-medium ${selectedClass.status === 'Active' ? 'text-green-300' : 'text-gray-300'}`}>{selectedClass.status}</span></li>
+                    <li><span className="opacity-70">Capacity:</span> <span className="font-medium">{selectedClass.capacity}</span></li>
+                  </ul>
+                </div>
+
+                {/* Specialty & Highlights */}
+                <div className="bg-white/10 rounded-xl p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide mb-3 opacity-80">Specialty Formats</div>
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {(() => {
+                      const formats = Array.from(new Set(classSessions.map(s => s.Class).filter(Boolean)));
+                      return formats.map((format, i) => (
+                        <span key={i} className="px-3 py-1 bg-blue-500/30 rounded-full text-xs font-medium">
+                          {format}
+                        </span>
+                      ));
+                    })()}
+                  </div>
+                  <div className="text-xs font-semibold uppercase tracking-wide mb-2 opacity-80">Highlights</div>
+                  <ul className="space-y-1.5 text-xs">
+                    {hasHistoricalData && selectedClass.fillRate >= 80 && (
+                      <li className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 bg-green-400 rounded-full" />
+                        <span>High Demand Trainer ({selectedClass.fillRate}% fill rate)</span>
+                      </li>
+                    )}
+                    {hasHistoricalData && classSessions.length >= 10 && (
+                      <li className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 bg-blue-400 rounded-full" />
+                        <span>Consistent Schedule ({classSessions.length} sessions)</span>
+                      </li>
+                    )}
+                    {hasHistoricalData && (selectedClass.avgLateCancelled / selectedClass.avgBooked * 100) < 10 && (
+                      <li className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full" />
+                        <span>Low Cancellation Rate</span>
+                      </li>
+                    )}
+                    {hasHistoricalData && classSessions.reduce((sum, s) => sum + s.Revenue, 0) > 50000 && (
+                      <li className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 bg-yellow-400 rounded-full" />
+                        <span>Top Revenue Generator</span>
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+
+              {/* Right Analytics Pane */}
+              <div className="md:w-2/3 p-6 md:p-8 overflow-y-auto max-h-[90vh]">
+                <div className="flex items-start justify-between mb-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800">{selectedClass.class}</h2>
+                    <div className="text-sm text-slate-500">Advanced profile & performance analytics</div>
+                  </div>
+                </div>
+
+                {/* 8 Key Metric Cards with Animated Bars */}
+                {hasHistoricalData && (() => {
+                  const totalCheckIns = classSessions.reduce((sum, s) => sum + s.CheckedIn, 0);
+                  const totalBooked = classSessions.reduce((sum, s) => sum + s.Booked, 0);
+                  const totalCapacity = classSessions.reduce((sum, s) => sum + s.Capacity, 0);
+                  const totalRevenue = classSessions.reduce((sum, s) => sum + s.Revenue, 0);
+                  const totalCancellations = classSessions.reduce((sum, s) => sum + s.LateCancelled, 0);
+                  const nonEmptySessions = classSessions.filter(s => s.CheckedIn > 0);
+                  const avgCheckInsExcludingEmpty = nonEmptySessions.length > 0 ? nonEmptySessions.reduce((sum, s) => sum + s.CheckedIn, 0) / nonEmptySessions.length : 0;
+                  const fillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
+                  const cancelRate = totalBooked > 0 ? (totalCancellations / totalBooked) * 100 : 0;
+
+                  return (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                      {/* Sessions */}
+                      <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: 0 }}
+                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                      >
+                        <div className="relative z-10">
+                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Sessions</div>
+                          <div className="text-3xl font-bold text-blue-700">{classSessions.length}</div>
+                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <motion.div 
+                              className="bg-blue-500 h-2 rounded-full"
+                              initial={{ width: 0 }}
+                              animate={{ width: '100%' }}
+                              transition={{ duration: 1, delay: 0.2 }}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+
+                      {/* Total Check-ins */}
+                      <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: 0.1 }}
+                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                      >
+                        <div className="relative z-10">
+                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Check-Ins</div>
+                          <div className="text-3xl font-bold text-blue-700">{totalCheckIns}</div>
+                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <motion.div 
+                              className="bg-blue-500 h-2 rounded-full"
+                              initial={{ width: 0 }}
+                              animate={{ width: `${Math.min(fillRate, 100)}%` }}
+                              transition={{ duration: 1, delay: 0.3 }}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+
+                      {/* Avg (No Empty) */}
+                      <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: 0.2 }}
+                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                      >
+                        <div className="relative z-10">
+                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Avg (No Empty)</div>
+                          <div className="text-3xl font-bold text-blue-700">{avgCheckInsExcludingEmpty.toFixed(1)}</div>
+                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <motion.div 
+                              className="bg-blue-500 h-2 rounded-full"
+                              initial={{ width: 0 }}
+                              animate={{ width: `${Math.min((avgCheckInsExcludingEmpty / 30) * 100, 100)}%` }}
+                              transition={{ duration: 1, delay: 0.4 }}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+
+                      {/* Fill Rate */}
+                      <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: 0.3 }}
+                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                      >
+                        <div className="relative z-10">
+                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Fill Rate</div>
+                          <div className="text-3xl font-bold text-blue-700">{fillRate.toFixed(0)}%</div>
+                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <motion.div 
+                              className="bg-blue-500 h-2 rounded-full"
+                              initial={{ width: 0 }}
+                              animate={{ width: `${fillRate}%` }}
+                              transition={{ duration: 1, delay: 0.5 }}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+
+                      {/* Total Booked */}
+                      <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: 0.4 }}
+                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                      >
+                        <div className="relative z-10">
+                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Booked</div>
+                          <div className="text-3xl font-bold text-blue-700">{totalBooked}</div>
+                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <motion.div 
+                              className="bg-blue-500 h-2 rounded-full"
+                              initial={{ width: 0 }}
+                              animate={{ width: `${totalCapacity > 0 ? (totalBooked / totalCapacity) * 100 : 0}%` }}
+                              transition={{ duration: 1, delay: 0.6 }}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+
+                      {/* Cancellations */}
+                      <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: 0.5 }}
+                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                      >
+                        <div className="relative z-10">
+                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Cancellations</div>
+                          <div className="text-3xl font-bold text-blue-700">{totalCancellations}</div>
+                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <motion.div 
+                              className="bg-blue-500 h-2 rounded-full"
+                              initial={{ width: 0 }}
+                              animate={{ width: `${cancelRate}%` }}
+                              transition={{ duration: 1, delay: 0.7 }}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+
+                      {/* Cancel Rate */}
+                      <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: 0.6 }}
+                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                      >
+                        <div className="relative z-10">
+                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Cancel Rate</div>
+                          <div className="text-3xl font-bold text-blue-700">{cancelRate.toFixed(1)}%</div>
+                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <motion.div 
+                              className="bg-blue-500 h-2 rounded-full"
+                              initial={{ width: 0 }}
+                              animate={{ width: `${cancelRate}%` }}
+                              transition={{ duration: 1, delay: 0.8 }}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+
+                      {/* Total Revenue */}
+                      <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: 0.7 }}
+                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                      >
+                        <div className="relative z-10">
+                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Total Revenue</div>
+                          <div className="text-3xl font-bold text-blue-700">{formatCurrency(totalRevenue)}</div>
+                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                            <motion.div 
+                              className="bg-blue-500 h-2 rounded-full"
+                              initial={{ width: 0 }}
+                              animate={{ width: '100%' }}
+                              transition={{ duration: 1, delay: 0.9 }}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+                    </div>
+                  );
+                })()}
 
               {/* Large Panels - Additional Metrics */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6 px-2">
@@ -2600,24 +2649,30 @@ function ProScheduler() {
                     All Past Sessions ({classSessions.length})
                   </h3>
                   <div className="bg-gray-50 rounded-xl border border-gray-200" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
-                    <div style={{ minWidth: '1400px', maxHeight: '500px', overflowY: 'auto' }}>
-                      <table className="w-full text-xs border-collapse" style={{ tableLayout: 'fixed' }}>
+                    <div style={{ minWidth: '2100px', maxHeight: '500px', overflowY: 'auto' }}>
+                      <table className="w-full text-xs border-collapse">
                         <thead className="bg-gradient-to-r from-slate-100 to-blue-100 sticky top-0 z-10 border-b-2 border-slate-300">
                           <tr>
-                            <th className="text-left px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Date</th>
-                            <th className="text-left px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Trainer</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Check In</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Capacity</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Fill%</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Booked</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Cancelled</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Waitlist</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Revenue</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Comp</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Members</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Packages</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Intro</th>
-                            <th className="text-right px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap">Singles</th>
+                            <th className="text-left px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '90px' }}>Date</th>
+                            <th className="text-left px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '120px' }}>Trainer</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '70px' }}>Check In</th>
+                            <th className="text-center px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '60px' }}>Empty</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '70px' }}>Capacity</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '60px' }}>Fill%</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '70px' }}>Booked</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '80px' }}>Cancelled</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '70px' }}>Canc%</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '80px' }}>No Show</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '80px' }}>Waitlist</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '90px' }}>Revenue</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '80px' }}>Rev/Chk</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '80px' }}>Rev/Book</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '80px' }}>Rev Loss</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '60px' }}>Comp</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '80px' }}>Members</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '80px' }}>Packages</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200" style={{ width: '60px' }}>Intro</th>
+                            <th className="text-right px-2 py-2 font-semibold text-slate-700 whitespace-nowrap" style={{ width: '70px' }}>Singles</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2630,37 +2685,57 @@ function ProScheduler() {
                               : sessionFillRate >= 60 
                               ? 'text-amber-700 font-semibold' 
                               : 'text-red-700 font-semibold';
+                            const isEmpty = session.CheckedIn === 0;
+                            const revPerCheckIn = session.CheckedIn > 0 ? session.Revenue / session.CheckedIn : 0;
+                            const revPerBooking = session.Booked > 0 ? session.Revenue / session.Booked : 0;
+                            const cancelRate = session.Booked > 0 ? Math.round((session.LateCancelled / session.Booked) * 100) : 0;
+                            const revLoss = session.LateCancelled * (session.Booked > 0 ? session.Revenue / session.Booked : 0);
                             
                             return (
                               <tr 
                                 key={index}
-                                className={`border-t border-slate-200 hover:bg-blue-50 transition-colors max-h-[30px] ${
+                                className={`border-t border-slate-200 hover:bg-blue-50 transition-colors ${
                                   index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'
                                 }`}
-                                style={{ maxHeight: '30px', height: '30px' }}
                               >
-                                <td className="px-2 py-1 font-medium text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
+                                <td className="px-2 py-2 font-medium text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '90px' }}>
                                   {format(parseISO(session.Date), 'MMM dd, yy')}
                                 </td>
-                                <td className="px-2 py-1 text-slate-700 whitespace-nowrap truncate max-w-[100px] text-[11px] border-r border-slate-200" title={session.Trainer}>
+                                <td className="px-2 py-2 text-slate-700 whitespace-nowrap truncate text-[11px] border-r border-slate-200" style={{ width: '120px' }} title={session.Trainer}>
                                   {session.Trainer}
                                 </td>
-                                <td className="px-2 py-1 text-right font-semibold text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">{session.CheckedIn}</td>
-                                <td className="px-2 py-1 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200">{session.Capacity}</td>
-                                <td className={`px-2 py-1 text-right whitespace-nowrap text-[11px] border-r border-slate-200 ${fillRateColor}`}>
+                                <td className="px-2 py-2 text-right font-semibold text-blue-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '70px' }}>{session.CheckedIn}</td>
+                                <td className="px-2 py-2 text-center whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '60px' }}>
+                                  {isEmpty ? <span className="text-red-600 font-bold">✗</span> : <span className="text-gray-400">-</span>}
+                                </td>
+                                <td className="px-2 py-2 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '70px' }}>{session.Capacity}</td>
+                                <td className={`px-2 py-2 text-right whitespace-nowrap text-[11px] border-r border-slate-200 ${fillRateColor}`} style={{ width: '60px' }}>
                                   {sessionFillRate}%
                                 </td>
-                                <td className="px-2 py-1 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200">{session.Booked}</td>
-                                <td className="px-2 py-1 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200">{session.LateCancelled}</td>
-                                <td className="px-2 py-1 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200">{session.Waitlisted || 0}</td>
-                                <td className="px-2 py-1 text-right font-semibold text-emerald-700 whitespace-nowrap text-[11px] border-r border-slate-200">
-                                  {formatRevenue(session.Revenue)}
+                                <td className="px-2 py-2 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '70px' }}>{session.Booked}</td>
+                                <td className="px-2 py-2 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '80px' }}>{session.LateCancelled}</td>
+                                <td className="px-2 py-2 text-right text-slate-600 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '70px' }}>
+                                  {cancelRate}%
                                 </td>
-                                <td className="px-2 py-1 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200">{session.Complimentary}</td>
-                                <td className="px-2 py-1 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200">{session.Memberships}</td>
-                                <td className="px-2 py-1 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200">{session.Packages}</td>
-                                <td className="px-2 py-1 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200">{session.IntroOffers}</td>
-                                <td className="px-2 py-1 text-right text-slate-700 whitespace-nowrap text-[11px]">{session.SingleClasses}</td>
+                                <td className="px-2 py-2 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '80px' }}>{session.NoShow || 0}</td>
+                                <td className="px-2 py-2 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '80px' }}>{session.Waitlisted || 0}</td>
+                                <td className="px-2 py-2 text-right font-semibold text-blue-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '90px' }}>
+                                  {formatCurrency(session.Revenue)}
+                                </td>
+                                <td className="px-2 py-2 text-right text-slate-600 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '80px' }}>
+                                  {session.CheckedIn > 0 ? formatCurrency(revPerCheckIn) : '-'}
+                                </td>
+                                <td className="px-2 py-2 text-right text-slate-600 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '80px' }}>
+                                  {session.Booked > 0 ? formatCurrency(revPerBooking) : '-'}
+                                </td>
+                                <td className="px-2 py-2 text-right text-red-600 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '80px' }}>
+                                  {session.LateCancelled > 0 ? formatCurrency(revLoss) : '-'}
+                                </td>
+                                <td className="px-2 py-2 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '60px' }}>{session.Complimentary}</td>
+                                <td className="px-2 py-2 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '80px' }}>{session.Memberships}</td>
+                                <td className="px-2 py-2 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '80px' }}>{session.Packages}</td>
+                                <td className="px-2 py-2 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '60px' }}>{session.IntroOffers}</td>
+                                <td className="px-2 py-2 text-right text-slate-700 whitespace-nowrap text-[11px]" style={{ width: '70px' }}>{session.SingleClasses}</td>
                               </tr>
                             );
                           })}
@@ -2673,6 +2748,9 @@ function ProScheduler() {
                             <td className="px-2 py-1 text-right text-blue-900 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
                               {classSessions.reduce((sum, s) => sum + s.CheckedIn, 0)}
                             </td>
+                            <td className="px-2 py-1 text-center text-red-700 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.filter(s => s.CheckedIn === 0).length}
+                            </td>
                             <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
                               {classSessions.reduce((sum, s) => sum + s.Capacity, 0)}
                             </td>
@@ -2683,11 +2761,23 @@ function ProScheduler() {
                             <td className="px-2 py-1 text-right text-blue-900 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
                               {classSessions.reduce((sum, s) => sum + s.LateCancelled, 0)}
                             </td>
+                            <td className="px-2 py-1 border-r border-slate-200"></td>
+                            <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.reduce((sum, s) => sum + (s.NoShow || 0), 0)}
+                            </td>
                             <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
                               {classSessions.reduce((sum, s) => sum + (s.Waitlisted || 0), 0)}
                             </td>
-                            <td className="px-2 py-1 text-right text-emerald-700 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
-                              {formatRevenue(classSessions.reduce((sum, s) => sum + s.Revenue, 0))}
+                            <td className="px-2 py-1 text-right text-blue-700 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {formatCurrency(classSessions.reduce((sum, s) => sum + s.Revenue, 0))}
+                            </td>
+                            <td className="px-2 py-1 border-r border-slate-200"></td>
+                            <td className="px-2 py-1 border-r border-slate-200"></td>
+                            <td className="px-2 py-1 text-right text-red-700 font-semibold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {formatCurrency(classSessions.reduce((sum, s) => {
+                                const revPerBook = s.Booked > 0 ? s.Revenue / s.Booked : 0;
+                                return sum + (s.LateCancelled * revPerBook);
+                              }, 0))}
                             </td>
                             <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
                               {classSessions.reduce((sum, s) => sum + s.Complimentary, 0)}
@@ -2712,6 +2802,12 @@ function ProScheduler() {
                             <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
                               {Math.round(classSessions.reduce((sum, s) => sum + s.CheckedIn, 0) / classSessions.length)}
                             </td>
+                            <td className="px-2 py-1 text-center text-purple-700 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {(() => {
+                                const nonEmpty = classSessions.filter(s => s.CheckedIn > 0);
+                                return nonEmpty.length > 0 ? Math.round(nonEmpty.reduce((sum, s) => sum + s.CheckedIn, 0) / nonEmpty.length) : 0;
+                              })()}
+                            </td>
                             <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
                               {Math.round(classSessions.reduce((sum, s) => sum + s.Capacity, 0) / classSessions.length)}
                             </td>
@@ -2724,11 +2820,41 @@ function ProScheduler() {
                             <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
                               {Math.round(classSessions.reduce((sum, s) => sum + s.LateCancelled, 0) / classSessions.length)}
                             </td>
+                            <td className="px-2 py-1 text-right text-slate-700 whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {(() => {
+                                const totalBooked = classSessions.reduce((sum, s) => sum + s.Booked, 0);
+                                const totalCancelled = classSessions.reduce((sum, s) => sum + s.LateCancelled, 0);
+                                return totalBooked > 0 ? Math.round((totalCancelled / totalBooked) * 100) + '%' : '0%';
+                              })()}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {Math.round(classSessions.reduce((sum, s) => sum + (s.NoShow || 0), 0) / classSessions.length)}
+                            </td>
                             <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
                               {Math.round(classSessions.reduce((sum, s) => sum + (s.Waitlisted || 0), 0) / classSessions.length)}
                             </td>
-                            <td className="px-2 py-1 text-right text-emerald-700 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
-                              {formatRevenue(Math.round(classSessions.reduce((sum, s) => sum + s.Revenue, 0) / classSessions.length))}
+                            <td className="px-2 py-1 text-right text-blue-700 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {formatCurrency(Math.round(classSessions.reduce((sum, s) => sum + s.Revenue, 0) / classSessions.length))}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-700 font-semibold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {(() => {
+                                const totalCheckIns = classSessions.reduce((sum, s) => sum + s.CheckedIn, 0);
+                                const totalRevenue = classSessions.reduce((sum, s) => sum + s.Revenue, 0);
+                                return totalCheckIns > 0 ? formatCurrency(Math.round(totalRevenue / totalCheckIns)) : '-';
+                              })()}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-700 font-semibold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {(() => {
+                                const totalBooked = classSessions.reduce((sum, s) => sum + s.Booked, 0);
+                                const totalRevenue = classSessions.reduce((sum, s) => sum + s.Revenue, 0);
+                                return totalBooked > 0 ? formatCurrency(Math.round(totalRevenue / totalBooked)) : '-';
+                              })()}
+                            </td>
+                            <td className="px-2 py-1 text-right text-red-700 font-semibold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {formatCurrency(Math.round(classSessions.reduce((sum, s) => {
+                                const revPerBook = s.Booked > 0 ? s.Revenue / s.Booked : 0;
+                                return sum + (s.LateCancelled * revPerBook);
+                              }, 0) / classSessions.length))}
                             </td>
                             <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
                               {Math.round(classSessions.reduce((sum, s) => sum + s.Complimentary, 0) / classSessions.length)}
@@ -2860,7 +2986,7 @@ function ProScheduler() {
                   Close
                 </button>
               </div>
-            </div>
+              </div>
             </motion.div>
           </motion.div>
         );

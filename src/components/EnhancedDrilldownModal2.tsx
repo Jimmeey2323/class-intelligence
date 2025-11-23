@@ -205,7 +205,6 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                   {(() => {
                     const uniqueTrainers = Array.from(new Set(sessions.map(s => s.Trainer).filter(Boolean)));
                     const trainerName = uniqueTrainers.length === 1 ? uniqueTrainers[0] : 'Multiple Trainers';
-                    const profileImageUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(trainerName)}&size=256&background=0D8ABC&color=fff`;
                     const primaryLocation = Array.from(new Set(sessions.map(s => s.Location).filter(Boolean)))[0] || 'Multiple Locations';
                     const primaryClass = Array.from(new Set(sessions.map(s => s.Class).filter(Boolean)))[0] || 'Multiple Classes';
                     const activeDays = Array.from(new Set(sessions.map(s => s.Day).filter(Boolean))).length;
@@ -220,14 +219,106 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                             <X className="w-5 h-5" />
                           </button>
                         </div>
-                        <div className="relative w-full aspect-square rounded-2xl overflow-hidden shadow-xl border border-white/20">
-                          <img src={profileImageUrl} alt={trainerName} className="w-full h-full object-cover object-center" />
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
+                        {/* 3D Animated Performance Graph */}
+                        <div className="relative w-full aspect-[3/4] rounded-2xl overflow-hidden shadow-xl border border-white/20 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                          <div className="absolute inset-0 flex items-center justify-center p-6">
+                            <div className="w-full h-full relative" style={{ perspective: '1000px' }}>
+                              {/* 3D Bar Chart Animation */}
+                              <div className="absolute inset-0 flex items-end justify-around gap-2 pb-8" style={{ transformStyle: 'preserve-3d', transform: 'rotateX(20deg) rotateY(-15deg)' }}>
+                                {(() => {
+                                  // Calculate data for visualization
+                                  const fillRate = metrics.avgFillRate;
+                                  const cancelRate = metrics.cancellationRate;
+                                  const avgCheckIns = metrics.avgCheckIns;
+                                  
+                                  const bars = [
+                                    { label: 'Fill', value: fillRate, color: 'from-blue-400 to-blue-600', height: fillRate },
+                                    { label: 'Attendance', value: avgCheckIns, color: 'from-green-400 to-green-600', height: Math.min((avgCheckIns / 30) * 100, 100) },
+                                    { label: 'Cancel', value: cancelRate, color: 'from-red-400 to-red-600', height: cancelRate },
+                                  ];
+                                  
+                                  return bars.map((bar, i) => (
+                                    <div key={i} className="flex flex-col items-center" style={{ animation: `barRise 1s ease-out ${i * 0.2}s both` }}>
+                                      <div className="text-xs font-bold text-white mb-2 opacity-90">
+                                        {bar.value.toFixed(0)}{bar.label === 'Attendance' ? '' : '%'}
+                                      </div>
+                                      <div 
+                                        className={`w-16 bg-gradient-to-t ${bar.color} rounded-t-lg shadow-2xl relative`}
+                                        style={{ 
+                                          height: `${bar.height}%`,
+                                          transformStyle: 'preserve-3d',
+                                          transform: 'translateZ(20px)',
+                                        }}
+                                      >
+                                        <div className="absolute inset-0 bg-white/20 animate-pulse" />
+                                      </div>
+                                      <div className="text-[10px] font-semibold text-white/70 mt-2 uppercase tracking-wider">
+                                        {bar.label}
+                                      </div>
+                                    </div>
+                                  ));
+                                })()}
+                              </div>
+                              
+                              {/* Grid lines */}
+                              <div className="absolute inset-0 pointer-events-none">
+                                {[...Array(5)].map((_, i) => (
+                                  <div 
+                                    key={i}
+                                    className="absolute w-full border-t border-white/10"
+                                    style={{ bottom: `${(i + 1) * 20}%` }}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Bottom label */}
                           <div className="absolute bottom-4 left-4 right-4 flex flex-col gap-1">
-                            <span className="text-xs uppercase tracking-wider opacity-80">Primary Class</span>
+                            <span className="text-xs uppercase tracking-wider opacity-80">Performance Overview</span>
                             <span className="text-lg font-semibold">{primaryClass}</span>
                           </div>
+                          
+                          {/* Floating particles animation */}
+                          <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                            {[...Array(20)].map((_, i) => (
+                              <div
+                                key={i}
+                                className="absolute w-1 h-1 bg-white/30 rounded-full"
+                                style={{
+                                  left: `${Math.random() * 100}%`,
+                                  top: `${Math.random() * 100}%`,
+                                  animation: `float ${3 + Math.random() * 4}s ease-in-out infinite`,
+                                  animationDelay: `${Math.random() * 2}s`,
+                                }}
+                              />
+                            ))}
+                          </div>
                         </div>
+                        
+                        <style>{`
+                          @keyframes barRise {
+                            from {
+                              transform: translateZ(20px) scaleY(0);
+                              opacity: 0;
+                            }
+                            to {
+                              transform: translateZ(20px) scaleY(1);
+                              opacity: 1;
+                            }
+                          }
+                          
+                          @keyframes float {
+                            0%, 100% {
+                              transform: translateY(0) translateX(0);
+                              opacity: 0.3;
+                            }
+                            50% {
+                              transform: translateY(-20px) translateX(10px);
+                              opacity: 0.6;
+                            }
+                          }
+                        `}</style>
                         <div className="grid grid-cols-2 gap-3" aria-label="Core trainer stats">
                           <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3"><div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Sessions</div><div className="text-xl font-bold">{metrics.totalSessions}</div></div>
                           <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3"><div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Attendance Avg</div><div className="text-xl font-bold">{metrics.avgCheckIns.toFixed(1)}</div></div>
