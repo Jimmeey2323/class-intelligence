@@ -48,6 +48,26 @@ const IMAGE_FILES = [
 // Normalize strings for matching (remove non-alphanumeric and lowercase)
 const normalizeKey = (s: string | undefined) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+// Explicit mapping from trainer full name (lowercased) to image filename
+const TRAINER_IMAGE_MAP: Record<string, string> = {
+  'anisha shah': '001-1_Anisha-1-e1590837044475.jpg',
+  'atulan purohit': '002-Atulan-Image-1.jpg',
+  'cauveri vikrant': '003-Cauveri-1.jpg',
+  'kajol kanchan': '004-Kajol-Kanchan-1.jpg',
+  'karan bhatia': '005-Karan-Bhatia-1-1.jpeg',
+  'mrigakshi jaiswal': '007-Mrigakshi-Image-2.jpg',
+  'pranjali jain': '008-Pranjali-Image-1.jpg',
+  'pushyank nahar': '009-Pushyank-Nahar-1.jpeg',
+  'reshma sharma': '010-Reshma-Image-3.jpg',
+  "richard d'costa": '011-Richard-Image-3.jpg',
+  'rohan dahima': '012-Rohan-Image-3.jpg',
+  'saniya jaiswal': '013-Saniya-Image-1.jpg',
+  'shruti kulkarni': '014-Shruti-Kulkarni.jpeg',
+  'vivaran dhasmana': '015-Vivaran-Image-4.jpg',
+  'karanvir bhatia': 'Karanveer.jpg',
+  'veena narasimhan': 'Veena.jpeg'
+};
+
 function findTrainerImage(trainer: string | undefined) {
   if (!trainer) return null;
   const raw = trainer.trim();
@@ -154,26 +174,6 @@ const getWorkloadColor = (hours: number) => {
   if (hours >= 10 && hours <= 14) return '#16a34a'; // green for healthy 10-14
   // remaining (6-9) => orange
   return '#f97316';
-};
-
-// Explicit mapping from trainer full name (lowercased) to image filename
-const TRAINER_IMAGE_MAP: Record<string, string> = {
-  'anisha shah': '001-1_Anisha-1-e1590837044475.jpg',
-  'atulan purohit': '002-Atulan-Image-1.jpg',
-  'cauveri vikrant': '003-Cauveri-1.jpg',
-  'kajol kanchan': '004-Kajol-Kanchan-1.jpg',
-  'karan bhatia': '005-Karan-Bhatia-1-1.jpeg',
-  'mrigakshi jaiswal': '007-Mrigakshi-Image-2.jpg',
-  'pranjali jain': '008-Pranjali-Image-1.jpg',
-  'pushyank nahar': '009-Pushyank-Nahar-1.jpeg',
-  'reshma sharma': '010-Reshma-Image-3.jpg',
-  "richard d'costa": '011-Richard-Image-3.jpg',
-  'rohan dahima': '012-Rohan-Image-3.jpg',
-  'saniya jaiswal': '013-Saniya-Image-1.jpg',
-  'shruti kulkarni': '014-Shruti-Kulkarni.jpeg',
-  'vivaran dhasmana': '015-Vivaran-Image-4.jpg',
-  'karanvir bhatia': 'Karanveer.jpg',
-  'veena narasimhan': 'Veena.jpeg'
 };
 
 // Types
