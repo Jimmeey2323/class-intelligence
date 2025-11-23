@@ -29,6 +29,36 @@ export default function CreateClassModal({ isOpen, onClose, selectedDate, select
   const uniqueLocations = [...new Set(rawData.map((s: SessionData) => s.Location))].sort();
   const uniqueTypes = [...new Set(rawData.map((s: SessionData) => s.Type))].sort();
 
+  // Calculate analytics for each option
+  const classAnalytics = uniqueClasses.map(className => {
+    const classSessions = rawData.filter((s: SessionData) => s.Class === className);
+    const avgFillRate = classSessions.length > 0 
+      ? classSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / classSessions.length * 100
+      : 0;
+    const avgRevenue = classSessions.length > 0
+      ? classSessions.reduce((sum, s) => sum + (s.Revenue || 0), 0) / classSessions.length
+      : 0;
+    return { name: className, avgFillRate, avgRevenue, sessionCount: classSessions.length };
+  });
+
+  const trainerAnalytics = uniqueTrainers.map(trainer => {
+    const trainerSessions = rawData.filter((s: SessionData) => s.Trainer === trainer);
+    const avgFillRate = trainerSessions.length > 0
+      ? trainerSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / trainerSessions.length * 100
+      : 0;
+    const totalClasses = trainerSessions.length;
+    const workload = totalClasses >= 25 ? 'Overloaded' : totalClasses >= 20 ? 'Heavy' : totalClasses >= 15 ? 'Medium' : 'Light';
+    return { name: trainer, avgFillRate, sessionCount: totalClasses, workload };
+  });
+
+  const locationAnalytics = uniqueLocations.map(location => {
+    const locationSessions = rawData.filter((s: SessionData) => s.Location === location);
+    const avgCapacity = locationSessions.length > 0
+      ? locationSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0) / locationSessions.length
+      : 0;
+    return { name: location, avgCapacity, sessionCount: locationSessions.length };
+  });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -170,23 +200,31 @@ export default function CreateClassModal({ isOpen, onClose, selectedDate, select
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
                       Class Name *
                     </label>
-                    <input
-                      type="text"
-                      list="classNames"
+                    <select
                       value={formData.className}
                       onChange={(e) => setFormData({ ...formData, className: e.target.value })}
                       className={`w-full px-4 py-3 rounded-xl border-2 ${
                         errors.className ? 'border-red-300' : 'border-gray-200'
                       } focus:border-blue-500 focus:ring-0 transition-colors`}
-                      placeholder="e.g., Yoga Flow, HIIT, Spin"
-                    />
-                    <datalist id="classNames">
-                      {uniqueClasses.map((name: string) => (
-                        <option key={name} value={name} />
-                      ))}
-                    </datalist>
+                    >
+                      <option value="">Select a class type...</option>
+                      {classAnalytics
+                        .sort((a, b) => b.avgFillRate - a.avgFillRate)
+                        .map(({ name, avgFillRate, avgRevenue, sessionCount }) => (
+                          <option key={name} value={name}>
+                            {name} ({avgFillRate.toFixed(0)}% fill • ₹{(avgRevenue/100).toFixed(0)} avg • {sessionCount} sessions)
+                          </option>
+                        ))}
+                    </select>
                     {errors.className && (
                       <p className="mt-1 text-sm text-red-600">{errors.className}</p>
+                    )}
+                    {formData.className && (
+                      <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg p-2">
+                        <p className="text-xs text-blue-800">
+                          💡 This class type has {classAnalytics.find(c => c.name === formData.className)?.avgFillRate.toFixed(0)}% average fill rate
+                        </p>
+                      </div>
                     )}
                   </div>
 
@@ -195,23 +233,31 @@ export default function CreateClassModal({ isOpen, onClose, selectedDate, select
                     <label className="block text-sm font-semibold text-gray-700 mb-2">
                       Trainer *
                     </label>
-                    <input
-                      type="text"
-                      list="trainers"
+                    <select
                       value={formData.trainer}
                       onChange={(e) => setFormData({ ...formData, trainer: e.target.value })}
                       className={`w-full px-4 py-3 rounded-xl border-2 ${
                         errors.trainer ? 'border-red-300' : 'border-gray-200'
                       } focus:border-blue-500 focus:ring-0 transition-colors`}
-                      placeholder="Enter trainer name"
-                    />
-                    <datalist id="trainers">
-                      {uniqueTrainers.map((name: string) => (
-                        <option key={name} value={name} />
-                      ))}
-                    </datalist>
+                    >
+                      <option value="">Select a trainer...</option>
+                      {trainerAnalytics
+                        .sort((a, b) => b.avgFillRate - a.avgFillRate)
+                        .map(({ name, avgFillRate, sessionCount, workload }) => (
+                          <option key={name} value={name}>
+                            {name} ({avgFillRate.toFixed(0)}% fill • {sessionCount} classes • {workload})
+                          </option>
+                        ))}
+                    </select>
                     {errors.trainer && (
                       <p className="mt-1 text-sm text-red-600">{errors.trainer}</p>
+                    )}
+                    {formData.trainer && (
+                      <div className="mt-2 bg-green-50 border border-green-200 rounded-lg p-2">
+                        <p className="text-xs text-green-800">
+                          👤 {formData.trainer} has {trainerAnalytics.find(t => t.name === formData.trainer)?.workload} workload
+                        </p>
+                      </div>
                     )}
                   </div>
 
@@ -222,21 +268,20 @@ export default function CreateClassModal({ isOpen, onClose, selectedDate, select
                         <MapPin className="w-4 h-4 inline mr-1" />
                         Location *
                       </label>
-                      <input
-                        type="text"
-                        list="locations"
+                      <select
                         value={formData.location}
                         onChange={(e) => setFormData({ ...formData, location: e.target.value })}
                         className={`w-full px-4 py-3 rounded-xl border-2 ${
                           errors.location ? 'border-red-300' : 'border-gray-200'
                         } focus:border-blue-500 focus:ring-0 transition-colors`}
-                        placeholder="Studio location"
-                      />
-                      <datalist id="locations">
-                        {uniqueLocations.map((name: string) => (
-                          <option key={name} value={name} />
+                      >
+                        <option value="">Select location...</option>
+                        {locationAnalytics.map(({ name, avgCapacity, sessionCount }) => (
+                          <option key={name} value={name}>
+                            {name} (Avg cap: {avgCapacity.toFixed(0)} • {sessionCount} classes)
+                          </option>
                         ))}
-                      </datalist>
+                      </select>
                       {errors.location && (
                         <p className="mt-1 text-sm text-red-600">{errors.location}</p>
                       )}

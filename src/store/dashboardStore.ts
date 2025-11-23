@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { DashboardState, SessionData, FilterState, ViewMode, GroupBy, AdditionalView, ColumnWidthSettings, RankingMetric } from '../types';
 import { subMonths, startOfMonth } from 'date-fns';
 import { groupData } from '../utils/calculations';
-import { loadActiveClasses, ActiveClassesByDay } from '../utils/activeClassesLoader';
 
 // Load column widths from localStorage
 const loadColumnWidths = (): ColumnWidthSettings => {
@@ -334,9 +333,18 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     // Hosted class pattern (same as in cleaners.ts)
     const hostedPattern = /hosted|bridal|lrs|x p57|rugby|wework|olympics|birthday|host|raheja|pop|workshop|community|physique|soundrise|outdoor|p57 x|x/i;
     
+    // CRITICAL: Get today's date to exclude future classes
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Start of today
+    
     // Filter data
     let filtered = rawData.filter((row) => {
       const rowDate = new Date(row.Date);
+      
+      // CRITICAL: Always exclude future classes (dates >= today)
+      if (rowDate >= today) {
+        return false;
+      }
       
       // Exclude hosted classes if enabled
       if (excludeHostedClasses) {
@@ -465,21 +473,5 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 }));
 
-// Load Active.csv on store initialization
-loadActiveClasses().then((activeClasses: ActiveClassesByDay) => {
-  useDashboardStore.setState({ activeClassesData: activeClasses });
-  const totalClasses = Object.values(activeClasses).reduce((sum, classes) => sum + classes.length, 0);
-  console.log('✅ Active classes loaded:', Object.keys(activeClasses).length, 'days,', totalClasses, 'total classes');
-  console.log('📊 Active classes by day:', Object.fromEntries(
-    Object.entries(activeClasses).map(([day, classes]) => [day, classes.length])
-  ));
-  
-  // Re-process raw data to apply active status
-  const currentRawData = useDashboardStore.getState().rawData;
-  if (currentRawData.length > 0) {
-    console.log('🔄 Re-processing', currentRawData.length, 'sessions with Active.csv data');
-    useDashboardStore.getState().setRawData(currentRawData);
-  }
-}).catch(error => {
-  console.error('❌ Failed to load active classes:', error);
-});
+// Note: Active classes are now loaded dynamically from Google Sheets in FileUpload component
+// This ensures fresh data on every app load

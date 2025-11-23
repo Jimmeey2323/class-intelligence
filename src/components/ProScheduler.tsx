@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, Fragment } from 'react';
+import { useState, useMemo, useEffect, Fragment, useRef } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { SessionData } from '../types';
 import { format, parseISO, isWithinInterval } from 'date-fns';
@@ -16,6 +16,165 @@ import {
   Calendar
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+
+// Available trainer images (from `/images` folder)
+const IMAGE_FILES = [
+  '001-1_Anisha-1-e1590837044475.jpg',
+  '002-Atulan-Image-1.jpg',
+  '003-Cauveri-1.jpg',
+  '004-Kajol-Kanchan-1.jpg',
+  '005-Karan-Bhatia-1-1.jpeg',
+  '007-Mrigakshi-Image-2.jpg',
+  '008-Pranjali-Image-1.jpg',
+  '009-Pushyank-Nahar-1.jpeg',
+  '010-Reshma-Image-3.jpg',
+  '011-Richard-Image-3.jpg',
+  '012-Rohan-Image-3.jpg',
+  '013-Saniya-Image-1.jpg',
+  '014-Shruti-Kulkarni.jpeg',
+  '015-Vivaran-Image-4.jpg',
+  'Karanveer.jpg',
+  'Logo.png',
+  'Shruti-Kulkarni.jpeg',
+  'Veena.jpeg',
+  'Anmol.jpeg',
+  'Bret.jpeg',
+  'Raunak.jpeg',
+  'Simonelle.jpeg',
+  'Sovena.jpeg',
+  'Simran.jpeg'
+];
+
+// Normalize strings for matching (remove non-alphanumeric and lowercase)
+const normalizeKey = (s: string | undefined) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+function findTrainerImage(trainer: string | undefined) {
+  if (!trainer) return null;
+  const raw = trainer.trim();
+  const norm = normalizeKey(raw);
+
+  // Prefer normalized explicit map lookup (handles punctuation/spacing variations)
+  const explicitDirect = TRAINER_IMAGE_MAP[raw.toLowerCase()];
+  if (explicitDirect) return `/images/${explicitDirect}`;
+
+  // Build a normalized explicit map once
+  const TRAINER_IMAGE_MAP_NORM: Record<string, string> = {};
+  Object.entries(TRAINER_IMAGE_MAP).forEach(([k, v]) => {
+    TRAINER_IMAGE_MAP_NORM[normalizeKey(k)] = v;
+  });
+
+  if (TRAINER_IMAGE_MAP_NORM[norm]) return `/images/${TRAINER_IMAGE_MAP_NORM[norm]}`;
+
+  // Try exact filename match (without extension)
+  for (const f of IMAGE_FILES) {
+    const nameOnly = f.replace(/\.[^/.]+$/, '');
+    if (normalizeKey(nameOnly) === norm) return `/images/${f}`;
+  }
+
+  // Try partial token matches (match any token of trainer name to filename)
+  const tokens = raw.split(/\s+/).map(t => normalizeKey(t)).filter(Boolean);
+  for (const f of IMAGE_FILES) {
+    const nf = normalizeKey(f.replace(/\.[^/.]+$/, ''));
+    // if any token is inside filename or filename tokens inside trainer name
+    if (tokens.some(tok => nf.includes(tok)) || tokens.some(tok => tok.includes(nf))) {
+      return `/images/${f}`;
+    }
+  }
+
+  // Try matching by last name or first name specifically
+  if (tokens.length > 0) {
+    const first = tokens[0];
+    const last = tokens[tokens.length - 1];
+    for (const f of IMAGE_FILES) {
+      const nf = normalizeKey(f.replace(/\.[^/.]+$/, ''));
+      if (nf.includes(last) || nf.includes(first)) return `/images/${f}`;
+    }
+  }
+
+  // Not found
+  return null;
+}
+
+// Circular avatar with animated progress ring using SVG
+import React from 'react';
+
+const CircularAvatar: React.FC<{
+  percent: number;
+  color?: string;
+  size?: number;
+  stroke?: number;
+  imgSrc?: string | null;
+  initials?: string;
+}> = ({ percent, color = '#16a34a', size = 56, stroke = 6, imgSrc, initials }) => {
+  const pct = Math.max(0, Math.min(100, percent));
+  const radius = (size - stroke) / 2;
+  const cx = size / 2;
+  const cy = size / 2;
+  const circumference = 2 * Math.PI * radius;
+  const dashOffset = circumference * (1 - pct / 100);
+
+  return (
+    <div style={{ width: size, height: size, position: 'relative', overflow: 'visible' }}>
+      <svg width={size} height={size} style={{ display: 'block' }}>
+        <circle cx={cx} cy={cy} r={radius} stroke="#e6e6e6" strokeWidth={stroke} fill="none" />
+        <motion.circle
+          cx={cx}
+          cy={cy}
+          r={radius}
+          stroke={color}
+          strokeWidth={stroke}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          initial={{ strokeDashoffset: circumference }}
+          animate={{ strokeDashoffset: dashOffset }}
+          transition={{ duration: 0.9, ease: 'easeOut' }}
+        />
+      </svg>
+      <div style={{ position: 'absolute', left: '50%', top: '0%', transform: 'translate(-50%,6%)', width: size - stroke * 2 - 2, height: size - stroke * 2 - 2, borderRadius: '50%', overflow: 'hidden', background: '#fff', display: 'flex', alignItems: 'flex-start', justifyContent: 'center' }}>
+        {imgSrc ? (
+          // eslint-disable-next-line jsx-a11y/img-redundant-alt
+          <img src={imgSrc} alt={`avatar`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        ) : (
+          <span style={{ fontWeight: 700, color: '#0f172a' }}>{initials}</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Workload colour helper per new thresholds:
+// - <=5  => red
+// - 6-9  => orange
+// - 10-14 => green
+// - >=15 => red
+const getWorkloadColor = (hours: number) => {
+  if (hours <= 5) return '#ef4444';        // red for very low
+  if (hours >= 15) return '#ef4444';       // red for overloaded
+  if (hours >= 10 && hours <= 14) return '#16a34a'; // green for healthy 10-14
+  // remaining (6-9) => orange
+  return '#f97316';
+};
+
+// Explicit mapping from trainer full name (lowercased) to image filename
+const TRAINER_IMAGE_MAP: Record<string, string> = {
+  'anisha shah': '001-1_Anisha-1-e1590837044475.jpg',
+  'atulan purohit': '002-Atulan-Image-1.jpg',
+  'cauveri vikrant': '003-Cauveri-1.jpg',
+  'kajol kanchan': '004-Kajol-Kanchan-1.jpg',
+  'karan bhatia': '005-Karan-Bhatia-1-1.jpeg',
+  'mrigakshi jaiswal': '007-Mrigakshi-Image-2.jpg',
+  'pranjali jain': '008-Pranjali-Image-1.jpg',
+  'pushyank nahar': '009-Pushyank-Nahar-1.jpeg',
+  'reshma sharma': '010-Reshma-Image-3.jpg',
+  "richard d'costa": '011-Richard-Image-3.jpg',
+  'rohan dahima': '012-Rohan-Image-3.jpg',
+  'saniya jaiswal': '013-Saniya-Image-1.jpg',
+  'shruti kulkarni': '014-Shruti-Kulkarni.jpeg',
+  'vivaran dhasmana': '015-Vivaran-Image-4.jpg',
+  'karanvir bhatia': 'Karanveer.jpg',
+  'veena narasimhan': 'Veena.jpeg'
+};
 
 // Types
 interface ScheduleClass {
@@ -50,7 +209,15 @@ interface ScheduleClass {
   revenuePerCheckIn: number;
   bookingToCheckInRate: number;
   consistency: number;
-  topTrainers: Array<{ name: string; sessions: number; avgFill: number; avgRevenue: number }>;
+  topTrainers: Array<{ 
+    name: string; 
+    sessions: number; 
+    totalCheckIns: number;
+    classAvg: number;
+    avgFill: number; 
+    avgRevenue: number;
+    score: number;
+  }>;
 }
 
 interface ProSchedulerFilters {
@@ -65,13 +232,18 @@ interface ProSchedulerFilters {
 type ViewMode = 'calendar' | 'analytics' | 'optimization' | 'conflicts';
 type CalendarViewMode = 'standard' | 'multi-location' | 'horizontal' | 'analytical' | 'compact' | 'timeline';
 
+// Cache for schedule classes
+let cachedScheduleClasses: ScheduleClass[] | null = null;
+let cacheTimestamp = 0;
+const CACHE_DURATION = 60000; // 1 minute
+
 function ProScheduler() {
   const { rawData = [], activeClassesData = {} } = useDashboardStore();
   
   // State management
   const [filters, setFilters] = useState<ProSchedulerFilters>({
-    dateFrom: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days ago
-    dateTo: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
+    dateFrom: new Date('2025-08-01'), // August 1, 2025
+    dateTo: new Date(), // Current date (no future dates)
     locations: [],
     trainers: [],
     classes: [],
@@ -92,11 +264,18 @@ function ProScheduler() {
   const [showOptimizationPanel, setShowOptimizationPanel] = useState(false);
   const [hoveredClassId, setHoveredClassId] = useState<string | null>(null);
   const [showNonFunctionalHours, setShowNonFunctionalHours] = useState(false);
+  const drilldownModalRef = useRef<HTMLDivElement>(null);
+  
+  // Format currency helper - always max 1 decimal
+  const formatCurrency = (amount: number) => {
+    return `₹${(amount / 100).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 1 })}`;
+  };
+  
   const [addModalData, setAddModalData] = useState({
     className: '',
     trainer: '',
     location: '',
-    capacity: 25
+    capacity: 20
   });
 
   // Force reload active classes if they're not loaded
@@ -116,8 +295,15 @@ function ProScheduler() {
     }
   }, []); // Only run on mount
 
-  // Process active classes data into schedule format
+  // Process active classes data into schedule format with caching
   const scheduleClasses = useMemo(() => {
+    const now = Date.now();
+    
+    // Return cached data if still valid
+    if (cachedScheduleClasses && (now - cacheTimestamp) < CACHE_DURATION) {
+      return cachedScheduleClasses;
+    }
+    
     const classes: ScheduleClass[] = [];
     
     // Process active classes data as PRIMARY source - always show these
@@ -160,15 +346,17 @@ function ProScheduler() {
             const sessionDate = parseISO(session.Date);
             if (sessionDate >= today) return false; // Skip future sessions
             
-            // More flexible matching for historical data
+            // Apply date range filter from ProScheduler filters
+            const inDateRange = isWithinInterval(sessionDate, { start: filters.dateFrom, end: filters.dateTo });
+            if (!inDateRange) return false;
+            
+            // Exact matching for consistency with drilldown table
             const sessionTime24 = session.Time?.substring(0, 5) || '';
             const matchesTime = sessionTime24 === normalizedTime || 
                                session.Time?.startsWith(normalizedTime);
             const matchesDay = session.Day === day;
-            const matchesClass = session.Class?.toLowerCase().includes(activeClass.className?.toLowerCase() || '') ||
-                                activeClass.className?.toLowerCase().includes(session.Class?.toLowerCase() || '');
-            const matchesLocation = session.Location?.toLowerCase().includes(activeClass.location?.toLowerCase() || '') ||
-                                   activeClass.location?.toLowerCase().includes(session.Location?.toLowerCase() || '');
+            const matchesClass = session.Class?.toLowerCase() === activeClass.className?.toLowerCase();
+            const matchesLocation = session.Location?.toLowerCase() === activeClass.location?.toLowerCase();
             
             return matchesDay && matchesTime && matchesClass && matchesLocation;
           });
@@ -225,13 +413,23 @@ function ProScheduler() {
           });
           
           const topTrainers = Array.from(trainerStats.entries())
-            .map(([name, stats]) => ({
-              name,
-              sessions: stats.sessions,
-              avgFill: stats.capacity > 0 ? (stats.checkIns / stats.capacity) * 100 : 0,
-              avgRevenue: stats.sessions > 0 ? stats.revenue / stats.sessions : 0
-            }))
-            .sort((a, b) => b.sessions - a.sessions)
+            .map(([name, stats]) => {
+              const classAvg = stats.sessions > 0 ? stats.checkIns / stats.sessions : 0;
+              const avgFill = stats.capacity > 0 ? (stats.checkIns / stats.capacity) * 100 : 0;
+              const avgRevenue = stats.sessions > 0 ? stats.revenue / stats.sessions : 0;
+              // Score: weighted combination of class avg (60%), fill rate (30%), sessions (10%)
+              const score = (classAvg * 0.6) + (avgFill * 0.3) + (stats.sessions * 0.1);
+              return {
+                name,
+                sessions: stats.sessions,
+                totalCheckIns: stats.checkIns,
+                classAvg: Math.round(classAvg * 10) / 10,
+                avgFill: Math.round(avgFill * 10) / 10,
+                avgRevenue: Math.round(avgRevenue),
+                score: Math.round(score * 10) / 10
+              };
+            })
+            .sort((a, b) => b.classAvg - a.classAvg) // Rank by class average
             .slice(0, 3);
           
           const revenue = avgCheckIns * 2500; // ₹25 per person
@@ -241,19 +439,56 @@ function ProScheduler() {
           const recommendations: string[] = [];
           
           if (sessionCount === 0) {
-            recommendations.push('New class - no historical data available');
-          } else if (fillRate < 50) {
-            recommendations.push('Low fill rate - consider marketing or schedule adjustment');
-          } else if (fillRate > 90) {
-            recommendations.push('High demand - consider adding another session');
+            recommendations.push('🆕 New class with no historical data - Monitor first 4 weeks for attendance patterns');
+          } else {
+            // Fill rate based recommendations
+            if (fillRate < 40) {
+              recommendations.push(`⚠️ Very low fill rate (${Math.round(fillRate)}%) - Consider: (1) Moving to a more popular time slot, (2) Targeted social media campaigns, (3) Intro offer pricing`);
+            } else if (fillRate < 60) {
+              recommendations.push(`📊 Below target fill rate (${Math.round(fillRate)}%) - Try: (1) Partner promotions with local businesses, (2) Member referral incentives, (3) Trial class passes`);
+            } else if (fillRate > 90) {
+              recommendations.push(`🔥 Excellent demand (${Math.round(fillRate)}% fill) - Action: (1) Add ${day} ${normalizedTime} duplicate session, (2) Increase capacity by 20%, (3) Premium pricing opportunity`);
+            } else if (fillRate > 75) {
+              recommendations.push(`✅ Strong performance (${Math.round(fillRate)}% fill) - Maintain current strategy and monitor for growth opportunities`);
+            }
+            
+            // Cancellation rate insights
+            if (cancellationRate > 25) {
+              recommendations.push(`❌ High cancellation rate (${Math.round(cancellationRate)}%) - Implement: (1) 2-hour cancellation policy, (2) Waitlist auto-fill, (3) Cancellation fee structure`);
+            } else if (cancellationRate > 15) {
+              recommendations.push(`⚡ Elevated cancellations (${Math.round(cancellationRate)}%) - Consider: (1) Reminder emails 4 hours before, (2) SMS confirmations, (3) Streak rewards for attendance`);
+            }
+            
+            // Waitlist opportunities
+            if (waitlistRate > 15) {
+              recommendations.push(`🎯 Consistent waitlists (${Math.round(waitlistRate)}%) - Urgent: (1) Add parallel ${normalizedTime} class immediately, (2) Expand to ${sessionCount > 0 ? Math.round(totalCapacity / sessionCount) + 5 : 30} capacity, (3) Create VIP access tier`);
+            } else if (waitlistRate > 8) {
+              recommendations.push(`📈 Growing waitlist (${Math.round(waitlistRate)}%) - Plan: (1) Trial capacity expansion to ${sessionCount > 0 ? Math.round(totalCapacity / sessionCount) + 3 : 28}, (2) Survey waitlisted members for time preferences`);
+            }
+            
+            // Consistency insights
+            if (consistency < 60) {
+              recommendations.push(`📉 Inconsistent attendance (${Math.round(consistency)}% consistency) - Stabilize with: (1) Regular class time/trainer, (2) Build community through social groups, (3) Loyalty programs`);
+            }
+            
+            // Revenue optimization
+            const avgRevPerSession = totalRevenue / sessionCount;
+            if (avgRevPerSession < 15000) {
+              recommendations.push(`💰 Revenue optimization opportunity - Current ₹${Math.round(avgRevPerSession/100)}/session - Tactics: (1) Upsell packages at check-in, (2) Premium time slot pricing, (3) Private training add-ons`);
+            }
+            
+            // Trainer performance
+            if (topTrainers.length > 0 && topTrainers[0].classAvg > avgCheckIns * 1.3) {
+              recommendations.push(`⭐ Trainer ${topTrainers[0].name} excels (${topTrainers[0].classAvg} avg) - Strategy: (1) Feature in marketing, (2) Train other instructors, (3) Signature class series`);
+            }
           }
           
-          if (cancellationRate > 20) {
-            recommendations.push(`High cancellation rate (${Math.round(cancellationRate)}%) - review booking policies`);
-          }
-          
-          if (waitlistRate > 10) {
-            recommendations.push(`Consistent waitlists (${Math.round(waitlistRate)}%) - consider capacity expansion`);
+          // Time slot recommendations
+          const hourNum = parseInt(normalizedTime.split(':')[0]);
+          if (hourNum >= 6 && hourNum < 9 && fillRate < 70) {
+            recommendations.push(`🌅 Early morning slot underperforming - Test: (1) Sunrise outdoor sessions in good weather, (2) Coffee + class packages, (3) Early bird membership discounts`);
+          } else if (hourNum >= 18 && hourNum < 21 && fillRate > 85) {
+            recommendations.push(`🌆 Peak evening time - Maximize: (1) Dynamic pricing (+20%), (2) Express format options, (3) Corporate partnerships for bulk bookings`);
           }
 
           classes.push({
@@ -272,7 +507,7 @@ function ProScheduler() {
             conflicts,
             recommendations,
             // Extended metrics
-            totalRevenue: Math.round(totalRevenue),
+            totalRevenue: Math.round(totalRevenue * 100) / 100,
             avgBooked: Math.round(avgBooked * 10) / 10,
             avgLateCancelled: Math.round(avgLateCancelled * 10) / 10,
             cancellationRate: Math.round(cancellationRate * 10) / 10,
@@ -293,10 +528,13 @@ function ProScheduler() {
       });
     }
     
-    // Always ALSO process historical data for additional insights
-    const uniqueClasses = new Map<string, ScheduleClass>();
-    
-    rawData.forEach((session: SessionData, index: number) => {
+    // Only process historical data if activeOnly is false
+    // This prevents adding 228 historical classes when user only wants to see 151 active ones
+    if (!filters.activeOnly) {
+      // Process historical data for additional insights
+      const uniqueClasses = new Map<string, ScheduleClass>();
+      
+      rawData.forEach((session: SessionData, index: number) => {
       if (!session.Day || !session.Time || !session.Class) return;
       
       const sessionDate = parseISO(session.Date);
@@ -321,12 +559,18 @@ function ProScheduler() {
       );
       
       if (!existingClass && !uniqueClasses.has(key)) {
-        const similarSessions = rawData.filter((s: SessionData) => 
-          s.Day === session.Day &&
-          s.Time === session.Time &&
-          s.Class === session.Class &&
-          s.Location === session.Location
-        );
+        const similarSessions = rawData.filter((s: SessionData) => {
+          // Only include sessions within date range and exclude future
+          const sDate = parseISO(s.Date);
+          if (sDate >= today) return false;
+          const sInDateRange = isWithinInterval(sDate, { start: filters.dateFrom, end: filters.dateTo });
+          if (!sInDateRange) return false;
+          
+          return s.Day === session.Day &&
+            s.Time === session.Time &&
+            s.Class === session.Class &&
+            s.Location === session.Location;
+        });
         
         const sessionCount = similarSessions.length;
         const totalCheckIns = similarSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0);
@@ -340,6 +584,9 @@ function ProScheduler() {
         const totalIntroOffers = similarSessions.reduce((sum, s) => sum + (s.IntroOffers || 0), 0);
         const totalSingleClasses = similarSessions.reduce((sum, s) => sum + (s.SingleClasses || 0), 0);
         const totalRevenue = similarSessions.reduce((sum, s) => sum + (s.Revenue || 0), 0);
+        
+        // Skip classes with no historical data
+        if (sessionCount === 0 || totalCheckIns === 0) return;
         
         const avgCheckIns = sessionCount > 0 ? totalCheckIns / sessionCount : 0;
         const avgBooked = sessionCount > 0 ? totalBooked / sessionCount : 0;
@@ -376,13 +623,21 @@ function ProScheduler() {
         });
         
         const topTrainers = Array.from(trainerStats.entries())
-          .map(([name, stats]) => ({
-            name,
-            sessions: stats.sessions,
-            avgFill: stats.capacity > 0 ? (stats.checkIns / stats.capacity) * 100 : 0,
-            avgRevenue: stats.sessions > 0 ? stats.revenue / stats.sessions : 0
-          }))
-          .sort((a, b) => b.sessions - a.sessions)
+          .map(([name, stats]) => {
+            const avgFill = stats.capacity > 0 ? (stats.checkIns / stats.capacity) * 100 : 0;
+            const classAvg = stats.sessions > 0 ? stats.checkIns / stats.sessions : 0;
+            const score = (classAvg * 0.6) + (avgFill * 0.3) + (stats.sessions * 0.1);
+            return {
+              name,
+              sessions: stats.sessions,
+              totalCheckIns: stats.checkIns,
+              avgFill,
+              classAvg,
+              avgRevenue: stats.sessions > 0 ? stats.revenue / stats.sessions : 0,
+              score
+            };
+          })
+          .sort((a, b) => b.classAvg - a.classAvg)
           .slice(0, 3);
         
         const revenue = avgCheckIns * 2500;
@@ -423,11 +678,16 @@ function ProScheduler() {
       }
     });
     
-    // Add historical classes to the main array
-    classes.push(...Array.from(uniqueClasses.values()));
+      // Add historical classes to the main array only when showing historical data
+      classes.push(...Array.from(uniqueClasses.values()));
+    }
+
+    // Cache the results
+    cachedScheduleClasses = classes;
+    cacheTimestamp = Date.now();
 
     return classes;
-  }, [activeClassesData, rawData, filters.dateFrom, filters.dateTo]);
+  }, [activeClassesData, rawData, filters.dateFrom, filters.dateTo, filters.activeOnly]);
 
   // Revenue formatter utility (K/L/Cr with 1 decimal)
   const formatRevenue = (amount: number): string => {
@@ -583,11 +843,41 @@ function ProScheduler() {
     setShowDrilldown(true);
   };
 
-  // Get all historical sessions for the selected class
+  // Handle ESC key for drilldown modal
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && showDrilldown) {
+        setShowDrilldown(false);
+        setSelectedClass(null);
+      }
+    };
+
+    if (showDrilldown) {
+      document.addEventListener('keydown', handleEscape);
+      // Focus the modal for keyboard events
+      drilldownModalRef.current?.focus();
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [showDrilldown]);
+
+  // Get all historical sessions for the selected class (with date filter applied)
   const getClassSessions = (cls: ScheduleClass): SessionData[] => {
     if (!cls) return [];
     
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
     return rawData.filter((session: SessionData) => {
+      const sessionDate = parseISO(session.Date);
+      
+      // Only include past sessions within the date filter range
+      if (sessionDate >= today) return false;
+      const inDateRange = isWithinInterval(sessionDate, { start: filters.dateFrom, end: filters.dateTo });
+      if (!inDateRange) return false;
+      
       const matchesDay = session.Day === cls.day;
       const matchesTime = session.Time?.startsWith(cls.time);
       const matchesClass = session.Class?.toLowerCase() === cls.class.toLowerCase();
@@ -668,8 +958,13 @@ function ProScheduler() {
           </div>
 
           {/* Trainer Name */}
-          <div className="flex items-center gap-1 text-[10px] text-slate-600 mb-2">
-            <Users className="w-2.5 h-2.5" />
+          <div className="flex items-center gap-2 text-[10px] text-slate-600 mb-2">
+            {findTrainerImage(cls.trainer) ? (
+              // eslint-disable-next-line jsx-a11y/img-redundant-alt
+              <img src={findTrainerImage(cls.trainer) as string} alt={`${cls.trainer} avatar`} className="w-5 h-5 rounded-full object-cover" />
+            ) : (
+              <Users className="w-2.5 h-2.5" />
+            )}
             <span className="truncate">{cls.trainer}</span>
           </div>
 
@@ -721,7 +1016,12 @@ function ProScheduler() {
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2 text-xs text-gray-700">
                     <div className="bg-blue-100 rounded-full p-1">
-                      <Users className="w-2.5 h-2.5 text-blue-600" />
+                      {findTrainerImage(cls.trainer) ? (
+                        // eslint-disable-next-line jsx-a11y/img-redundant-alt
+                        <img src={findTrainerImage(cls.trainer) as string} alt={`${cls.trainer} avatar`} className="w-5 h-5 rounded-full object-cover" />
+                      ) : (
+                        <Users className="w-2.5 h-2.5 text-blue-600" />
+                      )}
                     </div>
                     <span className="font-medium truncate">{cls.trainer}</span>
                   </div>
@@ -823,34 +1123,7 @@ function ProScheduler() {
         </div>
       </div>
 
-      {/* Debug Information - Remove in production */}
-      <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-        <h3 className="font-semibold text-gray-700 mb-2">Debug Information</h3>
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <span className="font-medium">Active Classes Data:</span>
-            <div className="text-gray-600">
-              {Object.keys(activeClassesData).length > 0 ? (
-                <div>
-                  {Object.entries(activeClassesData).map(([day, classes]) => (
-                    <div key={day}>{day}: {classes.length} classes</div>
-                  ))}
-                </div>
-              ) : (
-                <span className="text-red-600">No active classes loaded</span>
-              )}
-            </div>
-          </div>
-          <div>
-            <span className="font-medium">Raw Data:</span>
-            <div className="text-gray-600">{rawData.length} sessions</div>
-            <span className="font-medium">Date Filter:</span>
-            <div className="text-gray-600">
-              {filters.dateFrom.toLocaleDateString()} - {filters.dateTo.toLocaleDateString()}
-            </div>
-          </div>
-        </div>
-      </div>
+
 
       {/* Advanced Control Panel */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
@@ -978,6 +1251,100 @@ function ProScheduler() {
                   ))}
                 </div>
               </div>
+
+              {/* Class Filter */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Classes</label>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {uniqueClasses.map(className => (
+                    <label key={className} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={filters.classes.includes(className)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setFilters({ ...filters, classes: [...filters.classes, className] });
+                          } else {
+                            setFilters({ ...filters, classes: filters.classes.filter(c => c !== className) });
+                          }
+                        }}
+                        className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-700">{className}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Type Filter - NEW */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Class Types</label>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {(() => {
+                    const uniqueTypes = Array.from(new Set(rawData.map((s: SessionData) => s.Type).filter(Boolean))).sort();
+                    return uniqueTypes.map(type => (
+                      <label key={type} className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={filters.classes.includes(type)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setFilters({ ...filters, classes: [...filters.classes, type] });
+                            } else {
+                              setFilters({ ...filters, classes: filters.classes.filter(c => c !== type) });
+                            }
+                          }}
+                          className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-700">{type}</span>
+                      </label>
+                    ));
+                  })()}
+                </div>
+              </div>
+
+              {/* Period Filter - NEW */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Period</label>
+                <div className="space-y-2">
+                  <button
+                    onClick={() => {
+                      const today = new Date();
+                      setFilters({ ...filters, dateFrom: new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000), dateTo: today });
+                    }}
+                    className="w-full px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-left transition-colors"
+                  >
+                    Last 7 Days
+                  </button>
+                  <button
+                    onClick={() => {
+                      const today = new Date();
+                      setFilters({ ...filters, dateFrom: new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000), dateTo: today });
+                    }}
+                    className="w-full px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-left transition-colors"
+                  >
+                    Last 30 Days
+                  </button>
+                  <button
+                    onClick={() => {
+                      const today = new Date();
+                      setFilters({ ...filters, dateFrom: new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000), dateTo: today });
+                    }}
+                    className="w-full px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-left transition-colors"
+                  >
+                    Last 90 Days
+                  </button>
+                  <button
+                    onClick={() => {
+                      const today = new Date();
+                      setFilters({ ...filters, dateFrom: today, dateTo: new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000) });
+                    }}
+                    className="w-full px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-left transition-colors"
+                  >
+                    Next 30 Days
+                  </button>
+                </div>
+              </div>
             </div>
 
             {/* Active Only Toggle */}
@@ -1036,12 +1403,26 @@ function ProScheduler() {
                 };
                 return (
                   <div key={trainerName} className="bg-gray-50 rounded-xl p-4 border">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-semibold text-gray-900">{trainerName}</h3>
-                      <span className={`px-2 py-1 text-xs font-medium rounded-full ${workloadColors[analytics.workload]}`}>
-                        {analytics.workload}
-                      </span>
-                    </div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          {(() => {
+                            const img = findTrainerImage(trainerName);
+                            const pct = Math.min((analytics.totalHours / 15) * 100, 100);
+                            const color = getWorkloadColor(analytics.totalHours);
+                            return (
+                              <div className="flex items-center gap-3">
+                                <div className="self-start -mt-1">
+                                  <CircularAvatar percent={pct} color={color} size={48} stroke={4} imgSrc={img} initials={trainerName.split(' ').map(n=>n[0]).join('').substring(0,2).toUpperCase()} />
+                                </div>
+                                <div className="font-semibold text-gray-900">{trainerName}</div>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${workloadColors[analytics.workload]}`}>
+                          {analytics.workload}
+                        </span>
+                      </div>
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
                         <span className="text-gray-600">Classes:</span>
@@ -1072,64 +1453,108 @@ function ProScheduler() {
         </div>
       )}
 
-      {/* Trainer Hours Overview - Modern, Lean Design with Stats */}
-      <div className="mb-4 px-1">
-        <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2.5">Trainer Hours</h3>
-        <div className="grid grid-cols-4 md:grid-cols-7 lg:grid-cols-10 gap-1.5">
-          {(() => {
-            const trainerHours = new Map<string, { classes: number; hours: number }>();
-            filteredClasses.forEach(cls => {
-              if (!trainerHours.has(cls.trainer)) {
-                trainerHours.set(cls.trainer, { classes: 0, hours: 0 });
-              }
-              const data = trainerHours.get(cls.trainer)!;
-              data.classes += 1;
-              data.hours += 1; // Each class = 1 hour
-            });
-            
-            const maxHours = Math.max(...Array.from(trainerHours.values()).map(d => d.hours), 1);
-            
-            return Array.from(trainerHours.entries())
-              .sort((a, b) => b[1].hours - a[1].hours)
-              .map(([trainer, data], idx) => {
-                const barPercentage = (data.hours / maxHours) * 100;
+      {/* Trainer Hours Overview - Modern Professional Design */}
+      <div className="mb-6">
+        <div className="bg-gradient-to-r from-slate-50 to-blue-50 rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-200 bg-white/80">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-800 uppercase tracking-wide flex items-center gap-2">
+                <Users className="w-4 h-4 text-blue-600" />
+                Trainer Workload Overview
+              </h3>
+              <span className="text-xs text-slate-500 font-medium">
+                {(() => {
+                  const trainerHours = new Map<string, { classes: number; hours: number }>();
+                  filteredClasses.forEach(cls => {
+                    if (!trainerHours.has(cls.trainer)) {
+                      trainerHours.set(cls.trainer, { classes: 0, hours: 0 });
+                    }
+                    const data = trainerHours.get(cls.trainer)!;
+                    data.classes += 1;
+                    data.hours += 1;
+                  });
+                  return trainerHours.size;
+                })()} Trainers
+              </span>
+            </div>
+          </div>
+          <div className="p-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
+              {(() => {
+                const trainerHours = new Map<string, { classes: number; hours: number }>();
+                filteredClasses.forEach(cls => {
+                  if (!trainerHours.has(cls.trainer)) {
+                    trainerHours.set(cls.trainer, { classes: 0, hours: 0 });
+                  }
+                  const data = trainerHours.get(cls.trainer)!;
+                  data.classes += 1;
+                  data.hours += 1;
+                });
                 
-                return (
-                  <motion.div
-                    key={trainer}
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: idx * 0.02, duration: 0.2 }}
-                    className="group relative bg-white border border-slate-200 rounded-md p-1.5 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
-                  >
-                    {/* Subtle gradient overlay on hover */}
-                    <div className="absolute inset-0 bg-gradient-to-br from-blue-50/0 to-slate-50/0 group-hover:from-blue-50/50 group-hover:to-slate-50/30 rounded-md transition-all"></div>
+                
+                
+                return Array.from(trainerHours.entries())
+                  .sort((a, b) => b[1].hours - a[1].hours)
+                  .map(([trainer, data], idx) => {
                     
-                    <div className="relative z-10">
-                      <div className="text-[9px] font-semibold text-slate-700 truncate mb-0.5 leading-tight">{trainer}</div>
-                      <div className="flex items-baseline gap-1 mb-1">
-                        <div className="text-base font-bold text-slate-900">{data.hours}</div>
-                        <div className="text-[8px] text-slate-500 font-medium">hrs</div>
-                      </div>
-                      
-                      {/* Statistics bar */}
-                      <div className="mb-1">
-                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <motion.div 
-                            initial={{ width: 0 }}
-                            animate={{ width: `${barPercentage}%` }}
-                            transition={{ delay: idx * 0.02 + 0.2, duration: 0.5 }}
-                            className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full"
-                          />
+                    
+                    const isSelected = filters.trainers.includes(trainer);
+                    
+                    // Generate initials for avatar
+                    const initials = trainer.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+                    
+                    return (
+                      <motion.div
+                        key={trainer}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.03, duration: 0.25 }}
+                        onClick={() => {
+                          if (isSelected) {
+                            setFilters({ ...filters, trainers: filters.trainers.filter(t => t !== trainer) });
+                          } else {
+                            setFilters({ ...filters, trainers: [...filters.trainers, trainer] });
+                          }
+                        }}
+                        className={`group relative bg-white rounded-lg p-2 hover:shadow-md transition-all cursor-pointer border ${isSelected ? 'ring-2 ring-blue-200' : 'hover:shadow-lg'}`}
+                        style={{ minWidth: 140 }}
+                      >
+                        {isSelected && (
+                          <div className="absolute -top-1 -right-1 bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center shadow z-20">
+                            <span className="text-[10px] font-bold">✓</span>
+                          </div>
+                        )}
+
+                        <div className="flex flex-col items-center text-center gap-1">
+                          {/* Circular ring that fills to show % of 15h target */}
+                          <div className="relative">
+                            {(() => {
+                              const pctOfTarget = Math.min((data.hours / 15) * 100, 100);
+                              const color = getWorkloadColor(data.hours);
+                              const imgSrc = findTrainerImage(trainer);
+
+                              return (
+                                <div className="self-start -mt-1">
+                                  <CircularAvatar percent={pctOfTarget} color={color} size={56} stroke={4} imgSrc={imgSrc} initials={initials} />
+                                </div>
+                              );
+                            })()}
+                          </div>
+
+                          <div className="text-[12px] font-semibold text-slate-800 truncate w-full" title={trainer}>{trainer}</div>
+
+                          <div className="text-[11px] text-slate-500">
+                            <span className={`font-bold mr-1 ${data.hours > 15 ? 'text-red-600' : data.hours >= 12 ? 'text-yellow-600' : 'text-green-600'}`}>{data.hours}</span>
+                            <span className="text-xs text-slate-400">hrs</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400">{data.classes} classes</div>
                         </div>
-                      </div>
-                      
-                      <div className="text-[8px] text-slate-400 leading-tight">{data.classes} class{data.classes !== 1 ? 'es' : ''}</div>
-                    </div>
-                  </motion.div>
-                );
-              });
-          })()}
+                      </motion.div>
+                    );
+                  });
+              })()}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1295,48 +1720,66 @@ function ProScheduler() {
             </div>
           )}
 
-          {/* Multi-Location View - Like Weekly Calendar */}
+          {/* Multi-Location View - Day-based columns with location sub-columns */}
           {calendarViewMode === 'multi-location' && (
             <div className="bg-white rounded-2xl border border-gray-200 shadow-lg overflow-hidden">
               <div className="bg-gradient-to-r from-slate-100 to-blue-100 px-6 py-4 border-b border-slate-200">
                 <h3 className="font-bold text-slate-900 flex items-center gap-3">
                   <MapPin className="w-5 h-5 text-blue-600" />
-                  All Locations - Multi-Location View
+                  Multi-Location View - Day-Based Grid
                   <span className="text-xs bg-blue-500 text-white px-3 py-1 rounded-full font-bold">
                     {uniqueLocations.filter(location => filteredClasses.filter(cls => cls.location === location).length > 0).length} locations
                   </span>
                 </h3>
               </div>
 
-              {/* Sticky Header Row */}
-              <div className="sticky top-0 z-20 flex bg-gradient-to-r from-gray-100 to-gray-200 shadow-sm border-b border-gray-300">
-                <div className="flex-shrink-0 w-24 border-r border-gray-200 p-3 flex items-center justify-center">
-                  <span className="text-sm font-bold text-gray-700">Time</span>
-                </div>
-                {uniqueLocations.filter(location => {
-                  // Only show locations that have at least one class
-                  const locationClasses = filteredClasses.filter(cls => cls.location === location);
-                  return locationClasses.length > 0;
-                }).map((location) => {
-                  const locationClasses = filteredClasses.filter(cls => cls.location === location);
-                  return (
-                    <div key={location} className="flex-1 min-w-[200px] border-r border-gray-200 last:border-r-0 p-3 text-center">
-                      <div className="font-bold text-gray-800 text-sm truncate" title={location}>
-                        <div className="flex items-center justify-center gap-1">
-                          <MapPin className="w-3 h-3 text-blue-600" />
-                          {location}
+              {/* Sticky Header Row - Days with Location Sub-columns */}
+              <div className="sticky top-0 z-20 bg-gradient-to-r from-gray-100 to-gray-200 shadow-sm border-b-2 border-gray-300">
+                <div className="flex">
+                  <div className="flex-shrink-0 w-24 border-r-2 border-gray-300 p-3 flex items-center justify-center bg-gray-100">
+                    <span className="text-sm font-bold text-gray-700">Time</span>
+                  </div>
+                  {DAYS_OF_WEEK.map((day) => {
+                    const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
+                    const activeLocations = uniqueLocations.filter(location => 
+                      dayClasses.some(cls => cls.location === location)
+                    );
+                    
+                    if (activeLocations.length === 0) return null;
+                    
+                    return (
+                      <div key={day.key} className="flex-1 min-w-[280px] border-r-2 border-gray-300 last:border-r-0">
+                        {/* Day Header */}
+                        <div className="bg-gradient-to-br from-blue-100 to-indigo-100 border-b border-gray-300 p-2 text-center">
+                          <div className="font-bold text-gray-900 text-sm">{day.short}</div>
+                          <div className="text-xs text-gray-600 mt-0.5">{dayClasses.length} classes</div>
+                        </div>
+                        {/* Location Sub-headers */}
+                        <div className="flex">
+                          {activeLocations.map((location, idx) => {
+                            const locationDayClasses = dayClasses.filter(cls => cls.location === location);
+                            return (
+                              <div 
+                                key={`${day.key}-${location}`} 
+                                className={`flex-1 min-w-[130px] p-2 text-center bg-white border-r border-gray-200 ${idx === activeLocations.length - 1 ? 'border-r-0' : ''}`}
+                              >
+                                <div className="text-xs font-semibold text-gray-700 truncate flex items-center justify-center gap-1" title={location}>
+                                  <MapPin className="w-2.5 h-2.5 text-blue-500" />
+                                  <span>{location.split(' ')[0]}</span>
+                                </div>
+                                <div className="text-[10px] text-gray-500">{locationDayClasses.length}</div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
-                      <div className="text-xs text-gray-600 mt-1">
-                        {locationClasses.length} classes
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Scrollable Time Slots Container */}
-              <div className="overflow-y-auto max-h-[70vh] bg-white">
+              <div className="overflow-auto max-h-[70vh] bg-white">
                 {TIME_SLOTS.map((slot) => {
                   const slotHour = parseInt(slot.time24.split(':')[0]);
                   const isNonFunctional = slotHour < 7 || slotHour > 20;
@@ -1348,110 +1791,103 @@ function ProScheduler() {
                   return (
                     <div key={slot.time24} className={`flex border-b border-gray-100 ${hasClassesAtThisTime ? 'bg-white' : 'bg-gray-25'}`}>
                       {/* Time Label */}
-                      <div className={`flex-shrink-0 w-20 border-r-2 border-gray-200 p-2 flex items-center justify-center ${hasClassesAtThisTime ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'}`}>
+                      <div className={`flex-shrink-0 w-24 border-r-2 border-gray-200 p-2 flex items-center justify-center ${hasClassesAtThisTime ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'}`}>
                         <div className="text-xs font-bold text-gray-700 text-center">
                           {slot.time12}
+                          {slotClasses.length > 0 && (
+                            <div className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold mt-1">
+                              {slotClasses.length}
+                            </div>
+                          )}
                         </div>
                       </div>
 
-                      {/* Location Columns */}
-                      {uniqueLocations.filter(location => {
-                        // Only show locations that have at least one class
-                        const locationClasses = filteredClasses.filter(cls => cls.location === location);
-                        return locationClasses.length > 0;
-                      }).map((location) => {
-                        // Get all classes for this time slot and location (across all days)
-                        const locationSlotClasses = filteredClasses.filter(cls => 
-                          cls.time === slot.time24 && cls.location === location
+                      {/* Day Columns with Location Sub-columns */}
+                      {DAYS_OF_WEEK.map((day) => {
+                        const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
+                        const activeLocations = uniqueLocations.filter(location => 
+                          dayClasses.some(cls => cls.location === location)
                         );
-
+                        
+                        if (activeLocations.length === 0) return null;
+                        
                         return (
-                          <div key={`${location}-${slot.time24}`} className="flex-1 min-w-[180px] max-w-[280px] border-r border-gray-200 last:border-r-0 p-2 min-h-[90px] relative bg-white hover:bg-gray-50/50 transition-colors">
-                            <div className="space-y-2">
-                              {locationSlotClasses.map((cls) => {
-                                const fillRate = cls.fillRate;
-                                // removed unused isHighPerformance const
-                                const hasConflicts = cls.conflicts.length > 0;
+                          <div key={`${day.key}-${slot.time24}`} className="flex-1 min-w-[280px] border-r-2 border-gray-200 last:border-r-0">
+                            <div className="flex h-full">
+                              {activeLocations.map((location, idx) => {
+                                // Get classes for this specific time, day, and location
+                                const locationSlotClasses = scheduleGrid[day.key]?.[slot.time24]?.filter(cls => 
+                                  cls.location === location
+                                ) || [];
 
                                 return (
-                                  <motion.div
-                                    key={cls.id}
-                                    initial={{ opacity: 0, scale: 0.95 }}
-                                    animate={{ opacity: 1, scale: 1 }}
-                                    whileHover={{ scale: 1.03, zIndex: 20 }}
-                                    onClick={() => handleClassClick(cls)}
-                                    className={`w-full rounded-xl p-3 cursor-pointer transition-all relative border-l-4 ${
-                                      hasConflicts
-                                        ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-600 ring-2 ring-red-300 shadow-lg'
-                                        : cls.status === 'Active'
-                                          ? 'bg-gradient-to-br from-white via-blue-50 to-indigo-50 border-blue-500 shadow-md hover:shadow-xl'
-                                          : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-400 shadow-sm'
-                                    }`}
+                                  <div 
+                                    key={`${day.key}-${location}-${slot.time24}`} 
+                                    className={`flex-1 min-w-[130px] p-2 min-h-[90px] relative bg-white hover:bg-gray-50/50 transition-colors border-r border-gray-100 ${idx === activeLocations.length - 1 ? 'border-r-0' : ''} overflow-hidden`}
                                   >
-                                    {/* Status Badge */}
-                                    {cls.status === 'Active' && (
-                                      <div className="absolute -top-1 -right-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center shadow-md">
-                                        <span className="text-white text-xs font-bold">✓</span>
-                                      </div>
-                                    )}
+                                    <div className="space-y-1">
+                                      {locationSlotClasses.map((cls) => {
+                                        const fillRate = cls.fillRate;
+                                        const hasConflicts = cls.conflicts.length > 0;
 
-                                    {/* Conflict indicator */}
-                                    {hasConflicts && (
-                                      <div className="absolute top-1 left-1 w-6 h-6 bg-red-500 rounded-full flex items-center justify-center shadow-md" title="Has Conflicts!">
-                                        <AlertTriangle className="w-4 h-4 text-white" />
-                                      </div>
-                                    )}
+                                        return (
+                                          <motion.div
+                                            key={cls.id}
+                                            initial={{ opacity: 0, scale: 0.95 }}
+                                            animate={{ opacity: 1, scale: 1 }}
+                                            whileHover={{ scale: 1.05, zIndex: 20 }}
+                                            onClick={() => handleClassClick(cls)}
+                                            className={`w-full rounded-lg p-2 cursor-pointer transition-all relative border-l-4 ${
+                                              hasConflicts
+                                                ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-600 ring-2 ring-red-300 shadow-md'
+                                                : cls.status === 'Active'
+                                                  ? 'bg-gradient-to-br from-white via-blue-50 to-indigo-50 border-blue-500 shadow-sm hover:shadow-md'
+                                                  : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-400 shadow-sm'
+                                            }`}
+                                          >
+                                            {/* Status Badge */}
+                                            {cls.status === 'Active' && (
+                                              <div className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-sm">
+                                                <span className="text-white text-[10px] font-bold">✓</span>
+                                              </div>
+                                            )}
 
-                                    {/* Session count badge */}
-                                    {cls.sessionCount > 1 && !hasConflicts && (
-                                      <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-blue-600 rounded-full">
-                                        <span className="text-xs font-bold text-white">{cls.sessionCount}x</span>
-                                      </div>
-                                    )}
+                                            {/* Conflict indicator */}
+                                            {hasConflicts && (
+                                              <div className="absolute top-0.5 left-0.5 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center shadow-sm" title="Has Conflicts!">
+                                                <AlertTriangle className="w-3 h-3 text-white" />
+                                              </div>
+                                            )}
 
-                                    {/* Class Name */}
-                                    <div className={`text-sm font-bold mb-2 ${hasConflicts ? 'text-red-800' : 'text-gray-900'}`}>
-                                      {cls.class.replace('Studio ', '')}
+                                            {/* Class Name */}
+                                            <div className={`text-xs font-bold mb-1 truncate ${hasConflicts ? 'text-red-800' : 'text-gray-900'}`} title={cls.class}>
+                                              {cls.class.replace('Studio ', '')}
+                                            </div>
+
+                                            {/* Trainer */}
+                                            <div className={`text-[10px] mb-1 flex items-center gap-0.5 truncate ${hasConflicts ? 'text-red-700' : 'text-gray-700'}`} title={cls.trainer}>
+                                              <span className="font-medium">👤</span>
+                                              <span className="truncate">{cls.trainer.split(' ')[0]}</span>
+                                            </div>
+
+                                            {/* Stats Row */}
+                                            <div className="flex items-center justify-between gap-1">
+                                              <div className={`flex items-center gap-1 text-[10px] ${hasConflicts ? 'text-red-700' : 'text-gray-700'}`}>
+                                                <span className="font-semibold">{cls.avgCheckIns.toFixed(0)}/{cls.capacity}</span>
+                                              </div>
+                                              <span className={`text-[10px] px-1 py-0.5 rounded ${
+                                                fillRate >= 80 ? 'bg-green-100 text-green-700' :
+                                                fillRate >= 50 ? 'bg-yellow-100 text-yellow-700' :
+                                                'bg-red-100 text-red-700'
+                                              }`}>
+                                                {fillRate.toFixed(0)}%
+                                              </span>
+                                            </div>
+                                          </motion.div>
+                                        );
+                                      })}
                                     </div>
-
-                                    {/* Day Badge */}
-                                    <div className="text-[10px] font-semibold text-blue-600 mb-2 bg-blue-50 px-2 py-0.5 rounded-full inline-block">
-                                      {cls.day}
-                                    </div>
-
-                                    {/* Trainer */}
-                                    <div className={`text-xs mb-2 flex items-center gap-1 ${hasConflicts ? 'text-red-700' : 'text-gray-700'}`}>
-                                      <span className="font-medium">👤</span>
-                                      <span className="truncate">{cls.trainer}</span>
-                                    </div>
-
-                                    {/* Stats Row */}
-                                    <div className="flex items-center justify-between gap-2">
-                                      <div className={`flex items-center gap-1 text-xs ${hasConflicts ? 'text-red-700' : 'text-gray-700'}`}>
-                                        <span className="font-semibold">{cls.avgCheckIns}/{cls.capacity}</span>
-                                        <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                          fillRate >= 80 ? 'bg-green-100 text-green-700' :
-                                          fillRate >= 50 ? 'bg-yellow-100 text-yellow-700' :
-                                          'bg-red-100 text-red-700'
-                                        }`}>
-                                          {fillRate.toFixed(0)}%
-                                        </span>
-                                      </div>
-
-                                      {cls.avgCheckIns > 0 && (
-                                        <div className="text-xs text-blue-600">
-                                          <span className="font-medium">Avg: {cls.avgCheckIns.toFixed(1)}</span>
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    {/* Revenue if available */}
-                                    {cls.revenue > 0 && (
-                                      <div className="text-xs mt-1 text-green-600">
-                                        <span className="font-semibold">{formatRevenue(cls.revenue)}</span>
-                                      </div>
-                                    )}
-                                  </motion.div>
+                                  </div>
                                 );
                               })}
                             </div>
@@ -1736,6 +2172,7 @@ function ProScheduler() {
         return (
           <motion.div
             key="drilldown-modal"
+            ref={drilldownModalRef}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -1746,13 +2183,7 @@ function ProScheduler() {
                 setSelectedClass(null);
               }
             }}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setShowDrilldown(false);
-                setSelectedClass(null);
-              }
-            }}
-            tabIndex={-1}
+            tabIndex={0}
           >
             <motion.div
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
@@ -1764,7 +2195,23 @@ function ProScheduler() {
               {/* Header */}
               <div className="flex items-start justify-between mb-4 pb-4 border-b px-2">
                 <div>
-                  <h2 className="text-2xl font-bold text-slate-800 mb-1">{selectedClass.class} - {selectedClass.trainer}</h2>
+                  <div className="flex items-center gap-4">
+                    <div>
+                      <h2 className="text-2xl font-bold text-slate-800 mb-1">{selectedClass.class}</h2>
+                      <div className="flex items-center gap-2 text-sm text-slate-600">
+                        {(() => {
+                          const img = findTrainerImage(selectedClass.trainer);
+                          return img ? (
+                            // eslint-disable-next-line jsx-a11y/img-redundant-alt
+                            <img src={img as string} alt={`${selectedClass.trainer} avatar`} className="w-10 h-10 rounded-full object-cover" />
+                          ) : (
+                            <div className="text-sm font-medium">{selectedClass.trainer}</div>
+                          );
+                        })()}
+                        <div className="text-sm text-slate-500">{selectedClass.trainer}</div>
+                      </div>
+                    </div>
+                  </div>
                   <div className="flex items-center gap-3 text-sm text-slate-500">
                     <span className="flex items-center gap-1">
                       <Clock className="w-4 h-4" />
@@ -1793,54 +2240,240 @@ function ProScheduler() {
               {/* Scrollable body */}
               <div className="overflow-y-auto max-h-[76vh] pr-2">
               
-              {/* Top KPI Tiles */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 px-2">
-                <div className="bg-white rounded-lg p-3 shadow-sm border">
-                  <div className="text-xs font-semibold text-gray-500">FILL RATE</div>
-                  <div className="text-2xl font-bold text-slate-800">{selectedClass.fillRate}%</div>
-                  <div className="mt-2 bg-white/50 rounded-full h-1.5">
-                    <div 
-                      className="bg-gradient-to-r from-blue-500 to-blue-600 h-1.5 rounded-full transition-all"
-                      style={{ width: `${selectedClass.fillRate}%` }}
-                    ></div>
+              {/* Consolidated Metrics Cards - Silver Theme with Animations */}
+              {hasHistoricalData && (() => {
+                const totalCheckIns = classSessions.reduce((sum, s) => sum + s.CheckedIn, 0);
+                const totalBooked = classSessions.reduce((sum, s) => sum + s.Booked, 0);
+                
+                const totalCapacity = classSessions.reduce((sum, s) => sum + s.Capacity, 0);
+                const totalRevenue = classSessions.reduce((sum, s) => sum + s.Revenue, 0);
+                const emptyClasses = classSessions.filter(s => s.CheckedIn === 0).length;
+                const nonEmptySessions = classSessions.filter(s => s.CheckedIn > 0);
+                
+                const avgCheckInsExcludingEmpty = nonEmptySessions.length > 0 ? nonEmptySessions.reduce((sum, s) => sum + s.CheckedIn, 0) / nonEmptySessions.length : 0;
+                const fillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
+                
+                
+                return (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6 px-2">
+                    {/* Sessions */}
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4 }}
+                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
+                    >
+                      <motion.div 
+                        className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-transparent"
+                        initial={{ x: '-100%' }}
+                        animate={{ x: '100%' }}
+                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
+                      />
+                      <div className="relative z-10">
+                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Sessions</div>
+                        <div className="text-3xl font-bold text-gray-900">{classSessions.length}</div>
+                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
+                          <motion.div 
+                            className="bg-gradient-to-r from-blue-500 to-blue-600 h-1.5 rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: '100%' }}
+                            transition={{ duration: 0.8, delay: 0.2 }}
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Check-ins */}
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4 }}
+                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
+                    >
+                      <motion.div 
+                        className="absolute inset-0 bg-gradient-to-r from-green-400/20 to-transparent"
+                        initial={{ x: '-100%' }}
+                        animate={{ x: '100%' }}
+                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
+                      />
+                      <div className="relative z-10">
+                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Check-ins</div>
+                        <div className="text-3xl font-bold text-gray-900">{totalCheckIns}</div>
+                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
+                          <motion.div 
+                            className="bg-gradient-to-r from-green-500 to-green-600 h-1.5 rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${Math.min(fillRate, 100)}%` }}
+                            transition={{ duration: 0.8, delay: 0.2 }}
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Class Avg (Excluding Empty) */}
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4 }}
+                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
+                    >
+                      <motion.div 
+                        className="absolute inset-0 bg-gradient-to-r from-purple-400/20 to-transparent"
+                        initial={{ x: '-100%' }}
+                        animate={{ x: '100%' }}
+                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
+                      />
+                      <div className="relative z-10">
+                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Avg (No Empty)</div>
+                        <div className="text-3xl font-bold text-gray-900">{avgCheckInsExcludingEmpty.toFixed(1)}</div>
+                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
+                          <motion.div 
+                            className="bg-gradient-to-r from-purple-500 to-purple-600 h-1.5 rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${Math.min((avgCheckInsExcludingEmpty / 30) * 100, 100)}%` }}
+                            transition={{ duration: 0.8, delay: 0.2 }}
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Revenue */}
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4 }}
+                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
+                    >
+                      <motion.div 
+                        className="absolute inset-0 bg-gradient-to-r from-emerald-400/20 to-transparent"
+                        initial={{ x: '-100%' }}
+                        animate={{ x: '100%' }}
+                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
+                      />
+                      <div className="relative z-10">
+                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Revenue</div>
+                        <div className="text-2xl font-bold text-gray-900">{formatCurrency(totalRevenue)}</div>
+                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
+                          <motion.div 
+                            className="bg-gradient-to-r from-emerald-500 to-emerald-600 h-1.5 rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${Math.min((totalRevenue / 1000000) * 100, 100)}%` }}
+                            transition={{ duration: 0.8, delay: 0.2 }}
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Fill Rate */}
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4 }}
+                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
+                    >
+                      <motion.div 
+                        className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-transparent"
+                        initial={{ x: '-100%' }}
+                        animate={{ x: '100%' }}
+                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
+                      />
+                      <div className="relative z-10">
+                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Fill Rate</div>
+                        <div className="text-3xl font-bold text-gray-900">{fillRate.toFixed(0)}%</div>
+                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
+                          <motion.div 
+                            className="bg-gradient-to-r from-blue-500 to-blue-600 h-1.5 rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${fillRate}%` }}
+                            transition={{ duration: 0.8, delay: 0.2 }}
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Capacity */}
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4 }}
+                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
+                    >
+                      <motion.div 
+                        className="absolute inset-0 bg-gradient-to-r from-indigo-400/20 to-transparent"
+                        initial={{ x: '-100%' }}
+                        animate={{ x: '100%' }}
+                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
+                      />
+                      <div className="relative z-10">
+                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Capacity</div>
+                        <div className="text-3xl font-bold text-gray-900">{totalCapacity}</div>
+                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
+                          <motion.div 
+                            className="bg-gradient-to-r from-indigo-500 to-indigo-600 h-1.5 rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: '100%' }}
+                            transition={{ duration: 0.8, delay: 0.2 }}
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Bookings */}
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4 }}
+                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
+                    >
+                      <motion.div 
+                        className="absolute inset-0 bg-gradient-to-r from-cyan-400/20 to-transparent"
+                        initial={{ x: '-100%' }}
+                        animate={{ x: '100%' }}
+                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
+                      />
+                      <div className="relative z-10">
+                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Booked</div>
+                        <div className="text-3xl font-bold text-gray-900">{totalBooked}</div>
+                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
+                          <motion.div 
+                            className="bg-gradient-to-r from-cyan-500 to-cyan-600 h-1.5 rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${totalCapacity > 0 ? (totalBooked / totalCapacity) * 100 : 0}%` }}
+                            transition={{ duration: 0.8, delay: 0.2 }}
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Empty Classes */}
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4 }}
+                      className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl p-4 shadow-md border border-gray-300 relative overflow-hidden"
+                    >
+                      <motion.div 
+                        className="absolute inset-0 bg-gradient-to-r from-red-400/20 to-transparent"
+                        initial={{ x: '-100%' }}
+                        animate={{ x: '100%' }}
+                        transition={{ duration: 1.5, repeat: Infinity, repeatDelay: 2 }}
+                      />
+                      <div className="relative z-10">
+                        <div className="text-xs font-bold text-gray-600 uppercase tracking-wide mb-1">Empty</div>
+                        <div className="text-3xl font-bold text-gray-900">{emptyClasses}</div>
+                        <div className="mt-2 bg-gray-300 rounded-full h-1.5 overflow-hidden">
+                          <motion.div 
+                            className="bg-gradient-to-r from-red-500 to-red-600 h-1.5 rounded-full"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${classSessions.length > 0 ? (emptyClasses / classSessions.length) * 100 : 0}%` }}
+                            transition={{ duration: 0.8, delay: 0.2 }}
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
                   </div>
-                </div>
-                
-                <div className="bg-white rounded-lg p-3 shadow-sm border">
-                  <div className="text-xs font-semibold text-gray-500">CLASS AVG</div>
-                  <div className="text-2xl font-bold text-slate-800">{selectedClass.avgCheckIns}</div>
-                </div>
-                
-                <div className="bg-white rounded-lg p-3 shadow-sm border">
-                  <div className="text-xs font-semibold text-gray-500">REVENUE</div>
-                  <div className="text-xl font-bold text-slate-800">₹{(selectedClass.totalRevenue/100).toLocaleString('en-IN')}</div>
-                </div>
-                
-                <div className="bg-white rounded-lg p-3 shadow-sm border">
-                  <div className="text-xs font-semibold text-gray-500">SESSIONS</div>
-                  <div className="text-2xl font-bold text-slate-800">{selectedClass.sessionCount}</div>
-                </div>
-
-                <div className="bg-white rounded-lg p-3 shadow-sm border">
-                  <div className="text-xs font-semibold text-gray-500">CANCEL RATE</div>
-                  <div className="text-2xl font-bold text-slate-800">{selectedClass.cancellationRate}%</div>
-                </div>
-
-                <div className="bg-white rounded-lg p-3 shadow-sm border">
-                  <div className="text-xs font-semibold text-gray-500">WAITLIST</div>
-                  <div className="text-2xl font-bold text-slate-800">{selectedClass.waitlistRate}%</div>
-                </div>
-
-                <div className="bg-white rounded-lg p-3 shadow-sm border">
-                  <div className="text-xs font-semibold text-gray-500">CONSISTENCY</div>
-                  <div className="text-2xl font-bold text-slate-800">{selectedClass.consistency}%</div>
-                </div>
-
-                <div className="bg-white rounded-lg p-3 shadow-sm border">
-                  <div className="text-xs font-semibold text-gray-500">CONVERSION</div>
-                  <div className="text-2xl font-bold text-slate-800">{selectedClass.bookingToCheckInRate}%</div>
-                </div>
-              </div>
+                );
+              })()}
 
               {/* Large Panels - Additional Metrics */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6 px-2">
@@ -1849,7 +2482,7 @@ function ProScheduler() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <div className="text-xs text-gray-500">Rev/Check-in</div>
-                      <div className="text-lg font-bold text-slate-800">₹{(selectedClass.revenuePerCheckIn/100).toFixed(0)}</div>
+                      <div className="text-lg font-bold text-slate-800">{formatCurrency(selectedClass.revenuePerCheckIn)}</div>
                     </div>
                     <div>
                       <div className="text-xs text-gray-500">Complimentary</div>
@@ -1885,6 +2518,15 @@ function ProScheduler() {
                     <div>
                       <div className="text-xs text-gray-500">Late Cancelled</div>
                       <div className="text-lg font-bold text-slate-800">{selectedClass.avgLateCancelled}</div>
+                    </div>
+                    <div className="ml-3">
+                      <button
+                        onClick={() => setShowNonFunctionalHours(!showNonFunctionalHours)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all bg-white text-gray-700 border border-gray-300 hover:border-blue-400"
+                        title="Show / hide non-peak hours in all views"
+                      >
+                        {showNonFunctionalHours ? 'Hide Non-Peak' : 'Show Non-Peak'}
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1926,14 +2568,22 @@ function ProScheduler() {
                             </div>
                           </div>
                         </div>
-                        <div className="space-y-2">
+                        <div className="space-y-1.5">
                           <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Avg Fill Rate:</span>
-                            <span className="font-semibold text-sm text-gray-900">{Math.round(trainer.avgFill)}%</span>
+                            <span className="text-xs text-gray-600">Total Check-ins:</span>
+                            <span className="font-semibold text-sm text-gray-900">{trainer.totalCheckIns}</span>
                           </div>
                           <div className="flex justify-between items-center">
-                            <span className="text-xs text-gray-600">Avg Revenue:</span>
-                            <span className="font-semibold text-sm text-emerald-600">₹{(trainer.avgRevenue/100).toLocaleString('en-IN')}</span>
+                            <span className="text-xs text-gray-600">Class Avg:</span>
+                            <span className="font-semibold text-sm text-blue-600">{trainer.classAvg}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs text-gray-600">Avg Fill Rate:</span>
+                            <span className="font-semibold text-sm text-gray-900">{trainer.avgFill}%</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs text-gray-600">Score:</span>
+                            <span className="font-semibold text-sm text-purple-600">{trainer.score}</span>
                           </div>
                         </div>
                       </div>
@@ -1949,9 +2599,9 @@ function ProScheduler() {
                     <Calendar className="w-5 h-5 text-blue-600" />
                     All Past Sessions ({classSessions.length})
                   </h3>
-                  <div className="bg-gray-50 rounded-xl overflow-hidden border border-gray-200">
-                    <div className="overflow-x-auto max-h-[500px]">
-                      <table className="w-full text-xs border-collapse">
+                  <div className="bg-gray-50 rounded-xl border border-gray-200" style={{ overflowX: 'auto', overflowY: 'hidden' }}>
+                    <div style={{ minWidth: '1400px', maxHeight: '500px', overflowY: 'auto' }}>
+                      <table className="w-full text-xs border-collapse" style={{ tableLayout: 'fixed' }}>
                         <thead className="bg-gradient-to-r from-slate-100 to-blue-100 sticky top-0 z-10 border-b-2 border-slate-300">
                           <tr>
                             <th className="text-left px-2 py-1.5 font-semibold text-slate-700 whitespace-nowrap border-r border-slate-200">Date</th>
@@ -2015,9 +2665,49 @@ function ProScheduler() {
                             );
                           })}
                         </tbody>
-                        <tfoot className="bg-gradient-to-r from-slate-100 to-blue-100 font-semibold sticky bottom-0 border-t-2 border-slate-300">
-                          <tr style={{ maxHeight: '30px', height: '30px' }}>
-                            <td className="px-2 py-1 text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">Averages</td>
+                        <tfoot className="bg-gradient-to-r from-slate-100 to-blue-100 font-semibold border-t-2 border-slate-300">
+                          {/* Totals Row */}
+                          <tr style={{ maxHeight: '30px', height: '30px' }} className="border-b border-slate-300">
+                            <td className="px-2 py-1 text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200 font-bold">TOTALS</td>
+                            <td className="px-2 py-1 border-r border-slate-200"></td>
+                            <td className="px-2 py-1 text-right text-blue-900 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.reduce((sum, s) => sum + s.CheckedIn, 0)}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.reduce((sum, s) => sum + s.Capacity, 0)}
+                            </td>
+                            <td className="px-2 py-1 border-r border-slate-200"></td>
+                            <td className="px-2 py-1 text-right text-blue-900 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.reduce((sum, s) => sum + s.Booked, 0)}
+                            </td>
+                            <td className="px-2 py-1 text-right text-blue-900 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.reduce((sum, s) => sum + s.LateCancelled, 0)}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.reduce((sum, s) => sum + (s.Waitlisted || 0), 0)}
+                            </td>
+                            <td className="px-2 py-1 text-right text-emerald-700 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {formatRevenue(classSessions.reduce((sum, s) => sum + s.Revenue, 0))}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.reduce((sum, s) => sum + s.Complimentary, 0)}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.reduce((sum, s) => sum + s.Memberships, 0)}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.reduce((sum, s) => sum + s.Packages, 0)}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
+                              {classSessions.reduce((sum, s) => sum + s.IntroOffers, 0)}
+                            </td>
+                            <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px]">
+                              {classSessions.reduce((sum, s) => sum + s.SingleClasses, 0)}
+                            </td>
+                          </tr>
+                          {/* Averages Row */}
+                          <tr style={{ maxHeight: '30px', height: '30px' }} className="sticky bottom-0 bg-gradient-to-r from-slate-100 to-blue-100">
+                            <td className="px-2 py-1 text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200 font-bold">AVERAGES</td>
                             <td className="px-2 py-1 border-r border-slate-200"></td>
                             <td className="px-2 py-1 text-right text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200">
                               {Math.round(classSessions.reduce((sum, s) => sum + s.CheckedIn, 0) / classSessions.length)}
@@ -2456,29 +3146,38 @@ function ProScheduler() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Class Name</label>
-                <input
-                  type="text"
+                <select
                   defaultValue={editingClass.class}
                   className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+                >
+                  {[...new Set(rawData.map(s => s.Class))].sort().map(className => (
+                    <option key={className} value={className}>{className}</option>
+                  ))}
+                </select>
               </div>
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Trainer</label>
-                <input
-                  type="text"
+                <select
                   defaultValue={editingClass.trainer}
                   className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+                >
+                  {[...new Set(rawData.map(s => s.Trainer))].sort().map(trainer => (
+                    <option key={trainer} value={trainer}>{trainer}</option>
+                  ))}
+                </select>
               </div>
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
-                <input
-                  type="text"
+                <select
                   defaultValue={editingClass.location}
                   className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+                >
+                  {[...new Set(rawData.map(s => s.Location))].sort().map(location => (
+                    <option key={location} value={location}>{location}</option>
+                  ))}
+                </select>
               </div>
               
               <div>

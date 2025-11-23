@@ -31,6 +31,128 @@ export interface SessionData {
   FillRate?: number; // Calculated field (CheckedIn/Capacity * 100)
 }
 
+// Individual check-in record data
+export interface CheckinData {
+  MemberID: string;
+  FirstName: string;
+  LastName: string;
+  Email: string;
+  OrderAt: string;
+  Paid: number;
+  PaymentMethodName: string;
+  CheckedIn: boolean;
+  Complementary: boolean;
+  IsLateCancelled: boolean;
+  SessionID: string;
+  SessionName: string;
+  Capacity: number;
+  Location: string;
+  Date: string;
+  DayOfWeek: string;
+  Time: string;
+  DurationMinutes: number;
+  TeacherName: string;
+  CleanedProduct: string;
+  CleanedCategory: string;
+  CleanedClass: string;
+  HostID: number;
+  Month: string;
+  Year: number;
+  ClassNo: number;
+  IsNew: string;
+  UniqueID1: string;
+  UniqueID2: string;
+}
+
+// Enhanced session data with check-in details
+export interface EnhancedSessionData extends SessionData {
+  checkins?: CheckinData[];
+  uniqueMembers?: number;
+  newMembersCount?: number;
+  returningMembersCount?: number;
+  membershipCount?: number;
+  packageCount?: number;
+  introOfferCount?: number;
+  singleClassCount?: number;
+  averageClassNo?: number;
+  paidRevenue?: number;
+  complementaryCount?: number;
+  consistentAttendees?: number;
+  randomAttendees?: number;
+  lateCancellationRate?: number;
+  memberRetentionRate?: number;
+  averageMemberClassNo?: number;
+}
+
+// Member attendance pattern
+export interface MemberAttendancePattern {
+  memberId: string;
+  memberName: string;
+  email: string;
+  totalClasses: number;
+  lifetimeClassNo: number;
+  paymentCategory: string;
+  isNew: boolean;
+  attendedClasses: string[]; // SessionIDs
+  attendedClassNames: string[];
+  attendedLocations: string[];
+  attendedDays: string[];
+  cancelledCount: number;
+  lateCancelledCount: number;
+  consistencyScore: number; // 0-100: measures if they attend same classes
+  classLoyalty: { [className: string]: number }; // Count per class
+  locationLoyalty: { [location: string]: number };
+  dayPreference: { [day: string]: number };
+  timePreference: { [time: string]: number };
+  firstVisit: string;
+  lastVisit: string;
+  bookingPattern: 'consistent' | 'random' | 'mixed';
+  cancellationRate: number;
+  averageRevenue: number;
+}
+
+// Booking and cancellation behavior by segment
+export interface BookingBehavior {
+  segment: string; // e.g., "Memberships", "Package", "Pilates Mat", etc.
+  segmentType: 'paymentCategory' | 'classType' | 'location' | 'trainer';
+  totalMembers: number;
+  totalBookings: number;
+  totalCheckIns: number;
+  totalCancellations: number;
+  lateCancellations: number;
+  cancellationRate: number;
+  lateCancellationRate: number;
+  showUpRate: number;
+  averageBookingsPerMember: number;
+  consistentMembers: number;
+  randomMembers: number;
+  newMembers: number;
+  returningMembers: number;
+  averageClassNo: number;
+  totalRevenue: number;
+  averageRevenuePerMember: number;
+}
+
+// Member cohort analysis (new vs repeat)
+export interface MemberCohort {
+  cohortType: 'new' | 'returning' | 'loyal' | 'at-risk' | 'churned';
+  memberCount: number;
+  totalClasses: number;
+  averageClassesPerMember: number;
+  totalRevenue: number;
+  averageRevenuePerMember: number;
+  cancellationRate: number;
+  retentionRate: number;
+  paymentMix: {
+    memberships: number;
+    packages: number;
+    introOffers: number;
+    singleClasses: number;
+  };
+  preferredClasses: { className: string; count: number }[];
+  preferredLocations: { location: string; count: number }[];
+}
+
 // Calculated metrics for grouped data
 export interface CalculatedMetrics {
   classes: number;
@@ -239,4 +361,7 @@ export interface DrilldownData {
   rawRows: SessionData[];
   attendees?: Array<{ name: string; email: string; payment: number }>;
   historicalData?: ChartDataPoint[];
+  memberPatterns?: MemberAttendancePattern[];
+  bookingBehavior?: BookingBehavior[];
+  cohortAnalysis?: MemberCohort[];
 }

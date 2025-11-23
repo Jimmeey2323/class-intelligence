@@ -6,17 +6,16 @@ import DataTableEnhanced from './components/DataTableEnhanced';
 import Rankings from './components/Rankings';
 import MetricsCardsEnhanced from './components/MetricsCardsEnhanced';
 import { FormatIntelligence } from './components/FormatIntelligence';
-import WeeklyCalendar from './components/WeeklyCalendar';
 import ProScheduler from './components/ProScheduler';
 import AIInsights from './components/AIInsights';
-import SmartScheduling from './components/SmartScheduling';
-import { LayoutDashboard, TrendingUp, Calendar, Brain, Zap, Target } from 'lucide-react';
+import { MemberBehaviorAnalytics } from './components/MemberBehaviorAnalytics';
+import { LayoutDashboard, TrendingUp, Brain, Target, Users } from 'lucide-react';
 
-type ViewTab = 'dashboard' | 'formats' | 'calendar' | 'pro-scheduler' | 'ai-insights' | 'smart-scheduling';
+type ViewTab = 'dashboard' | 'formats' | 'pro-scheduler' | 'ai-insights' | 'members';
 
 function App() {
   const { rawData } = useDashboardStore();
-  const [showUpload, setShowUpload] = useState(true);
+  const [showUpload, setShowUpload] = useState(false); // Start hidden, will show if no data loads
   const [activeView, setActiveView] = useState<ViewTab>('dashboard');
 
   // Hide upload once data is loaded
@@ -26,22 +25,32 @@ function App() {
     <div className="min-h-screen bg-gradient-to-br from-pearl-50 via-white to-blue-50 px-8 md:px-16 lg:px-24 py-8 md:py-12">
       {/* Header */}
       <header className="mb-10">
-        <div className="flex items-center gap-4 mb-2">
-          <div className="p-3 rounded-2xl glass-card gradient-blue">
-            <LayoutDashboard className="w-8 h-8 text-white" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-2xl glass-card gradient-blue">
+              <LayoutDashboard className="w-8 h-8 text-white" />
+            </div>
+            <div>
+              <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-900 via-blue-700 to-blue-500 bg-clip-text text-transparent">
+                Class Intelligence Dashboard
+              </h1>
+              <p className="text-gray-600 mt-1 flex items-center gap-2">
+                Comprehensive analytics for your fitness studio operations
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-purple-100 to-purple-200 text-purple-700 rounded-full text-xs font-semibold">
+                  <Brain className="w-3 h-3" />
+                  AI Powered
+                </span>
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-900 via-blue-700 to-blue-500 bg-clip-text text-transparent">
-              Class Intelligence Dashboard
-            </h1>
-            <p className="text-gray-600 mt-1 flex items-center gap-2">
-              Comprehensive analytics for your fitness studio operations
-              <span className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-purple-100 to-purple-200 text-purple-700 rounded-full text-xs font-semibold">
-                <Brain className="w-3 h-3" />
-                AI Powered
-              </span>
-            </p>
-          </div>
+          {hasData && !showUpload && (
+            <button
+              onClick={() => setShowUpload(true)}
+              className="px-4 py-2 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 transition-all shadow-lg hover:shadow-xl flex items-center gap-2"
+            >
+              Upload New Data
+            </button>
+          )}
         </div>
       </header>
 
@@ -78,15 +87,15 @@ function App() {
             Format Intelligence
           </button>
           <button
-            onClick={() => setActiveView('calendar')}
+            onClick={() => setActiveView('members')}
             className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
-              activeView === 'calendar'
-                ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg'
+              activeView === 'members'
+                ? 'bg-gradient-to-r from-green-600 to-green-700 text-white shadow-lg'
                 : 'text-gray-700 hover:bg-gray-100'
             }`}
           >
-            <Calendar className="w-5 h-5" />
-            Weekly Calendar
+            <Users className="w-5 h-5" />
+            Member Analytics
           </button>
           <button
             onClick={() => setActiveView('pro-scheduler')}
@@ -109,17 +118,6 @@ function App() {
           >
             <Brain className="w-5 h-5" />
             AI Insights
-          </button>
-          <button
-            onClick={() => setActiveView('smart-scheduling')}
-            className={`px-6 py-3 rounded-xl font-bold transition-all flex items-center gap-2 ${
-              activeView === 'smart-scheduling'
-                ? 'bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg'
-                : 'text-gray-700 hover:bg-gray-100'
-            }`}
-          >
-            <Zap className="w-5 h-5" />
-            Smart Scheduling
           </button>
         </div>
       )}
@@ -149,9 +147,9 @@ function App() {
         <FormatIntelligence />
       )}
 
-      {/* Weekly Calendar View */}
-      {hasData && activeView === 'calendar' && (
-        <WeeklyCalendar />
+      {/* Member Analytics View */}
+      {hasData && activeView === 'members' && (
+        <MemberBehaviorAnalytics />
       )}
 
       {/* Pro Scheduler View */}
@@ -162,11 +160,6 @@ function App() {
       {/* AI Insights View */}
       {hasData && activeView === 'ai-insights' && (
         <AIInsights />
-      )}
-
-      {/* Smart Scheduling View */}
-      {hasData && activeView === 'smart-scheduling' && (
-        <SmartScheduling />
       )}
 
       {/* Footer */}

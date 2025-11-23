@@ -1,7 +1,8 @@
-import { useCallback, useState } from 'react';
-import { Upload, FileText, CheckCircle, AlertCircle, X } from 'lucide-react';
+import { useCallback, useState, useEffect } from 'react';
+import { Upload, FileText, CheckCircle, AlertCircle, X, Cloud } from 'lucide-react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { parseMultipleCSVFiles, validateCSVStructure } from '../utils/csvParser';
+import { loadEnhancedSessionsFromGoogleSheets, loadActiveClassesFromGoogleSheets } from '../services/googleSheetsService';
 
 interface FileUploadProps {
   onUploadComplete?: () => void;
@@ -17,7 +18,54 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [files, setFiles] = useState<FileStatus[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const { setRawData } = useDashboardStore();
+  const [isLoadingFromSheets, setIsLoadingFromSheets] = useState(false);
+  const [sheetsError, setSheetsError] = useState<string | null>(null);
+  const { setRawData, rawData } = useDashboardStore();
+
+  // Load data from Google Sheets on mount
+  useEffect(() => {
+    const loadInitialData = async () => {
+      // Only load if no data is present
+      if (rawData.length > 0) {
+        return;
+      }
+
+      setIsLoadingFromSheets(true);
+      setSheetsError(null);
+
+      try {
+        // Load both sessions and active classes in parallel
+        const [sessionsData, activeClassesData] = await Promise.all([
+          loadEnhancedSessionsFromGoogleSheets(),
+          loadActiveClassesFromGoogleSheets()
+        ]);
+        
+        if (sessionsData.length > 0) {
+          setRawData(sessionsData);
+          
+          // Update active classes data in store
+          if (activeClassesData && Object.keys(activeClassesData).length > 0) {
+            useDashboardStore.setState({ activeClassesData });
+            console.log('✅ Loaded active classes from Google Sheets:', {
+              days: Object.keys(activeClassesData),
+              totalClasses: Object.values(activeClassesData).reduce((sum, classes) => sum + classes.length, 0)
+            });
+          }
+          
+          setTimeout(() => {
+            onUploadComplete?.();
+          }, 500);
+        }
+      } catch (error) {
+        console.error('Error loading data from Google Sheets:', error);
+        setSheetsError(error instanceof Error ? error.message : 'Failed to load data from Google Sheets');
+      } finally {
+        setIsLoadingFromSheets(false);
+      }
+    };
+
+    loadInitialData();
+  }, []); // Only run once on mount
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -130,6 +178,39 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
     <div className="glass-card rounded-3xl p-8">
       <h2 className="text-2xl font-bold mb-6 text-gray-800">Upload Session Data</h2>
 
+      {/* Loading from Google Sheets indicator */}
+      {isLoadingFromSheets && (
+        <div className="mb-6 p-4 rounded-xl bg-blue-50 border border-blue-200">
+          <div className="flex items-center gap-3">
+            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            <div className="flex items-center gap-2">
+              <Cloud className="w-5 h-5 text-blue-600" />
+              <p className="text-sm font-medium text-blue-800">
+                Loading data from Google Sheets...
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sheets error display */}
+      {sheetsError && (
+        <div className="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-200">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-amber-800">
+                Could not load data from Google Sheets
+              </p>
+              <p className="text-xs text-amber-700 mt-1">{sheetsError}</p>
+              <p className="text-xs text-amber-600 mt-2">
+                You can still upload CSV files manually below.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Drop zone */}
       <div
         onDragOver={handleDragOver}
@@ -141,6 +222,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
             ? 'border-blue-500 bg-blue-50 scale-[1.02]' 
             : 'border-gray-300 bg-white hover:border-blue-400 hover:bg-blue-50/50'
           }
+          ${isLoadingFromSheets ? 'opacity-50 pointer-events-none' : ''}
         `}
       >
         <input

@@ -993,6 +993,80 @@ export function FormatIntelligence() {
       return () => window.removeEventListener('keydown', handleEsc);
     }, [onClose]);
 
+    // Calculate comprehensive metrics
+    const emptySessions = trainer.sessionsList.filter(s => s.CheckedIn === 0).length;
+    const nonEmptySessions = trainer.sessionsList.filter(s => s.CheckedIn > 0).length;
+    const totalCapacity = trainer.sessionsList.reduce((sum, s) => sum + s.Capacity, 0);
+    const totalBooked = trainer.sessionsList.reduce((sum, s) => sum + s.Booked, 0);
+    const totalCheckedIn = trainer.sessionsList.reduce((sum, s) => sum + s.CheckedIn, 0);
+    const totalCancelled = trainer.sessionsList.reduce((sum, s) => sum + s.LateCancelled, 0);
+    const classAvgWithEmpty = totalCheckedIn / trainer.sessions;
+    const classAvgWithoutEmpty = nonEmptySessions > 0 ? totalCheckedIn / nonEmptySessions : 0;
+    const fillRate = totalCapacity > 0 ? (totalCheckedIn / totalCapacity) * 100 : 0;
+    const cancelRate = totalBooked > 0 ? (totalCancelled / totalBooked) * 100 : 0;
+    const revenuePerSeat = totalCheckedIn > 0 ? trainer.revenue / totalCheckedIn : 0;
+    const revenueLostPerCancellation = totalCancelled > 0 ? (totalCancelled * revenuePerSeat) : 0;
+
+    // Calculate top trainer for this class
+    const classFormats = Array.from(new Set(trainer.sessionsList.map(s => s.Class)));
+    const topTrainerForClass = classFormats.length === 1 ? 
+      trainerComparison.filter(t => t.sessionsList.some(s => s.Class === classFormats[0]))
+        .sort((a, b) => b.avgAttendance - a.avgAttendance)[0]?.trainer : null;
+    
+    const isTopTrainer = topTrainerForClass === trainer.trainer;
+
+    // Calculate trainer specializations
+    const formatPerformance = new Map<string, { sessions: number; avgAttendance: number; fillRate: number }>();
+    trainer.sessionsList.forEach(session => {
+      const existing = formatPerformance.get(session.Class) || { sessions: 0, avgAttendance: 0, fillRate: 0 };
+      existing.sessions++;
+      existing.avgAttendance += session.CheckedIn;
+      existing.fillRate += (session.CheckedIn / session.Capacity) * 100;
+      formatPerformance.set(session.Class, existing);
+    });
+
+    const specializations = Array.from(formatPerformance.entries())
+      .map(([format, data]) => ({
+        format,
+        sessions: data.sessions,
+        avgAttendance: data.avgAttendance / data.sessions,
+        fillRate: data.fillRate / data.sessions,
+      }))
+      .sort((a, b) => b.sessions - a.sessions || b.avgAttendance - a.avgAttendance);
+
+    // Check for out-of-specialization classes
+    const topSpecializations = specializations.slice(0, 3).map(s => s.format);
+    const outOfSpecSessions = trainer.sessionsList.filter(s => !topSpecializations.includes(s.Class));
+
+    // Generate detailed AI recommendations
+    const recommendations: string[] = [];
+    if (!isTopTrainer && topTrainerForClass) {
+      recommendations.push(`⚠️ Top Trainer Alert: ${topTrainerForClass} has higher average attendance (${trainerComparison.find(t => t.trainer === topTrainerForClass)?.avgAttendance.toFixed(1)}) for this format. Consider trainer mentoring or format reassignment.`);
+    }
+    if (fillRate < 60) {
+      recommendations.push(`📊 Low Fill Rate (${fillRate.toFixed(1)}%): Consider reviewing class timing, location accessibility, or marketing strategies. Benchmark against top performers with 80%+ fill rates.`);
+    }
+    if (cancelRate > 15) {
+      recommendations.push(`🚫 High Cancellation Rate (${cancelRate.toFixed(1)}%): ${totalCancelled} cancellations resulted in ${formatCurrency(revenueLostPerCancellation)} revenue loss. Implement stricter cancellation policies or improve client retention.`);
+    }
+    if (emptySessions > trainer.sessions * 0.1) {
+      recommendations.push(`📉 High Empty Session Rate (${((emptySessions/trainer.sessions)*100).toFixed(1)}%): ${emptySessions} of ${trainer.sessions} sessions had zero attendance. Review class scheduling and consider consolidating low-demand time slots.`);
+    }
+    if (outOfSpecSessions.length > 0) {
+      recommendations.push(`⚡ Out-of-Specialization Alert: ${outOfSpecSessions.length} sessions are outside top specializations (${topSpecializations.join(', ')}). Consider focusing on specialized formats for better performance.`);
+    }
+    if (classAvgWithoutEmpty > classAvgWithEmpty * 1.2) {
+      recommendations.push(`💡 Empty Sessions Impact: Non-empty sessions average ${classAvgWithoutEmpty.toFixed(1)} vs overall ${classAvgWithEmpty.toFixed(1)}. Eliminating empty sessions could improve perceived performance by ${(((classAvgWithoutEmpty - classAvgWithEmpty) / classAvgWithEmpty) * 100).toFixed(1)}%.`);
+    }
+    
+    // Add positive recommendations
+    if (fillRate > 80) {
+      recommendations.push(`✅ Excellent Fill Rate (${fillRate.toFixed(1)}%): Consider adding additional sessions to meet high demand and maximize revenue potential.`);
+    }
+    if (trainer.revenuePerSession > trainer.revenue / trainer.sessions * 1.2) {
+      recommendations.push(`💰 Strong Revenue Generator: ${formatCurrency(trainer.revenuePerSession)}/session is above average. Maintain current class structure and explore premium offerings.`);
+    }
+
     return (
       <motion.div
         initial={{ opacity: 0 }}
@@ -1005,17 +1079,28 @@ export function FormatIntelligence() {
           initial={{ scale: 0.9, y: 20 }}
           animate={{ scale: 1, y: 0 }}
           exit={{ scale: 0.9, y: 20 }}
-          className="glass-card rounded-3xl p-8 max-w-6xl w-full max-h-[90vh] overflow-y-auto shadow-2xl"
+          className="glass-card rounded-3xl p-8 max-w-7xl w-full max-h-[90vh] overflow-y-auto shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center justify-between mb-6">
-            <div>
-              <h2 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-purple-500 bg-clip-text text-transparent mb-2">
-                {trainer.trainer}
-              </h2>
-              <p className="text-sm text-gray-600">
-                Detailed performance metrics and session history
-              </p>
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-2xl font-bold shadow-lg">
+                {trainer.trainer.split(' ').map(n => n[0]).join('').slice(0, 2)}
+              </div>
+              <div>
+                <h2 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-purple-500 bg-clip-text text-transparent mb-2 flex items-center gap-3">
+                  {trainer.trainer}
+                  {!isTopTrainer && topTrainerForClass && (
+                    <span className="px-3 py-1 rounded-lg bg-amber-100 text-amber-700 text-sm font-semibold flex items-center gap-1 animate-pulse">
+                      <AlertTriangle className="w-4 h-4" />
+                      Not Top Trainer
+                    </span>
+                  )}
+                </h2>
+                <p className="text-sm text-gray-600">
+                  Detailed performance metrics and session history
+                </p>
+              </div>
             </div>
             <button
               onClick={onClose}
@@ -1025,75 +1110,152 @@ export function FormatIntelligence() {
             </button>
           </div>
 
-          {/* Metrics Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          {/* Trainer Specializations */}
+          {specializations.length > 0 && (
+            <div className="glass-card rounded-2xl p-6 mb-6 bg-gradient-to-r from-purple-50 to-pink-50">
+              <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <Zap className="w-5 h-5 text-purple-600" />
+                Format Specializations
+              </h3>
+              <div className="flex flex-wrap gap-3">
+                {specializations.map((spec, idx) => (
+                  <div key={spec.format} className={`px-4 py-2 rounded-xl ${idx < 3 ? 'bg-purple-600 text-white' : 'bg-gray-200 text-gray-700'} font-semibold text-sm shadow-md`}>
+                    #{idx + 1} {spec.format} ({spec.sessions} sessions, {spec.avgAttendance.toFixed(1)} avg)
+                  </div>
+                ))}
+              </div>
+              {outOfSpecSessions.length > 0 && (
+                <div className="mt-4 p-3 bg-amber-100 border border-amber-300 rounded-lg flex items-start gap-2">
+                  <AlertTriangle className="w-5 h-5 text-amber-700 flex-shrink-0 mt-0.5" />
+                  <p className="text-sm text-amber-800">
+                    <strong>{outOfSpecSessions.length} sessions</strong> scheduled outside top specializations
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Comprehensive Metrics Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
             <div className="glass-card rounded-xl p-4 border-l-4 border-blue-600">
-              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Sessions</p>
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Total Sessions</p>
               <p className="text-2xl font-bold text-blue-700">{formatNumber(trainer.sessions)}</p>
             </div>
             <div className="glass-card rounded-xl p-4 border-l-4 border-green-600">
-              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Avg Attendance</p>
-              <p className="text-2xl font-bold text-green-700">{formatNumber(trainer.avgAttendance, 1)}</p>
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Non-Empty</p>
+              <p className="text-2xl font-bold text-green-700">{formatNumber(nonEmptySessions)}</p>
+            </div>
+            <div className="glass-card rounded-xl p-4 border-l-4 border-red-600">
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Empty Sessions</p>
+              <p className="text-2xl font-bold text-red-700">{formatNumber(emptySessions)}</p>
             </div>
             <div className="glass-card rounded-xl p-4 border-l-4 border-purple-600">
-              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Fill Rate</p>
-              <p className="text-2xl font-bold text-purple-700">{formatPercentage(trainer.fillRate)}</p>
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Total Capacity</p>
+              <p className="text-2xl font-bold text-purple-700">{formatNumber(totalCapacity)}</p>
+            </div>
+            <div className="glass-card rounded-xl p-4 border-l-4 border-indigo-600">
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Total Booked</p>
+              <p className="text-2xl font-bold text-indigo-700">{formatNumber(totalBooked)}</p>
             </div>
             <div className="glass-card rounded-xl p-4 border-l-4 border-emerald-600">
-              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Total Revenue</p>
-              <p className="text-2xl font-bold text-emerald-700">{formatCurrency(trainer.revenue, true)}</p>
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Checked In</p>
+              <p className="text-2xl font-bold text-emerald-700">{formatNumber(totalCheckedIn)}</p>
+            </div>
+            <div className="glass-card rounded-xl p-4 border-l-4 border-rose-600">
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Late Cancelled</p>
+              <p className="text-2xl font-bold text-rose-700">{formatNumber(totalCancelled)}</p>
+            </div>
+            <div className="glass-card rounded-xl p-4 border-l-4 border-cyan-600">
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Fill Rate</p>
+              <p className="text-2xl font-bold text-cyan-700">{formatPercentage(fillRate)}</p>
+            </div>
+            <div className="glass-card rounded-xl p-4 border-l-4 border-orange-600">
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Cancel Rate</p>
+              <p className="text-2xl font-bold text-orange-700">{formatPercentage(cancelRate)}</p>
+            </div>
+            <div className="glass-card rounded-xl p-4 border-l-4 border-teal-600">
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Class Avg (All)</p>
+              <p className="text-2xl font-bold text-teal-700">{formatNumber(classAvgWithEmpty, 1)}</p>
+            </div>
+            <div className="glass-card rounded-xl p-4 border-l-4 border-lime-600">
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Class Avg (No Empty)</p>
+              <p className="text-2xl font-bold text-lime-700">{formatNumber(classAvgWithoutEmpty, 1)}</p>
+            </div>
+            <div className="glass-card rounded-xl p-4 border-l-4 border-emerald-700 col-span-2">
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Revenue Earned</p>
+              <p className="text-2xl font-bold text-emerald-700">{formatCurrency(trainer.revenue)}</p>
+            </div>
+            <div className="glass-card rounded-xl p-4 border-l-4 border-violet-600">
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Rev/Seat</p>
+              <p className="text-2xl font-bold text-violet-700">{formatCurrency(revenuePerSeat)}</p>
+            </div>
+            <div className="glass-card rounded-xl p-4 border-l-4 border-red-700">
+              <p className="text-xs text-gray-600 mb-1 uppercase font-semibold">Rev Lost (Cancel)</p>
+              <p className="text-2xl font-bold text-red-700">{formatCurrency(revenueLostPerCancellation)}</p>
             </div>
           </div>
 
-          {/* Session History */}
+          {/* AI Recommendations */}
+          {recommendations.length > 0 && (
+            <div className="glass-card rounded-2xl p-6 mb-6 bg-gradient-to-r from-blue-50 to-indigo-50">
+              <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+                <Brain className="w-5 h-5 text-blue-600" />
+                Detailed AI Recommendations
+              </h3>
+              <div className="space-y-3">
+                {recommendations.map((rec, idx) => (
+                  <motion.div
+                    key={idx}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: idx * 0.05 }}
+                    className="p-4 bg-white rounded-xl border-l-4 border-blue-600 shadow-sm"
+                  >
+                    <p className="text-sm text-gray-800 leading-relaxed">{rec}</p>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Session History Table */}
           <div className="glass-card rounded-2xl p-6">
-            <h3 className="text-lg font-bold text-gray-800 mb-4">Session History</h3>
-            <div className="space-y-2 max-h-96 overflow-y-auto pr-2">
-              {trainer.sessionsList.map((session, idx) => (
-                <motion.div
-                  key={idx}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: idx * 0.01 }}
-                  className="p-4 bg-white rounded-xl border-2 border-gray-200 hover:border-purple-400 hover:shadow-md transition-all"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="px-3 py-1 rounded-lg bg-gradient-to-r from-purple-600 to-purple-700 text-white text-xs font-bold">
-                          {formatDate(parseISO(session.Date), 'dd MMM yyyy')}
-                        </span>
-                        <span className="text-xs text-gray-500">•</span>
-                        <span className="px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-xs font-semibold">
-                          {session.Day}
-                        </span>
-                        <span className="px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 text-xs font-semibold">
-                          {session.Time}
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-600">{session.Location}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-bold text-lg text-green-700">{session.CheckedIn}/{session.Capacity}</p>
-                      <p className="text-xs text-gray-600">{formatPercentage((session.CheckedIn / session.Capacity) * 100)} full</p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3 mt-3 pt-3 border-t border-gray-200">
-                    <div>
-                      <p className="text-xs text-gray-600">Revenue</p>
-                      <p className="font-bold text-sm text-emerald-700">{formatCurrency(session.Revenue)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-600">Booked</p>
-                      <p className="font-bold text-sm text-blue-700">{session.Booked}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-600">Cancelled</p>
-                      <p className="font-bold text-sm text-red-700">{session.LateCancelled}</p>
-                    </div>
-                  </div>
-                </motion.div>
-              ))}
+            <h3 className="text-lg font-bold text-gray-800 mb-4">Complete Session History</h3>
+            <div className="overflow-x-auto max-h-96 overflow-y-auto">
+              <table className="w-full">
+                <thead className="sticky top-0 bg-white shadow-sm">
+                  <tr className="border-b-2 border-gray-300">
+                    <th className="text-left py-3 px-4 text-xs font-bold text-gray-700 uppercase">Date</th>
+                    <th className="text-left py-3 px-4 text-xs font-bold text-gray-700 uppercase">Class</th>
+                    <th className="text-left py-3 px-4 text-xs font-bold text-gray-700 uppercase">Location</th>
+                    <th className="text-center py-3 px-4 text-xs font-bold text-gray-700 uppercase">Capacity</th>
+                    <th className="text-center py-3 px-4 text-xs font-bold text-gray-700 uppercase">Booked</th>
+                    <th className="text-center py-3 px-4 text-xs font-bold text-gray-700 uppercase">Checked In</th>
+                    <th className="text-center py-3 px-4 text-xs font-bold text-gray-700 uppercase">Cancelled</th>
+                    <th className="text-center py-3 px-4 text-xs font-bold text-gray-700 uppercase">Fill Rate</th>
+                    <th className="text-center py-3 px-4 text-xs font-bold text-gray-700 uppercase">Revenue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trainer.sessionsList.map((session, idx) => {
+                    const sessionFillRate = (session.CheckedIn / session.Capacity) * 100;
+                    const isEmpty = session.CheckedIn === 0;
+                    return (
+                      <tr key={idx} className={`border-b border-gray-200 hover:bg-purple-50 transition-colors ${isEmpty ? 'bg-red-50' : ''}`}>
+                        <td className="py-3 px-4 text-sm font-medium text-gray-900">{formatDate(parseISO(session.Date), 'dd MMM yyyy')}</td>
+                        <td className="py-3 px-4 text-sm text-gray-700">{session.Class}</td>
+                        <td className="py-3 px-4 text-sm text-gray-700">{session.Location}</td>
+                        <td className="py-3 px-4 text-center text-sm font-bold text-purple-700">{session.Capacity}</td>
+                        <td className="py-3 px-4 text-center text-sm font-bold text-indigo-700">{session.Booked}</td>
+                        <td className="py-3 px-4 text-center text-sm font-bold text-emerald-700">{session.CheckedIn}</td>
+                        <td className="py-3 px-4 text-center text-sm font-bold text-red-700">{session.LateCancelled}</td>
+                        <td className="py-3 px-4 text-center text-sm font-bold text-cyan-700">{formatPercentage(sessionFillRate)}</td>
+                        <td className="py-3 px-4 text-center text-sm font-bold text-emerald-700">{formatCurrency(session.Revenue)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         </motion.div>
@@ -1482,29 +1644,97 @@ export function FormatIntelligence() {
                     <th className="text-center py-3 px-4 text-sm font-bold text-gray-700 uppercase">Cancel Rate</th>
                     <th className="text-center py-3 px-4 text-sm font-bold text-gray-700 uppercase">Total Revenue</th>
                     <th className="text-center py-3 px-4 text-sm font-bold text-gray-700 uppercase">Rev/Session</th>
+                    <th className="text-center py-3 px-4 text-sm font-bold text-gray-700 uppercase">Alerts</th>
                     <th className="text-center py-3 px-4 text-sm font-bold text-gray-700 uppercase">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredTrainers.map((trainer) => (
-                    <tr key={trainer.trainer} className="border-b border-gray-200 hover:bg-purple-50 transition-colors">
-                      <td className="py-3 px-4 font-bold text-gray-900">{trainer.trainer}</td>
-                      <td className="py-3 px-4 text-center text-gray-700">{formatNumber(trainer.sessions)}</td>
-                      <td className="py-3 px-4 text-center font-bold text-green-700">{formatNumber(trainer.avgAttendance, 1)}</td>
-                      <td className="py-3 px-4 text-center font-bold text-blue-700">{formatPercentage(trainer.fillRate)}</td>
-                      <td className="py-3 px-4 text-center font-bold text-red-700">{formatPercentage(trainer.cancelRate)}</td>
-                      <td className="py-3 px-4 text-center font-bold text-emerald-700">{formatCurrency(trainer.revenue, true)}</td>
-                      <td className="py-3 px-4 text-center font-bold text-purple-700">{formatCurrency(trainer.revenuePerSession, true)}</td>
-                      <td className="py-3 px-4 text-center">
-                        <button
-                          onClick={() => setDrilldownTrainer(trainer)}
-                          className="px-3 py-1 rounded-lg bg-purple-100 text-purple-700 text-xs font-bold hover:bg-purple-200 transition-colors flex items-center gap-1 mx-auto"
-                        >
-                          <Eye className="w-3 h-3" /> Details
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredTrainers.map((trainer) => {
+                    // Calculate workload alerts
+                    const alerts: string[] = [];
+                    
+                    // Check weekly hours (assume 1 hour per session, adjust as needed)
+                    const weeklyHours = trainer.sessions / 4; // Approximate hours per week
+                    if (weeklyHours > 15) {
+                      alerts.push(`⏰ ${weeklyHours.toFixed(1)} hrs/week (>15hr threshold)`);
+                    }
+                    
+                    // Check classes per day
+                    const sessionsByDate = new Map<string, number>();
+                    trainer.sessionsList.forEach(session => {
+                      const count = sessionsByDate.get(session.Date) || 0;
+                      sessionsByDate.set(session.Date, count + 1);
+                    });
+                    const maxClassesPerDay = Math.max(...Array.from(sessionsByDate.values()));
+                    if (maxClassesPerDay > 4) {
+                      alerts.push(`📅 ${maxClassesPerDay} classes in one day (>4 threshold)`);
+                    }
+                    
+                    // Check different locations in same time period (AM/PM)
+                    const sessionsByTimePeriod = new Map<string, Set<string>>();
+                    trainer.sessionsList.forEach(session => {
+                      const hour = parseInt(session.Time.split(':')[0]);
+                      const isPM = session.Time.includes('PM');
+                      const actualHour = isPM && hour !== 12 ? hour + 12 : hour;
+                      const period = actualHour < 12 ? 'AM' : 'PM';
+                      const key = `${session.Date}-${period}`;
+                      if (!sessionsByTimePeriod.has(key)) {
+                        sessionsByTimePeriod.set(key, new Set());
+                      }
+                      sessionsByTimePeriod.get(key)!.add(session.Location);
+                    });
+                    const multiLocationPeriods = Array.from(sessionsByTimePeriod.entries())
+                      .filter(([, locations]) => locations.size > 1);
+                    if (multiLocationPeriods.length > 0) {
+                      alerts.push(`📍 ${multiLocationPeriods.length} day(s) with multiple locations in same period`);
+                    }
+                    
+                    return (
+                      <tr key={trainer.trainer} className="border-b border-gray-200 hover:bg-purple-50 transition-colors">
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0 shadow-md">
+                              {trainer.trainer.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                            </div>
+                            <span className="font-bold text-gray-900">{trainer.trainer}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-center text-gray-700">{formatNumber(trainer.sessions)}</td>
+                        <td className="py-3 px-4 text-center font-bold text-green-700">{formatNumber(trainer.avgAttendance, 1)}</td>
+                        <td className="py-3 px-4 text-center font-bold text-blue-700">{formatPercentage(trainer.fillRate)}</td>
+                        <td className="py-3 px-4 text-center font-bold text-red-700">{formatPercentage(trainer.cancelRate)}</td>
+                        <td className="py-3 px-4 text-center font-bold text-emerald-700">{formatCurrency(trainer.revenue, true)}</td>
+                        <td className="py-3 px-4 text-center font-bold text-purple-700">{formatCurrency(trainer.revenuePerSession, true)}</td>
+                        <td className="py-3 px-4 text-center">
+                          {alerts.length > 0 ? (
+                            <div className="flex items-center justify-center gap-1">
+                              <div className="relative group">
+                                <AlertTriangle className="w-5 h-5 text-amber-600 animate-pulse cursor-pointer" />
+                                <div className="absolute bottom-full right-0 mb-2 w-72 p-3 bg-gray-900 text-white text-xs rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                                  <div className="space-y-1">
+                                    {alerts.map((alert, idx) => (
+                                      <div key={idx}>{alert}</div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                              <span className="text-xs text-amber-700 font-bold">{alerts.length}</span>
+                            </div>
+                          ) : (
+                            <CheckCircle2 className="w-5 h-5 text-green-600 mx-auto" />
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          <button
+                            onClick={() => setDrilldownTrainer(trainer)}
+                            className="px-3 py-1 rounded-lg bg-purple-100 text-purple-700 text-xs font-bold hover:bg-purple-200 transition-colors flex items-center gap-1 mx-auto"
+                          >
+                            <Eye className="w-3 h-3" /> Details
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1878,45 +2108,88 @@ export function FormatIntelligence() {
       </div>
 
       {/* Format Intelligence-specific controls */}
-      <div className="glass-card rounded-2xl p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="p-2 rounded-xl gradient-blue">
-            <Settings className="w-5 h-5 text-white" />
+      <div className="glass-card rounded-2xl p-6 sticky top-4 z-10 shadow-xl bg-white/95 backdrop-blur-sm">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700">
+              <Settings className="w-5 h-5 text-white" />
+            </div>
+            <h3 className="text-lg font-bold text-gray-800">Quick Filters & Analysis Settings</h3>
           </div>
-          <h3 className="text-lg font-bold text-gray-800">Analysis Settings</h3>
+          <div className="text-right">
+            <p className="text-sm text-gray-600 flex items-center gap-2">
+              Analyzing{' '}
+              <span className="px-3 py-1 rounded-lg bg-blue-100 text-blue-700 font-bold">
+                {formatFilteredData.length.toLocaleString()}
+              </span>{' '}
+              sessions
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              Global filters applied from dashboard
+            </p>
+          </div>
         </div>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Pattern Breaks Filter */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-              <Activity className="w-4 h-4 text-blue-600" />
+          <div className="glass-card rounded-xl p-4 border-2 border-orange-200 bg-gradient-to-br from-orange-50 to-red-50">
+            <label className="flex items-center gap-2 text-sm font-bold text-gray-800 mb-2">
+              <Activity className="w-5 h-5 text-orange-600" />
               Pattern Analysis
             </label>
-            <label className="flex items-center gap-2 p-3 bg-gradient-to-r from-orange-50 to-red-50 rounded-xl border border-orange-200 cursor-pointer hover:shadow-md transition-all">
+            <label className="flex items-center gap-3 cursor-pointer group">
               <input
                 type="checkbox"
                 checked={showPatternBreaksOnly}
                 onChange={(e) => setShowPatternBreaksOnly(e.target.checked)}
-                className="w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                className="w-5 h-5 text-orange-600 rounded focus:ring-2 focus:ring-orange-500 cursor-pointer"
               />
-              <span className="text-sm font-semibold text-gray-800">Show Pattern Breaks & Changes Only</span>
+              <span className="text-sm font-semibold text-gray-800 group-hover:text-orange-700 transition-colors">
+                Show Anomalies & Changes Only
+              </span>
             </label>
+            <p className="text-xs text-gray-600 mt-2 ml-8">
+              Focus on formats with detected pattern breaks or schedule changes
+            </p>
           </div>
 
-          {/* Data Summary */}
-          <div className="flex items-center justify-end">
-            <div className="text-right">
-              <p className="text-sm text-gray-600">
-                Analyzing{' '}
-                <span className="font-semibold text-blue-700">
-                  {formatFilteredData.length.toLocaleString()}
-                </span>{' '}
-                sessions
+          {/* Format Filter Info */}
+          <div className="glass-card rounded-xl p-4 border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50">
+            <label className="flex items-center gap-2 text-sm font-bold text-gray-800 mb-2">
+              <BarChart3 className="w-5 h-5 text-blue-600" />
+              Active Filters
+            </label>
+            <div className="space-y-1">
+              <p className="text-xs text-gray-700">
+                <span className="font-semibold">Classes:</span> {formatMetrics.length} formats found
               </p>
-              <p className="text-xs text-gray-500">
-                Use the global filters above to adjust data
+              <p className="text-xs text-gray-700">
+                <span className="font-semibold">Trending:</span> {formatMetrics.filter(f => f.trend !== 'stable').length} formats
               </p>
+              <p className="text-xs text-gray-700">
+                <span className="font-semibold">Changes:</span> {formatMetrics.reduce((sum, f) => sum + f.changes.length, 0)} detected
+              </p>
+            </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="glass-card rounded-xl p-4 border-2 border-purple-200 bg-gradient-to-br from-purple-50 to-pink-50">
+            <label className="flex items-center gap-2 text-sm font-bold text-gray-800 mb-2">
+              <Target className="w-5 h-5 text-purple-600" />
+              Quick Actions
+            </label>
+            <div className="flex flex-col gap-2">
+              <button 
+                onClick={() => setActiveTab('insights')}
+                className="px-3 py-1.5 rounded-lg bg-purple-600 text-white text-xs font-bold hover:bg-purple-700 transition-all flex items-center gap-2 justify-center shadow-md hover:shadow-lg"
+              >
+                <Brain className="w-4 h-4" />
+                View AI Insights
+              </button>
+              <button className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition-all flex items-center gap-2 justify-center shadow-md hover:shadow-lg">
+                <Download className="w-4 h-4" />
+                Export Analysis
+              </button>
             </div>
           </div>
         </div>

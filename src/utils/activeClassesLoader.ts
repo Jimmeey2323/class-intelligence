@@ -1,4 +1,6 @@
-// Utility to load and parse Active.csv from public folder
+// Utility to load and parse Active classes from Google Sheets
+
+import { loadActiveClassesFromGoogleSheets } from '../services/googleSheetsService';
 
 export interface ActiveClassData {
   day: string;
@@ -14,38 +16,22 @@ export interface ActiveClassesByDay {
 }
 
 /**
- * Loads the Active.csv file from the public folder and parses it
+ * Loads active classes from Google Sheets (Cleaned sheet)
  * Returns a map of day -> array of active classes
  */
 export async function loadActiveClasses(): Promise<ActiveClassesByDay> {
   try {
-    console.log('Loading Active.csv from public folder...');
-    const response = await fetch('/Active.csv');
+    console.log('Loading active classes from Google Sheets...');
+    const activeClasses = await loadActiveClassesFromGoogleSheets();
     
-    console.log('Fetch response:', {
-      ok: response.ok,
-      status: response.status,
-      statusText: response.statusText,
-      headers: Object.fromEntries(response.headers.entries())
+    console.log('Loaded active classes:', {
+      days: Object.keys(activeClasses),
+      totalClasses: Object.values(activeClasses).reduce((sum, classes) => sum + classes.length, 0)
     });
     
-    if (!response.ok) {
-      throw new Error(`Failed to load Active.csv: ${response.status} ${response.statusText}`);
-    }
-    
-    const csvText = await response.text();
-    console.log('CSV text loaded, length:', csvText.length, 'characters');
-    console.log('CSV preview:', csvText.substring(0, 200) + '...');
-    
-    const parsedData = parseActiveClassesCsv(csvText);
-    console.log('Parsed active classes:', {
-      days: Object.keys(parsedData),
-      totalClasses: Object.values(parsedData).reduce((sum, classes) => sum + classes.length, 0)
-    });
-    
-    return parsedData;
+    return activeClasses;
   } catch (error) {
-    console.error('Error loading Active.csv:', error);
+    console.error('Error loading active classes:', error);
     return {};
   }
 }

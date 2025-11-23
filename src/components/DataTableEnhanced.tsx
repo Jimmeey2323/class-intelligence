@@ -168,7 +168,7 @@ export default function DataTableEnhanced() {
     {
       value: 'default',
       label: '✨ All Metrics (Default)',
-      columns: ['expand', 'rank', 'groupValue', 'Trainer', 'Location', 'Class', 'Type', 'Date', 'Day', 'Time', 'classes', 'totalCheckIns', 'classAvg', 'fillRate', 'cancellationRate', 'totalRevenue', 'revPerCheckin', 'consistencyScore', 'emptyClasses', 'capacity', 'booked', 'actions'],
+      columns: ['expand', 'rank', 'groupValue', 'Trainer', 'Location', 'Class', 'Type', 'Date', 'Day', 'Time', 'classes', 'totalCheckIns', 'classAvg', 'classAvgNonEmpty', 'fillRate', 'waitlistRate', 'cancellationRate', 'totalRevenue', 'revPerCheckin', 'revPerBooking', 'revLostPerCancellation', 'weightedAverage', 'consistencyScore', 'emptyClasses', 'capacity', 'booked', 'actions'],
     },
     {
       value: 'performance',
@@ -416,6 +416,76 @@ export default function DataTableEnhanced() {
         },
       },
       {
+        accessorKey: 'revPerBooking',
+        header: 'Rev/Booking',
+        size: columnSizing['revPerBooking'] || 120,
+        cell: ({ row }) => {
+          const data = row.original;
+          if ('isGroupRow' in data && data.isGroupRow) {
+            return <div className="text-right">{formatCurrency(data.revPerBooking, true)}</div>;
+          }
+          const session = data as SessionData;
+          const value = session.Booked > 0 ? session.Revenue / session.Booked : 0;
+          return <div className="text-right text-sm">{formatCurrency(value, true)}</div>;
+        },
+      },
+      {
+        accessorKey: 'revLostPerCancellation',
+        header: 'Rev Lost',
+        size: columnSizing['revLostPerCancellation'] || 120,
+        cell: ({ row }) => {
+          const data = row.original;
+          if ('isGroupRow' in data && data.isGroupRow) {
+            return <div className="text-right text-red-600">{formatCurrency(data.revLostPerCancellation, true)}</div>;
+          }
+          const session = data as SessionData;
+            const revPerBooking = session.Booked > 0 ? session.Revenue / session.Booked : 0;
+            const lost = session.LateCancelled * revPerBooking;
+            return <div className="text-right text-sm text-red-600">{formatCurrency(lost, true)}</div>;
+        },
+      },
+      {
+        accessorKey: 'classAvgNonEmpty',
+        header: 'Avg (No Empty)',
+        size: columnSizing['classAvgNonEmpty'] || 140,
+        cell: ({ row }) => {
+          const data = row.original;
+          if ('isGroupRow' in data && data.isGroupRow) {
+            return <div className="text-right font-semibold text-indigo-700">{formatNumber(data.classAvgNonEmpty, 1)}</div>;
+          }
+          return <div className="text-right text-gray-400">-</div>;
+        },
+      },
+      {
+        accessorKey: 'waitlistRate',
+        header: 'Waitlist %',
+        size: columnSizing['waitlistRate'] || 110,
+        cell: ({ row }) => {
+          const data = row.original;
+          if ('isGroupRow' in data && data.isGroupRow) {
+            return <div className="text-center">{formatPercentage(data.waitlistRate)}</div>;
+          }
+          const session = data as SessionData;
+          const rate = session.Capacity > 0 ? ((session.Waitlisted || 0) / session.Capacity) * 100 : 0;
+          return <div className="text-center text-sm">{formatPercentage(rate)}</div>;
+        },
+      },
+      {
+        accessorKey: 'weightedAverage',
+        header: 'Weighted Util%',
+        size: columnSizing['weightedAverage'] || 130,
+        cell: ({ row }) => {
+          const data = row.original;
+          if ('isGroupRow' in data && data.isGroupRow) {
+            return <div className="text-center">{formatPercentage(data.weightedAverage)}</div>;
+          }
+          // For individual session weighted util == fill rate
+          const session = data as SessionData;
+          const rate = session.Capacity > 0 ? (session.CheckedIn / session.Capacity) * 100 : 0;
+          return <div className="text-center text-sm">{formatPercentage(rate)}</div>;
+        },
+      },
+      {
         accessorKey: 'consistencyScore',
         header: 'Consistency',
         size: columnSizing['consistencyScore'] || 110,
@@ -602,9 +672,14 @@ export default function DataTableEnhanced() {
               case 'totalCheckIns': value = original.totalCheckIns; break;
               case 'classAvg': value = original.classAvg; break;
               case 'fillRate': value = original.fillRate; break;
+              case 'waitlistRate': value = original.waitlistRate; break;
               case 'cancellationRate': value = original.cancellationRate; break;
               case 'totalRevenue': value = original.totalRevenue; break;
               case 'revPerCheckin': value = original.revPerCheckin; break;
+              case 'revPerBooking': value = original.revPerBooking; break;
+              case 'revLostPerCancellation': value = original.revLostPerCancellation; break;
+              case 'classAvgNonEmpty': value = original.classAvgNonEmpty; break;
+              case 'weightedAverage': value = original.weightedAverage; break;
               case 'consistencyScore': value = original.consistencyScore; break;
               case 'emptyClasses': value = original.emptyClasses; break;
               case 'capacity': value = original.totalCapacity; break;
@@ -621,9 +696,18 @@ export default function DataTableEnhanced() {
               case 'totalCheckIns': value = s.CheckedIn; break;
               case 'classAvg': value = s.CheckedIn; break;
               case 'fillRate': value = s.Capacity > 0 ? (s.CheckedIn / s.Capacity) * 100 : 0; break;
+              case 'waitlistRate': value = s.Capacity > 0 ? ((s.Waitlisted || 0) / s.Capacity) * 100 : 0; break;
               case 'cancellationRate': value = s.Booked > 0 ? (s.LateCancelled / s.Booked) * 100 : 0; break;
               case 'totalRevenue': value = s.Revenue; break;
               case 'revPerCheckin': value = s.CheckedIn > 0 ? s.Revenue / s.CheckedIn : 0; break;
+              case 'revPerBooking': value = s.Booked > 0 ? s.Revenue / s.Booked : 0; break;
+              case 'revLostPerCancellation': {
+                const revPerBooking = s.Booked > 0 ? s.Revenue / s.Booked : 0;
+                value = s.LateCancelled * revPerBooking;
+                break;
+              }
+              case 'classAvgNonEmpty': value = s.CheckedIn; break;
+              case 'weightedAverage': value = s.Capacity > 0 ? (s.CheckedIn / s.Capacity) * 100 : 0; break;
               case 'capacity': value = s.Capacity; break;
               case 'booked': value = s.Booked; break;
               case 'lateCancelled': value = s.LateCancelled; break;
@@ -929,10 +1013,10 @@ export default function DataTableEnhanced() {
       <motion.div
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="glass-card rounded-2xl overflow-hidden"
+        className="glass-card rounded-2xl"
       >
         <div className="overflow-x-auto">
-          <table className="w-full border-separate border-spacing-0">
+          <table className="w-full min-w-max border-separate border-spacing-0">
             <thead className="sticky top-0 z-20">
               {table.getHeaderGroups().map((headerGroup) => (
                 <tr key={headerGroup.id} className="bg-gradient-to-r from-black via-purple-950 to-purple-900">
@@ -1067,14 +1151,24 @@ export default function DataTableEnhanced() {
                       content = formatNumber(totals.totalCheckIns); break;
                     case 'classAvg':
                       content = formatNumber(totals.classAvg, 1); className += ' text-blue-600'; break;
+                    case 'classAvgNonEmpty':
+                      content = formatNumber(totals.classAvgNonEmpty, 1); break;
                     case 'fillRate':
                       content = formatPercentage(totals.fillRate); break;
+                    case 'waitlistRate':
+                      content = formatPercentage(totals.waitlistRate); break;
                     case 'cancellationRate':
                       content = formatPercentage(totals.cancellationRate); break;
                     case 'totalRevenue':
                       content = formatCurrency(totals.totalRevenue, true); className += ' text-green-600'; break;
                     case 'revPerCheckin':
                       content = formatCurrency(totals.revPerCheckin, true); break;
+                    case 'revPerBooking':
+                      content = formatCurrency(totals.revPerBooking, true); break;
+                    case 'revLostPerCancellation':
+                      content = formatCurrency(totals.revLostPerCancellation, true); break;
+                    case 'weightedAverage':
+                      content = formatPercentage(totals.weightedAverage); break;
                     case 'consistencyScore':
                       content = formatPercentage(totals.consistencyScore); break;
                     case 'emptyClasses':
