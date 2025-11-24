@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, Fragment, useRef, memo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
-import { SessionData } from '../types';
+import { SessionData, CheckinData } from '../types';
 import { format, parseISO, isWithinInterval } from 'date-fns';
 import { 
   Plus, 
@@ -17,7 +17,8 @@ import {
   Repeat,
   Undo2,
   ArrowRightLeft,
-  Award
+  Award,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -251,7 +252,7 @@ let cacheTimestamp = 0;
 const CACHE_DURATION = 60000; // 1 minute
 
 function ProScheduler() {
-  const { rawData = [], activeClassesData = {} } = useDashboardStore();
+  const { rawData = [], activeClassesData = {}, checkinsData = [] } = useDashboardStore();
   
   // State management
   const [filters, setFilters] = useState<ProSchedulerFilters>({
@@ -282,7 +283,53 @@ function ProScheduler() {
   const [createdClasses, setCreatedClasses] = useState<Set<string>>(new Set());
   const [showDiscontinued, setShowDiscontinued] = useState(false);
   const [showDiscontinuedHighPerformers, setShowDiscontinuedHighPerformers] = useState(false);
+  const [selectedSessionForMembers, setSelectedSessionForMembers] = useState<SessionData | null>(null);
+  const [showMemberDetailsModal, setShowMemberDetailsModal] = useState(false);
+  const [memberSearchQuery, setMemberSearchQuery] = useState('');
+  const [memberStatusFilter, setMemberStatusFilter] = useState<'all' | 'checked-in' | 'cancelled' | 'no-show'>('all');
+  const [memberTypeFilter, setMemberTypeFilter] = useState<'all' | 'regulars' | 'new'>('all');
+  const [expandedDayFormats, setExpandedDayFormats] = useState<Set<string>>(new Set());
   const drilldownModalRef = useRef<HTMLDivElement>(null);
+  
+  // Format difficulty categorization
+  const getFormatDifficulty = (format: string): 'beginner' | 'intermediate' | 'advanced' => {
+    const normalizedFormat = format.toLowerCase().trim();
+    
+    // Advanced formats
+    if (normalizedFormat.includes('amped up') || 
+        normalizedFormat.includes('hiit') || 
+        normalizedFormat.includes('strength lab')) {
+      return 'advanced';
+    }
+    
+    // Beginner formats
+    if (normalizedFormat.includes('barre 57') ||
+        normalizedFormat.includes('foundations') ||
+        normalizedFormat.includes('sweat in 30') ||
+        normalizedFormat.includes('recovery') ||
+        normalizedFormat.includes('powercycle')) {
+      return 'beginner';
+    }
+    
+    // All others are intermediate
+    return 'intermediate';
+  };
+  
+  // ESC key handler for member details modal
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && showMemberDetailsModal) {
+        setShowMemberDetailsModal(false);
+        setSelectedSessionForMembers(null);
+        setMemberSearchQuery('');
+        setMemberStatusFilter('all');
+        setMemberTypeFilter('all');
+      }
+    };
+    
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [showMemberDetailsModal]);
   
   // Format currency helper - with L/K/Cr formatter for large numbers
   const formatCurrency = (amount: number) => {
@@ -295,8 +342,10 @@ function ProScheduler() {
       return `₹${(valueInRupees / 100000).toFixed(1)}L`;
     } else if (valueInRupees >= 1000) { // 1 Thousand or more
       return `₹${(valueInRupees / 1000).toFixed(1)}K`;
+    } else if (valueInRupees < 1000 && valueInRupees > 0) { // Under 1K but not zero
+      return `₹${(valueInRupees / 1000).toFixed(2)}K`;
     } else {
-      return `₹${valueInRupees.toFixed(1)}`;
+      return `₹${valueInRupees.toFixed(0)}`;
     }
   };
   
@@ -914,61 +963,95 @@ function ProScheduler() {
   }, [activeClassesData, rawData, filters.dateFrom, filters.dateTo, filters.activeOnly, editedClasses, createdClasses]);
 
   // Calculate discontinued classes (classes from last week not in active list)
+  // Helper function to normalize class names (removes minor variations)
+  const normalizeClassName = (className: string): string => {
+    if (!className) return '';
+    return className
+      .toLowerCase()
+      .replace(/\s*\(push\)\s*/gi, '')
+      .replace(/\s*\(pull\)\s*/gi, '')
+      .replace(/\s*\(legs\)\s*/gi, '')
+      .replace(/\s*\(core\)\s*/gi, '')
+      .replace(/\s*\(upper\)\s*/gi, '')
+      .replace(/\s*\(lower\)\s*/gi, '')
+      .replace(/\s*\(full body\)\s*/gi, '')
+      .replace(/\s*\d+\s*/g, ' ') // Remove numbers
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
   const discontinuedClasses = useMemo(() => {
     const classes: ScheduleClass[] = [];
     
-    // Get date range for last week
+    // Get date range for last 2-3 weeks
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const lastWeekStart = new Date(today);
-    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+    const threeWeeksAgo = new Date(today);
+    threeWeeksAgo.setDate(threeWeeksAgo.getDate() - 21); // 3 weeks
     const lastWeekEnd = new Date(today);
     lastWeekEnd.setDate(lastWeekEnd.getDate() - 1);
     
-    // Get unique class combinations from last week's data
-    const lastWeekSessions = rawData.filter((s: SessionData) => {
+    // Get unique class combinations from last 2-3 weeks
+    const recentSessions = rawData.filter((s: SessionData) => {
       const sessionDate = parseISO(s.Date);
-      return sessionDate >= lastWeekStart && sessionDate <= lastWeekEnd;
+      return sessionDate >= threeWeeksAgo && sessionDate <= lastWeekEnd;
     });
     
-    // Group by day + time + class + location
-    const lastWeekClassMap = new Map<string, SessionData[]>();
-    lastWeekSessions.forEach((s: SessionData) => {
-      const key = `${s.Day}_${s.Time?.substring(0, 5)}_${s.Class}_${s.Location}`.toLowerCase();
-      const existing = lastWeekClassMap.get(key) || [];
+    // Group by day + time + normalized class + location
+    const recentClassMap = new Map<string, SessionData[]>();
+    recentSessions.forEach((s: SessionData) => {
+      const normalizedClass = normalizeClassName(s.Class);
+      const key = `${s.Day}_${s.Time?.substring(0, 5)}_${normalizedClass}_${s.Location}`.toLowerCase();
+      const existing = recentClassMap.get(key) || [];
       existing.push(s);
-      lastWeekClassMap.set(key, existing);
+      recentClassMap.set(key, existing);
     });
     
-    // Check each last week class against active classes
-    lastWeekClassMap.forEach((sessions, key) => {
-      const [day, time, className, location] = key.split('_');
+    // Check each recent class against active classes
+    recentClassMap.forEach((sessions, key) => {
+      const [day, time, normalizedClass, location] = key.split('_');
       
-      // Check if this class exists in active classes
-      const isActive = scheduleClasses.some(cls => 
-        cls.day.toLowerCase() === day &&
-        cls.time === time &&
-        cls.class.toLowerCase() === className &&
-        cls.location.toLowerCase() === location
-      );
+      // Check if this class exists in active classes (with normalized comparison)
+      const isActive = scheduleClasses.some(cls => {
+        const normalizedActiveClass = normalizeClassName(cls.class);
+        return cls.day.toLowerCase() === day &&
+          cls.time === time &&
+          normalizedActiveClass === normalizedClass &&
+          cls.location.toLowerCase() === location;
+      });
       
       if (!isActive && sessions.length > 0) {
-        // Calculate metrics for discontinued class
-        const totalCheckIns = sessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0);
-        const totalCapacity = sessions.reduce((sum, s) => sum + (s.Capacity || 0), 0);
-        const totalBooked = sessions.reduce((sum, s) => sum + (s.Booked || 0), 0);
-        const totalLateCancelled = sessions.reduce((sum, s) => sum + (s.LateCancelled || 0), 0);
-        const totalRevenue = sessions.reduce((sum, s) => sum + (s.Revenue || 0), 0);
-        const totalWaitlisted = sessions.reduce((sum, s) => sum + (s.Waitlisted || 0), 0);
+        // Get ALL historical sessions for this class (not just recent ones) for accurate metrics
+        const allHistoricalSessions = rawData.filter((s: SessionData) => {
+          const sNormalizedClass = normalizeClassName(s.Class);
+          return s.Day.toLowerCase() === day &&
+            s.Time?.substring(0, 5) === time &&
+            sNormalizedClass === normalizedClass &&
+            s.Location.toLowerCase() === location;
+        });
         
-        const avgCheckIns = sessions.length > 0 ? totalCheckIns / sessions.length : 0;
+        // Calculate metrics using ALL historical data
+        const totalCheckIns = allHistoricalSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0);
+        const totalCapacity = allHistoricalSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0);
+        const totalBooked = allHistoricalSessions.reduce((sum, s) => sum + (s.Booked || 0), 0);
+        const totalLateCancelled = allHistoricalSessions.reduce((sum, s) => sum + (s.LateCancelled || 0), 0);
+        const totalRevenue = allHistoricalSessions.reduce((sum, s) => sum + (s.Revenue || 0), 0);
+        const totalWaitlisted = allHistoricalSessions.reduce((sum, s) => sum + (s.Waitlisted || 0), 0);
+        const totalComplimentary = allHistoricalSessions.reduce((sum, s) => sum + (s.Complimentary || 0), 0);
+        const totalMemberships = allHistoricalSessions.reduce((sum, s) => sum + (s.Memberships || 0), 0);
+        const totalPackages = allHistoricalSessions.reduce((sum, s) => sum + (s.Packages || 0), 0);
+        const totalIntroOffers = allHistoricalSessions.reduce((sum, s) => sum + (s.IntroOffers || 0), 0);
+        const totalSingleClasses = allHistoricalSessions.reduce((sum, s) => sum + (s.SingleClasses || 0), 0);
+        
+        const sessionCount = allHistoricalSessions.length;
+        const avgCheckIns = sessionCount > 0 ? totalCheckIns / sessionCount : 0;
         const fillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
         const cancellationRate = totalBooked > 0 ? (totalLateCancelled / totalBooked) * 100 : 0;
         const revenuePerCheckIn = totalCheckIns > 0 ? totalRevenue / totalCheckIns : 0;
         
         // Get most frequent trainer
         const trainerCounts = new Map<string, number>();
-        sessions.forEach(s => {
+        allHistoricalSessions.forEach(s => {
           const count = trainerCounts.get(s.Trainer) || 0;
           trainerCounts.set(s.Trainer, count + 1);
         });
@@ -979,33 +1062,33 @@ function ProScheduler() {
           id: `discontinued_${key}`,
           day: day.charAt(0).toUpperCase() + day.slice(1),
           time: time,
-          class: sessions[0].Class,
+          class: sessions[0].Class, // Use original class name from recent session
           trainer: mostFrequentTrainer,
           location: sessions[0].Location,
-          capacity: Math.round(totalCapacity / sessions.length),
+          capacity: Math.round(totalCapacity / sessionCount),
           avgCheckIns: Math.round(avgCheckIns * 10) / 10,
           fillRate: Math.round(fillRate * 10) / 10,
-          revenue: Math.round(totalRevenue / sessions.length),
-          sessionCount: sessions.length,
+          revenue: Math.round(totalRevenue / sessionCount),
+          sessionCount,
           totalCheckIns,
           totalCapacity,
           totalBooked,
           totalLateCancelled,
           totalWaitlisted,
           totalRevenue,
-          avgBooked: totalBooked / sessions.length,
-          avgLateCancelled: totalLateCancelled / sessions.length,
-          avgWaitlisted: totalWaitlisted / sessions.length,
+          avgBooked: totalBooked / sessionCount,
+          avgLateCancelled: totalLateCancelled / sessionCount,
+          avgWaitlisted: totalWaitlisted / sessionCount,
           cancellationRate: Math.round(cancellationRate * 10) / 10,
           waitlistRate: totalCapacity > 0 ? Math.round((totalWaitlisted / totalCapacity) * 1000) / 10 : 0,
           revenuePerCheckIn: Math.round(revenuePerCheckIn),
           status: 'Discontinued',
-          avgComplimentary: 0,
-          complimentaryRate: 0,
-          avgMemberships: 0,
-          avgPackages: 0,
-          avgIntroOffers: 0,
-          avgSingleClasses: 0,
+          avgComplimentary: Math.round(totalComplimentary / sessionCount * 10) / 10,
+          complimentaryRate: totalCheckIns > 0 ? Math.round((totalComplimentary / totalCheckIns) * 1000) / 10 : 0,
+          avgMemberships: Math.round(totalMemberships / sessionCount * 10) / 10,
+          avgPackages: Math.round(totalPackages / sessionCount * 10) / 10,
+          avgIntroOffers: Math.round(totalIntroOffers / sessionCount * 10) / 10,
+          avgSingleClasses: Math.round(totalSingleClasses / sessionCount * 10) / 10,
           bookingToCheckInRate: totalBooked > 0 ? (totalCheckIns / totalBooked) * 100 : 0,
           conflicts: [`❌ Discontinued - Last seen in week of ${format(lastWeekEnd, 'MMM dd')}`],
           recommendations: [],
@@ -1897,15 +1980,16 @@ function ProScheduler() {
           location: string;
         }>();
         
-        // Group all historical sessions by class combo
+        // Group all historical sessions by normalized class combo
         rawData.forEach((s: SessionData) => {
-          const key = `${s.Day}_${s.Time?.substring(0, 5)}_${s.Class}_${s.Location}`.toLowerCase();
+          const normalizedClass = normalizeClassName(s.Class);
+          const key = `${s.Day}_${s.Time?.substring(0, 5)}_${normalizedClass}_${s.Location}`.toLowerCase();
           const existing = allHistoricalClasses.get(key) || {
             sessions: [],
             key,
             day: s.Day,
             time: s.Time?.substring(0, 5) || '',
-            className: s.Class,
+            className: s.Class, // Keep original name
             location: s.Location
           };
           existing.sessions.push(s);
@@ -1925,18 +2009,28 @@ function ProScheduler() {
           totalRevenue: number;
           cancellationRate: number;
           lastDate: Date;
-          topTrainers: Array<{ trainer: string; count: number; avgFill: number; avgRevenue: number }>;          consistency: number;
+          topTrainers: Array<{ trainer: string; count: number; avgFill: number; avgRevenue: number }>;
+          consistency: number;
           avgCapacity: number;
+          totalCheckIns: number;
+          totalBooked: number;
+          totalLateCancelled: number;
+          totalMemberships: number;
+          totalPackages: number;
+          totalIntroOffers: number;
+          totalSingleClasses: number;
         }> = [];
         
         allHistoricalClasses.forEach(({ sessions, key, day, time, className, location }) => {
-          // Check if discontinued
-          const isActive = scheduleClasses.some(cls => 
-            cls.day.toLowerCase() === day.toLowerCase() &&
-            cls.time === time &&
-            cls.class.toLowerCase() === className.toLowerCase() &&
-            cls.location.toLowerCase() === location.toLowerCase()
-          );
+          // Check if discontinued using normalized comparison
+          const normalizedClass = normalizeClassName(className);
+          const isActive = scheduleClasses.some(cls => {
+            const normalizedActiveClass = normalizeClassName(cls.class);
+            return cls.day.toLowerCase() === day.toLowerCase() &&
+              cls.time === time &&
+              normalizedActiveClass === normalizedClass &&
+              cls.location.toLowerCase() === location.toLowerCase();
+          });
           
           if (!isActive && sessions.length >= 5) { // At least 5 sessions for reliability
             const totalCheckIns = sessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0);
@@ -1944,6 +2038,10 @@ function ProScheduler() {
             const totalRevenue = sessions.reduce((sum, s) => sum + (s.Revenue || 0), 0);
             const totalBooked = sessions.reduce((sum, s) => sum + (s.Booked || 0), 0);
             const totalLateCancelled = sessions.reduce((sum, s) => sum + (s.LateCancelled || 0), 0);
+            const totalMemberships = sessions.reduce((sum, s) => sum + (s.Memberships || 0), 0);
+            const totalPackages = sessions.reduce((sum, s) => sum + (s.Packages || 0), 0);
+            const totalIntroOffers = sessions.reduce((sum, s) => sum + (s.IntroOffers || 0), 0);
+            const totalSingleClasses = sessions.reduce((sum, s) => sum + (s.SingleClasses || 0), 0);
             
             const avgCheckIns = totalCheckIns / sessions.length;
             const fillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
@@ -1999,7 +2097,14 @@ function ProScheduler() {
                 lastDate,
                 topTrainers,
                 consistency: Math.round(consistency),
-                avgCapacity: totalCapacity / sessions.length
+                avgCapacity: totalCapacity / sessions.length,
+                totalCheckIns,
+                totalBooked,
+                totalLateCancelled,
+                totalMemberships,
+                totalPackages,
+                totalIntroOffers,
+                totalSingleClasses
               });
             }
           }
@@ -2477,18 +2582,148 @@ function ProScheduler() {
               {/* Time column header */}
               <div className="font-medium text-slate-700 text-sm">Time</div>
               
-              {/* Day headers with class count */}
+              {/* Day headers with class count and collapsible format mix */}
               {DAYS_OF_WEEK.map(day => {
                 const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
+                const isExpanded = expandedDayFormats.has(day.key);
+                
+                // Calculate format mix for this day grouped by difficulty
+                const formatCounts = dayClasses.reduce((acc, cls) => {
+                  const format = cls.class || 'Unknown';
+                  acc[format] = (acc[format] || 0) + 1;
+                  return acc;
+                }, {} as Record<string, number>);
+                
+                // Group formats by difficulty
+                const groupedFormats = {
+                  beginner: [] as Array<[string, number]>,
+                  intermediate: [] as Array<[string, number]>,
+                  advanced: [] as Array<[string, number]>
+                };
+                
+                Object.entries(formatCounts).forEach(([format, count]) => {
+                  const difficulty = getFormatDifficulty(format);
+                  groupedFormats[difficulty].push([format, count]);
+                });
+                
+                // Sort each group by count
+                groupedFormats.beginner.sort((a, b) => b[1] - a[1]);
+                groupedFormats.intermediate.sort((a, b) => b[1] - a[1]);
+                groupedFormats.advanced.sort((a, b) => b[1] - a[1]);
+                
+                const totalFormats = Object.keys(formatCounts).length;
+                
                 return (
                   <motion.div 
                     key={day.key} 
                     initial={{ opacity: 0, y: -10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="font-medium text-slate-800 text-sm text-center bg-gradient-to-br from-slate-50 to-blue-50 rounded-lg p-2 border border-slate-200"
+                    className="font-medium text-slate-800 text-sm text-center bg-gradient-to-br from-slate-50 to-blue-50 rounded-lg border border-slate-200 overflow-hidden"
                   >
-                    <div>{day.short}</div>
-                    <div className="text-xs text-blue-600 font-bold mt-1">{dayClasses.length}</div>
+                    <div 
+                      className="p-2 cursor-pointer hover:bg-blue-50 transition-colors"
+                      onClick={() => {
+                        setExpandedDayFormats(prev => {
+                          const next = new Set(prev);
+                          if (next.has(day.key)) {
+                            next.delete(day.key);
+                          } else {
+                            next.add(day.key);
+                          }
+                          return next;
+                        });
+                      }}
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        <span>{day.short}</span>
+                        <ChevronDown className={`w-3 h-3 text-blue-600 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      </div>
+                      <div className="text-xs text-blue-600 font-bold mt-1">{dayClasses.length}</div>
+                    </div>
+                    
+                    {/* Collapsible Format Mix */}
+                    <AnimatePresence>
+                      {isExpanded && totalFormats > 0 && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={{ duration: 0.2 }}
+                          className="border-t border-slate-200 bg-white"
+                        >
+                          <div className="p-2 max-h-[300px] overflow-y-auto">
+                            <div className="text-[9px] uppercase tracking-wider text-slate-500 font-bold mb-1.5">Format Mix ({totalFormats})</div>
+                            <div className="space-y-2">
+                              {/* Beginner Formats */}
+                              {groupedFormats.beginner.length > 0 && (
+                                <div>
+                                  <div className="text-[8px] uppercase tracking-wider text-green-600 font-bold mb-1 flex items-center gap-1">
+                                    <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                    Beginner ({groupedFormats.beginner.length})
+                                  </div>
+                                  <div className="space-y-0.5 ml-3">
+                                    {groupedFormats.beginner.map(([format, count]) => (
+                                      <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-green-50 px-1 py-0.5 rounded">
+                                        <span className="text-slate-700 text-left flex-1" title={format}>
+                                          {format}
+                                        </span>
+                                        <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">
+                                          {count}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {/* Intermediate Formats */}
+                              {groupedFormats.intermediate.length > 0 && (
+                                <div>
+                                  <div className="text-[8px] uppercase tracking-wider text-blue-600 font-bold mb-1 flex items-center gap-1">
+                                    <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                    Intermediate ({groupedFormats.intermediate.length})
+                                  </div>
+                                  <div className="space-y-0.5 ml-3">
+                                    {groupedFormats.intermediate.map(([format, count]) => (
+                                      <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-blue-50 px-1 py-0.5 rounded">
+                                        <span className="text-slate-700 text-left flex-1" title={format}>
+                                          {format}
+                                        </span>
+                                        <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">
+                                          {count}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {/* Advanced Formats */}
+                              {groupedFormats.advanced.length > 0 && (
+                                <div>
+                                  <div className="text-[8px] uppercase tracking-wider text-red-600 font-bold mb-1 flex items-center gap-1">
+                                    <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                                    Advanced ({groupedFormats.advanced.length})
+                                  </div>
+                                  <div className="space-y-0.5 ml-3">
+                                    {groupedFormats.advanced.map(([format, count]) => (
+                                      <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-red-50 px-1 py-0.5 rounded">
+                                        <span className="text-slate-700 text-left flex-1" title={format}>
+                                          {format}
+                                        </span>
+                                        <span className="bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">
+                                          {count}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </motion.div>
                 );
               })}
@@ -2549,56 +2784,60 @@ function ProScheduler() {
                   <MapPin className="w-5 h-5 text-blue-600" />
                   Multi-Location View - Day-Based Grid
                   <span className="text-xs bg-blue-500 text-white px-3 py-1 rounded-full font-bold">
-                    {uniqueLocations.filter(location => filteredClasses.filter(cls => cls.location === location).length > 0).length} locations
+                    {(() => {
+                      const displayLocations = filters.locations.length > 0 ? filters.locations : uniqueLocations;
+                      return displayLocations.filter(location => filteredClasses.filter(cls => cls.location === location).length > 0).length;
+                    })()} locations
                   </span>
                 </h3>
               </div>
 
-              {/* Scrollable Container for Both Header and Body */}
-              <div className="overflow-x-auto">
-                {/* Sticky Header Row - Days with Location Sub-columns */}
-                <div className="sticky top-0 z-20 bg-gradient-to-r from-gray-100 to-gray-200 shadow-sm border-b-2 border-gray-300">
-                  <div className="flex min-w-max">
-                  <div className="flex-shrink-0 w-24 border-r-2 border-gray-300 p-3 flex items-center justify-center bg-gray-100">
-                    <span className="text-sm font-bold text-gray-700">Time</span>
-                  </div>
-                  {DAYS_OF_WEEK.map((day) => {
-                    const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
-                    const activeLocations = uniqueLocations.length > 0 ? uniqueLocations : ['Default'];
-                    
-                    return (
-                      <div key={day.key} className="flex-1 min-w-[280px] border-r-2 border-gray-300 last:border-r-0">
-                        {/* Day Header */}
-                        <div className="bg-gradient-to-br from-blue-100 to-indigo-100 border-b border-gray-300 p-2 text-center">
-                          <div className="font-bold text-gray-900 text-sm">{day.short}</div>
-                          <div className="text-xs text-gray-600 mt-0.5">{dayClasses.length} classes</div>
-                        </div>
-                        {/* Location Sub-headers */}
-                        <div className="flex">
-                          {activeLocations.map((location, idx) => {
-                            const locationDayClasses = dayClasses.filter(cls => cls.location === location);
-                            return (
-                              <div 
-                                key={`${day.key}-${location}`} 
-                                className={`flex-1 min-w-[130px] p-2 text-center bg-white border-r border-gray-200 ${idx === activeLocations.length - 1 ? 'border-r-0' : ''}`}
-                              >
-                                <div className="text-xs font-semibold text-gray-700 truncate flex items-center justify-center gap-1" title={location}>
-                                  <MapPin className="w-2.5 h-2.5 text-blue-500" />
-                                  <span>{location.split(' ')[0]}</span>
-                                </div>
-                                <div className="text-[10px] text-gray-500">{locationDayClasses.length}</div>
-                              </div>
-                            );
-                          })}
-                        </div>
+              {/* Combined Scrollable Container for Header and Body */}
+              <div className="overflow-x-auto overflow-y-auto max-h-[70vh]">
+                <div className="min-w-max">
+                  {/* Header Row - Days with Location Sub-columns */}
+                  <div className="sticky top-0 z-20 bg-gradient-to-r from-gray-100 to-gray-200 shadow-sm border-b-2 border-gray-300">
+                    <div className="flex">
+                      <div className="flex-shrink-0 w-24 border-r-2 border-gray-300 p-3 flex items-center justify-center bg-gray-100">
+                        <span className="text-sm font-bold text-gray-700">Time</span>
                       </div>
-                    );
-                  })}
-                </div>
-                </div>
+                      {DAYS_OF_WEEK.map((day) => {
+                        const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
+                        const activeLocations = filters.locations.length > 0 ? filters.locations : uniqueLocations;
+                        
+                        return (
+                          <div key={day.key} className="flex-1 min-w-[280px] border-r-2 border-gray-300 last:border-r-0">
+                            {/* Day Header */}
+                            <div className="bg-gradient-to-br from-blue-100 to-indigo-100 border-b border-gray-300 p-2 text-center">
+                              <div className="font-bold text-gray-900 text-sm">{day.short}</div>
+                              <div className="text-xs text-gray-600 mt-0.5">{dayClasses.length} classes</div>
+                            </div>
+                            {/* Location Sub-headers */}
+                            <div className="flex">
+                              {activeLocations.map((location, idx) => {
+                                const locationDayClasses = dayClasses.filter(cls => cls.location === location);
+                                return (
+                                  <div 
+                                    key={`${day.key}-${location}`} 
+                                    className={`flex-1 min-w-[130px] p-2 text-center bg-white border-r border-gray-200 ${idx === activeLocations.length - 1 ? 'border-r-0' : ''}`}
+                                  >
+                                    <div className="text-xs font-semibold text-gray-700 truncate flex items-center justify-center gap-1" title={location}>
+                                      <MapPin className="w-2.5 h-2.5 text-blue-500" />
+                                      <span>{location.split(' ')[0]}</span>
+                                    </div>
+                                    <div className="text-[10px] text-gray-500">{locationDayClasses.length}</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
 
-                {/* Scrollable Time Slots Container */}
-                <div className="overflow-y-auto max-h-[70vh] bg-white">
+                  {/* Time Slots Body */}
+                  <div className="bg-white">
                 {TIME_SLOTS.map((slot) => {
                   const slotHour = parseInt(slot.time24.split(':')[0]);
                   const isNonFunctional = slotHour < 7 || slotHour > 20;
@@ -2624,7 +2863,7 @@ function ProScheduler() {
                       {/* Day Columns with Location Sub-columns */}
                       {DAYS_OF_WEEK.map((day) => {
                         const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
-                        const activeLocations = uniqueLocations.length > 0 ? uniqueLocations : ['Default'];
+                        const activeLocations = filters.locations.length > 0 ? filters.locations : uniqueLocations;
                         
                         return (
                           <div key={`${day.key}-${slot.time24}`} className="flex-1 min-w-[280px] border-r-2 border-gray-200 last:border-r-0">
@@ -2712,16 +2951,20 @@ function ProScheduler() {
                     </div>
                   );
                 })}
+                  </div>
                 </div>
               </div>
 
-              {uniqueLocations.length === 0 && (
-                <div className="text-center py-12">
-                  <MapPin className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                  <p className="text-xl font-semibold text-gray-600 mb-2">No Locations Found</p>
-                  <p className="text-gray-500">No class data available for multi-location view</p>
-                </div>
-              )}
+              {(() => {
+                const displayLocations = filters.locations.length > 0 ? filters.locations : uniqueLocations;
+                return displayLocations.length === 0 && (
+                  <div className="text-center py-12">
+                    <MapPin className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                    <p className="text-xl font-semibold text-gray-600 mb-2">No Locations Found</p>
+                    <p className="text-gray-500">No class data available for multi-location view</p>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -2930,47 +3173,86 @@ function ProScheduler() {
             </div>
           )}
 
-          {/* Timeline View */}
+          {/* Timeline View - Enhanced Premium UI */}
           {calendarViewMode === 'timeline' && (
-            <div className="relative">
+            <div className="relative py-4">
               {TIME_SLOTS.map((slot, idx) => {
                 const slotClasses = filteredClasses.filter(cls => cls.time === slot.time24);
+                const hasClasses = slotClasses.length > 0;
                 return (
                   <motion.div 
                     key={slot.time24} 
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: idx * 0.02 }}
-                    className="flex gap-4 mb-6 relative"
+                    className="flex gap-6 mb-8 relative group"
                   >
-                    {/* Timeline */}
-                    <div className="flex flex-col items-center">
+                    {/* Enhanced Timeline with Glow Effects */}
+                    <div className="flex flex-col items-center relative z-10">
                       <motion.div 
-                        whileHover={{ scale: 1.1 }}
-                        className={`w-4 h-4 rounded-full shadow-md ${slotClasses.length > 0 ? 'bg-gradient-to-br from-blue-500 to-blue-600 ring-4 ring-blue-100' : 'bg-slate-300'}`}
-                      ></motion.div>
+                        whileHover={{ scale: 1.2, rotate: 180 }}
+                        transition={{ type: "spring", stiffness: 300 }}
+                        className={`relative w-5 h-5 rounded-full shadow-lg transition-all ${
+                          hasClasses 
+                            ? 'bg-gradient-to-br from-blue-400 via-blue-500 to-indigo-600 ring-4 ring-blue-100 shadow-blue-500/50' 
+                            : 'bg-gradient-to-br from-slate-300 to-slate-400 ring-2 ring-slate-100'
+                        }`}
+                      >
+                        {hasClasses && (
+                          <motion.div
+                            className="absolute inset-0 rounded-full bg-blue-400"
+                            animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0, 0.5] }}
+                            transition={{ repeat: Infinity, duration: 2 }}
+                          />
+                        )}
+                      </motion.div>
                       {idx < TIME_SLOTS.length - 1 && (
-                        <div className={`w-0.5 h-full ${slotClasses.length > 0 ? 'bg-gradient-to-b from-blue-300 to-slate-200' : 'bg-slate-200'}`}></div>
+                        <div className={`w-1 h-full relative ${
+                          hasClasses 
+                            ? 'bg-gradient-to-b from-blue-400 via-blue-300 to-slate-200' 
+                            : 'bg-gradient-to-b from-slate-200 to-slate-100'
+                        } rounded-full`}>
+                          {hasClasses && (
+                            <div className="absolute inset-0 bg-gradient-to-b from-blue-500/30 to-transparent blur-sm" />
+                          )}
+                        </div>
                       )}
                     </div>
-                    {/* Time and Classes */}
-                    <div className="flex-1 pb-4">
-                      <div className="font-semibold text-slate-800 mb-2 flex items-center gap-2">
-                        {slot.time12}
-                        {slotClasses.length > 0 && (
-                          <span className="text-xs bg-blue-500 text-white px-2 py-1 rounded-full font-bold">
-                            {slotClasses.length}
-                          </span>
+                    
+                    {/* Time and Classes with Enhanced Card */}
+                    <div className="flex-1 pb-6">
+                      <div className={`inline-flex items-center gap-3 mb-4 px-4 py-2 rounded-xl transition-all ${
+                        hasClasses 
+                          ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-lg shadow-blue-500/30' 
+                          : 'bg-gradient-to-r from-slate-100 to-slate-200 text-slate-600'
+                      }`}>
+                        <Clock className="w-4 h-4" />
+                        <span className="font-bold text-lg">{slot.time12}</span>
+                        {hasClasses && (
+                          <motion.span 
+                            initial={{ scale: 0 }}
+                            animate={{ scale: 1 }}
+                            className="bg-white/20 backdrop-blur-sm text-white px-3 py-1 rounded-full font-bold text-sm ml-2"
+                          >
+                            {slotClasses.length} {slotClasses.length === 1 ? 'class' : 'classes'}
+                          </motion.span>
                         )}
                       </div>
-                      {slotClasses.length > 0 ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {hasClasses ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                           {slotClasses.map(cls => renderClassCard(cls))}
                         </div>
                       ) : (
-                        <div className="text-sm text-slate-400 italic py-4 px-4 bg-slate-50 rounded-lg border border-dashed border-slate-200">
-                          No classes scheduled
-                        </div>
+                        <motion.div 
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="text-sm text-slate-400 italic py-6 px-6 bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl border-2 border-dashed border-slate-200 flex items-center gap-3"
+                        >
+                          <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center">
+                            <span className="text-slate-400 text-xs">—</span>
+                          </div>
+                          <span>No classes scheduled</span>
+                        </motion.div>
                       )}
                     </div>
                   </motion.div>
@@ -2981,6 +3263,343 @@ function ProScheduler() {
         </div>
       </div>
       )}
+
+      {/* Comprehensive Analytics Section */}
+      {viewMode === 'analytics' && (() => {
+        // Calculate comprehensive analytics
+        const allSessions = rawData.filter((session: SessionData) => {
+          const sessionDate = parseISO(session.Date);
+          return isWithinInterval(sessionDate, { start: filters.dateFrom, end: filters.dateTo });
+        });
+
+        const totalSessions = allSessions.length;
+        const totalCheckIns = allSessions.reduce((sum, s) => sum + s.CheckedIn, 0);
+        const totalRevenue = allSessions.reduce((sum, s) => sum + s.Revenue, 0);
+        const totalCapacity = allSessions.reduce((sum, s) => sum + s.Capacity, 0);
+        const avgFillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
+        const totalCancellations = allSessions.reduce((sum, s) => sum + s.LateCancelled, 0);
+        const totalBooked = allSessions.reduce((sum, s) => sum + s.Booked, 0);
+        const cancelRate = totalBooked > 0 ? (totalCancellations / totalBooked) * 100 : 0;
+
+        // Group by location
+        const locationStats = allSessions.reduce((acc, session) => {
+          if (!acc[session.Location]) {
+            acc[session.Location] = { sessions: 0, checkIns: 0, revenue: 0, capacity: 0 };
+          }
+          acc[session.Location].sessions++;
+          acc[session.Location].checkIns += session.CheckedIn;
+          acc[session.Location].revenue += session.Revenue;
+          acc[session.Location].capacity += session.Capacity;
+          return acc;
+        }, {} as Record<string, { sessions: number; checkIns: number; revenue: number; capacity: number }>);
+
+        // Group by trainer
+        const trainerStats = allSessions.reduce((acc, session) => {
+          if (!acc[session.Trainer]) {
+            acc[session.Trainer] = { sessions: 0, checkIns: 0, revenue: 0, avgFill: 0 };
+          }
+          acc[session.Trainer].sessions++;
+          acc[session.Trainer].checkIns += session.CheckedIn;
+          acc[session.Trainer].revenue += session.Revenue;
+          return acc;
+        }, {} as Record<string, { sessions: number; checkIns: number; revenue: number; avgFill: number }>);
+
+        // Calculate avg fill for trainers
+        Object.keys(trainerStats).forEach(trainer => {
+          const trainerSessions = allSessions.filter(s => s.Trainer === trainer);
+          const totalCap = trainerSessions.reduce((sum, s) => sum + s.Capacity, 0);
+          trainerStats[trainer].avgFill = totalCap > 0 ? (trainerStats[trainer].checkIns / totalCap) * 100 : 0;
+        });
+
+        // Group by format with difficulty
+        const formatStats = allSessions.reduce((acc, session) => {
+          const format = session.Class;
+          if (!acc[format]) {
+            const difficulty = getFormatDifficulty(format);
+            acc[format] = { sessions: 0, checkIns: 0, revenue: 0, capacity: 0, difficulty };
+          }
+          acc[format].sessions++;
+          acc[format].checkIns += session.CheckedIn;
+          acc[format].revenue += session.Revenue;
+          acc[format].capacity += session.Capacity;
+          return acc;
+        }, {} as Record<string, { sessions: number; checkIns: number; revenue: number; capacity: number; difficulty: string }>);
+
+        // Time slot performance
+        const timeSlotStats = allSessions.reduce((acc, session) => {
+          const time = session.Time;
+          if (!acc[time]) {
+            acc[time] = { sessions: 0, checkIns: 0, revenue: 0, fillRate: 0 };
+          }
+          acc[time].sessions++;
+          acc[time].checkIns += session.CheckedIn;
+          acc[time].revenue += session.Revenue;
+          return acc;
+        }, {} as Record<string, { sessions: number; checkIns: number; revenue: number; fillRate: number }>);
+
+        // Top performers
+        const topFormats = Object.entries(formatStats)
+          .sort((a, b) => b[1].revenue - a[1].revenue)
+          .slice(0, 5);
+        const topTrainers = Object.entries(trainerStats)
+          .sort((a, b) => b[1].revenue - a[1].revenue)
+          .slice(0, 5);
+        const topLocations = Object.entries(locationStats)
+          .sort((a, b) => b[1].revenue - a[1].revenue)
+          .slice(0, 3);
+
+        return (
+          <div className="space-y-6">
+            {/* Hero Stats */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="relative bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 rounded-2xl p-6 shadow-2xl overflow-hidden group"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="relative z-10">
+                  <div className="text-blue-200 text-sm font-bold uppercase tracking-widest mb-2">Total Sessions</div>
+                  <div className="text-5xl font-black text-white mb-2">{totalSessions.toLocaleString()}</div>
+                  <div className="text-blue-300 text-xs">Across all locations</div>
+                </div>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 }}
+                className="relative bg-gradient-to-br from-emerald-900 via-green-900 to-teal-900 rounded-2xl p-6 shadow-2xl overflow-hidden group"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-teal-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="relative z-10">
+                  <div className="text-emerald-200 text-sm font-bold uppercase tracking-widest mb-2">Check-Ins</div>
+                  <div className="text-5xl font-black text-white mb-2">{totalCheckIns.toLocaleString()}</div>
+                  <div className="text-emerald-300 text-xs">Total attendances</div>
+                </div>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+                className="relative bg-gradient-to-br from-purple-900 via-violet-900 to-indigo-900 rounded-2xl p-6 shadow-2xl overflow-hidden group"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="relative z-10">
+                  <div className="text-purple-200 text-sm font-bold uppercase tracking-widest mb-2">Avg Fill Rate</div>
+                  <div className="text-5xl font-black text-white mb-2">{avgFillRate.toFixed(1)}%</div>
+                  <div className="text-purple-300 text-xs">Overall utilization</div>
+                </div>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="relative bg-gradient-to-br from-amber-900 via-orange-900 to-red-900 rounded-2xl p-6 shadow-2xl overflow-hidden group"
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 to-red-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="relative z-10">
+                  <div className="text-amber-200 text-sm font-bold uppercase tracking-widest mb-2">Revenue</div>
+                  <div className="text-5xl font-black text-white mb-2">{formatCurrency(totalRevenue)}</div>
+                  <div className="text-amber-300 text-xs">Total earnings</div>
+                </div>
+              </motion.div>
+            </div>
+
+            {/* Top Performers Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Top Formats */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
+                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-6 py-4 border-b border-slate-200">
+                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <Award className="w-5 h-5 text-blue-600" />
+                    Top Formats by Revenue
+                  </h3>
+                </div>
+                <div className="p-4 space-y-3">
+                  {topFormats.map(([format, stats], idx) => (
+                    <motion.div
+                      key={format}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: idx * 0.1 }}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-slate-50 to-blue-50 hover:from-blue-50 hover:to-indigo-50 transition-all"
+                    >
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white font-bold flex items-center justify-center text-sm">
+                        {idx + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-slate-800 text-sm truncate">{format}</div>
+                        <div className="text-xs text-slate-500">{stats.sessions} sessions • {stats.checkIns} check-ins</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-blue-700 text-sm">{formatCurrency(stats.revenue)}</div>
+                        <div className="text-xs text-slate-500">{stats.capacity > 0 ? ((stats.checkIns / stats.capacity) * 100).toFixed(0) : 0}% fill</div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Top Trainers */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
+                <div className="bg-gradient-to-r from-emerald-50 to-teal-50 px-6 py-4 border-b border-slate-200">
+                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <Users className="w-5 h-5 text-emerald-600" />
+                    Top Trainers by Revenue
+                  </h3>
+                </div>
+                <div className="p-4 space-y-3">
+                  {topTrainers.map(([trainer, stats], idx) => (
+                    <motion.div
+                      key={trainer}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: idx * 0.1 }}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-slate-50 to-emerald-50 hover:from-emerald-50 hover:to-teal-50 transition-all"
+                    >
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white font-bold flex items-center justify-center text-sm">
+                        {idx + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-slate-800 text-sm truncate">{trainer}</div>
+                        <div className="text-xs text-slate-500">{stats.sessions} sessions • {stats.avgFill.toFixed(0)}% fill</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-emerald-700 text-sm">{formatCurrency(stats.revenue)}</div>
+                        <div className="text-xs text-slate-500">{stats.checkIns} check-ins</div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Top Locations */}
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
+                <div className="bg-gradient-to-r from-purple-50 to-pink-50 px-6 py-4 border-b border-slate-200">
+                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <MapPin className="w-5 h-5 text-purple-600" />
+                    Top Locations by Revenue
+                  </h3>
+                </div>
+                <div className="p-4 space-y-3">
+                  {topLocations.map(([location, stats], idx) => (
+                    <motion.div
+                      key={location}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: idx * 0.1 }}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-slate-50 to-purple-50 hover:from-purple-50 hover:to-pink-50 transition-all"
+                    >
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-600 text-white font-bold flex items-center justify-center text-sm">
+                        {idx + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-slate-800 text-sm truncate">{location}</div>
+                        <div className="text-xs text-slate-500">{stats.sessions} sessions</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-purple-700 text-sm">{formatCurrency(stats.revenue)}</div>
+                        <div className="text-xs text-slate-500">{stats.capacity > 0 ? ((stats.checkIns / stats.capacity) * 100).toFixed(0) : 0}% fill</div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Format Difficulty Distribution */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
+              <div className="bg-gradient-to-r from-slate-50 to-blue-50 px-6 py-4 border-b border-slate-200">
+                <h3 className="text-lg font-bold text-slate-800">Format Difficulty Distribution</h3>
+              </div>
+              <div className="p-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {['beginner', 'intermediate', 'advanced'].map((difficulty) => {
+                    const difficultyFormats = Object.entries(formatStats).filter(([_, stats]) => stats.difficulty === difficulty);
+                    const totalDiffSessions = difficultyFormats.reduce((sum, [_, stats]) => sum + stats.sessions, 0);
+                    const totalDiffRevenue = difficultyFormats.reduce((sum, [_, stats]) => sum + stats.revenue, 0);
+                    const color = difficulty === 'beginner' ? 'green' : difficulty === 'intermediate' ? 'blue' : 'red';
+                    
+                    return (
+                      <motion.div
+                        key={difficulty}
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className={`p-5 rounded-xl bg-gradient-to-br from-${color}-50 to-${color}-100 border-2 border-${color}-200`}
+                      >
+                        <div className={`text-${color}-700 text-xs font-bold uppercase tracking-widest mb-2`}>{difficulty}</div>
+                        <div className="text-3xl font-black text-slate-800 mb-1">{difficultyFormats.length}</div>
+                        <div className="text-xs text-slate-600 mb-3">formats</div>
+                        <div className="space-y-1 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-slate-600">Sessions:</span>
+                            <span className="font-bold text-slate-800">{totalDiffSessions}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-600">Revenue:</span>
+                            <span className="font-bold text-slate-800">{formatCurrency(totalDiffRevenue)}</span>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Additional Metrics */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
+                <div className="bg-gradient-to-r from-red-50 to-orange-50 px-6 py-4 border-b border-slate-200">
+                  <h3 className="text-lg font-bold text-slate-800">Cancellation Analytics</h3>
+                </div>
+                <div className="p-6 space-y-4">
+                  <div className="flex items-center justify-between p-4 rounded-xl bg-red-50">
+                    <div>
+                      <div className="text-sm text-slate-600">Total Cancellations</div>
+                      <div className="text-3xl font-bold text-red-700">{totalCancellations.toLocaleString()}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm text-slate-600">Cancel Rate</div>
+                      <div className="text-3xl font-bold text-red-700">{cancelRate.toFixed(1)}%</div>
+                    </div>
+                  </div>
+                  <div className="text-xs text-slate-500">From {totalBooked.toLocaleString()} total bookings</div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-lg overflow-hidden">
+                <div className="bg-gradient-to-r from-cyan-50 to-blue-50 px-6 py-4 border-b border-slate-200">
+                  <h3 className="text-lg font-bold text-slate-800">Capacity Utilization</h3>
+                </div>
+                <div className="p-6 space-y-4">
+                  <div className="flex items-center justify-between p-4 rounded-xl bg-blue-50">
+                    <div>
+                      <div className="text-sm text-slate-600">Total Capacity</div>
+                      <div className="text-3xl font-bold text-blue-700">{totalCapacity.toLocaleString()}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm text-slate-600">Utilization</div>
+                      <div className="text-3xl font-bold text-blue-700">{avgFillRate.toFixed(1)}%</div>
+                    </div>
+                  </div>
+                  <div className="w-full bg-slate-200 rounded-full h-4 overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${avgFillRate}%` }}
+                      transition={{ duration: 1, delay: 0.5 }}
+                      className="h-full bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Enhanced Drilldown Modal with Detailed Analytics */}
       {showDrilldown && selectedClass && (() => {
@@ -3209,7 +3828,7 @@ function ProScheduler() {
                   </div>
                 </div>
 
-                {/* 8 Key Metric Cards with Animated Bars */}
+                {/* 8 Key Metric Cards with Animated Bars - Premium Dark Style */}
                 {hasHistoricalData && (() => {
                   const totalCheckIns = classSessions.reduce((sum, s) => sum + s.CheckedIn, 0);
                   const totalBooked = classSessions.reduce((sum, s) => sum + s.Booked, 0);
@@ -3228,17 +3847,18 @@ function ProScheduler() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.4, delay: 0 }}
-                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
                       >
+                        <div className="absolute inset-0 bg-gradient-to-br from-blue-600/10 via-transparent to-indigo-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="relative z-10">
-                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Sessions</div>
-                          <div className="text-3xl font-bold text-blue-700">{classSessions.length}</div>
-                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Sessions</div>
+                          <div className="text-3xl font-black text-white mb-4">{classSessions.length}</div>
+                          <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
                             <motion.div 
-                              className="bg-blue-500 h-2 rounded-full"
+                              className="bg-gradient-to-r from-blue-500 via-blue-400 to-indigo-500 h-1.5 rounded-full shadow-lg shadow-blue-500/50"
                               initial={{ width: 0 }}
                               animate={{ width: '100%' }}
-                              transition={{ duration: 1, delay: 0.2 }}
+                              transition={{ duration: 1.2, delay: 0.2, ease: "easeOut" }}
                             />
                           </div>
                         </div>
@@ -3249,17 +3869,18 @@ function ProScheduler() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.4, delay: 0.1 }}
-                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
                       >
+                        <div className="absolute inset-0 bg-gradient-to-br from-emerald-600/10 via-transparent to-green-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="relative z-10">
-                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Check-Ins</div>
-                          <div className="text-3xl font-bold text-blue-700">{totalCheckIns}</div>
-                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Check-Ins</div>
+                          <div className="text-3xl font-black text-white mb-4">{totalCheckIns}</div>
+                          <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
                             <motion.div 
-                              className="bg-blue-500 h-2 rounded-full"
+                              className="bg-gradient-to-r from-emerald-500 via-green-400 to-emerald-500 h-1.5 rounded-full shadow-lg shadow-emerald-500/50"
                               initial={{ width: 0 }}
                               animate={{ width: `${Math.min(fillRate, 100)}%` }}
-                              transition={{ duration: 1, delay: 0.3 }}
+                              transition={{ duration: 1.2, delay: 0.3, ease: "easeOut" }}
                             />
                           </div>
                         </div>
@@ -3270,17 +3891,18 @@ function ProScheduler() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.4, delay: 0.2 }}
-                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
                       >
+                        <div className="absolute inset-0 bg-gradient-to-br from-cyan-600/10 via-transparent to-blue-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="relative z-10">
-                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Avg (No Empty)</div>
-                          <div className="text-3xl font-bold text-blue-700">{avgCheckInsExcludingEmpty.toFixed(1)}</div>
-                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Avg (No Empty)</div>
+                          <div className="text-3xl font-black text-white mb-4">{avgCheckInsExcludingEmpty.toFixed(1)}</div>
+                          <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
                             <motion.div 
-                              className="bg-blue-500 h-2 rounded-full"
+                              className="bg-gradient-to-r from-cyan-500 via-blue-400 to-cyan-500 h-1.5 rounded-full shadow-lg shadow-cyan-500/50"
                               initial={{ width: 0 }}
                               animate={{ width: `${Math.min((avgCheckInsExcludingEmpty / 30) * 100, 100)}%` }}
-                              transition={{ duration: 1, delay: 0.4 }}
+                              transition={{ duration: 1.2, delay: 0.4, ease: "easeOut" }}
                             />
                           </div>
                         </div>
@@ -3291,17 +3913,18 @@ function ProScheduler() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.4, delay: 0.3 }}
-                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
                       >
+                        <div className="absolute inset-0 bg-gradient-to-br from-purple-600/10 via-transparent to-indigo-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="relative z-10">
-                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Fill Rate</div>
-                          <div className="text-3xl font-bold text-blue-700">{fillRate.toFixed(0)}%</div>
-                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Fill Rate</div>
+                          <div className="text-3xl font-black text-white mb-4">{fillRate.toFixed(0)}%</div>
+                          <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
                             <motion.div 
-                              className="bg-blue-500 h-2 rounded-full"
+                              className="bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-500 h-1.5 rounded-full shadow-lg shadow-purple-500/50"
                               initial={{ width: 0 }}
                               animate={{ width: `${fillRate}%` }}
-                              transition={{ duration: 1, delay: 0.5 }}
+                              transition={{ duration: 1.2, delay: 0.5, ease: "easeOut" }}
                             />
                           </div>
                         </div>
@@ -3312,17 +3935,18 @@ function ProScheduler() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.4, delay: 0.4 }}
-                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
                       >
+                        <div className="absolute inset-0 bg-gradient-to-br from-amber-600/10 via-transparent to-yellow-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="relative z-10">
-                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Booked</div>
-                          <div className="text-3xl font-bold text-blue-700">{totalBooked}</div>
-                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Booked</div>
+                          <div className="text-3xl font-black text-white mb-4">{totalBooked}</div>
+                          <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
                             <motion.div 
-                              className="bg-blue-500 h-2 rounded-full"
+                              className="bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 h-1.5 rounded-full shadow-lg shadow-amber-500/50"
                               initial={{ width: 0 }}
                               animate={{ width: `${totalCapacity > 0 ? (totalBooked / totalCapacity) * 100 : 0}%` }}
-                              transition={{ duration: 1, delay: 0.6 }}
+                              transition={{ duration: 1.2, delay: 0.6, ease: "easeOut" }}
                             />
                           </div>
                         </div>
@@ -3333,17 +3957,18 @@ function ProScheduler() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.4, delay: 0.5 }}
-                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
                       >
+                        <div className="absolute inset-0 bg-gradient-to-br from-red-600/10 via-transparent to-rose-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="relative z-10">
-                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Cancellations</div>
-                          <div className="text-3xl font-bold text-blue-700">{totalCancellations}</div>
-                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Cancellations</div>
+                          <div className="text-3xl font-black text-white mb-4">{totalCancellations}</div>
+                          <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
                             <motion.div 
-                              className="bg-blue-500 h-2 rounded-full"
+                              className="bg-gradient-to-r from-red-500 via-rose-400 to-red-500 h-1.5 rounded-full shadow-lg shadow-red-500/50"
                               initial={{ width: 0 }}
                               animate={{ width: `${cancelRate}%` }}
-                              transition={{ duration: 1, delay: 0.7 }}
+                              transition={{ duration: 1.2, delay: 0.7, ease: "easeOut" }}
                             />
                           </div>
                         </div>
@@ -3354,17 +3979,18 @@ function ProScheduler() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.4, delay: 0.6 }}
-                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
                       >
+                        <div className="absolute inset-0 bg-gradient-to-br from-orange-600/10 via-transparent to-red-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="relative z-10">
-                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Cancel Rate</div>
-                          <div className="text-3xl font-bold text-blue-700">{cancelRate.toFixed(1)}%</div>
-                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Cancel Rate</div>
+                          <div className="text-3xl font-black text-white mb-4">{cancelRate.toFixed(1)}%</div>
+                          <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
                             <motion.div 
-                              className="bg-blue-500 h-2 rounded-full"
+                              className="bg-gradient-to-r from-orange-500 via-red-400 to-orange-500 h-1.5 rounded-full shadow-lg shadow-orange-500/50"
                               initial={{ width: 0 }}
                               animate={{ width: `${cancelRate}%` }}
-                              transition={{ duration: 1, delay: 0.8 }}
+                              transition={{ duration: 1.2, delay: 0.8, ease: "easeOut" }}
                             />
                           </div>
                         </div>
@@ -3375,17 +4001,18 @@ function ProScheduler() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.4, delay: 0.7 }}
-                        className="bg-white rounded-xl p-4 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow relative overflow-hidden"
+                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
                       >
+                        <div className="absolute inset-0 bg-gradient-to-br from-green-600/10 via-transparent to-emerald-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                         <div className="relative z-10">
-                          <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-2">Total Revenue</div>
-                          <div className="text-3xl font-bold text-blue-700">{formatCurrency(totalRevenue)}</div>
-                          <div className="mt-3 bg-slate-200 rounded-full h-2 overflow-hidden">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Total Revenue</div>
+                          <div className="text-3xl font-black text-white mb-4">{formatCurrency(totalRevenue)}</div>
+                          <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
                             <motion.div 
-                              className="bg-blue-500 h-2 rounded-full"
+                              className="bg-gradient-to-r from-green-500 via-emerald-400 to-green-500 h-1.5 rounded-full shadow-lg shadow-green-500/50"
                               initial={{ width: 0 }}
                               animate={{ width: '100%' }}
-                              transition={{ duration: 1, delay: 0.9 }}
+                              transition={{ duration: 1.2, delay: 0.9, ease: "easeOut" }}
                             />
                           </div>
                         </div>
@@ -3588,9 +4215,14 @@ function ProScheduler() {
                             return (
                               <tr 
                                 key={index}
-                                className={`border-t border-slate-200 hover:bg-blue-50 transition-colors ${
+                                onClick={() => {
+                                  setSelectedSessionForMembers(session);
+                                  setShowMemberDetailsModal(true);
+                                }}
+                                className={`border-t border-slate-200 hover:bg-blue-100 transition-colors cursor-pointer ${
                                   index % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'
-                                }`}
+                                } ${selectedSessionForMembers?.SessionID === session.SessionID ? 'ring-2 ring-blue-500 bg-blue-50' : ''}`}
+                                title="Click to view member details for this session"
                               >
                                 <td className="px-2 py-2 font-medium text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200" style={{ width: '90px' }}>
                                   {format(parseISO(session.Date), 'MMM dd, yy')}
@@ -3636,7 +4268,28 @@ function ProScheduler() {
                         </tbody>
                         <tfoot className="bg-gradient-to-r from-slate-100 to-blue-100 font-semibold border-t-2 border-slate-300">
                           {/* Totals Row */}
-                          <tr style={{ maxHeight: '30px', height: '30px' }} className="border-b border-slate-300">
+                          <tr 
+                            style={{ maxHeight: '30px', height: '30px' }} 
+                            className="border-b border-slate-300 cursor-pointer hover:bg-blue-200 transition-colors"
+                            onClick={() => {
+                              // Create a synthetic session object representing ALL sessions for this UniqueID1
+                              const firstSession = classSessions[0];
+                              if (firstSession) {
+                                setSelectedSessionForMembers({
+                                  ...firstSession,
+                                  Date: 'ALL', // Special marker to indicate all sessions
+                                  Time: 'All Sessions',
+                                  CheckedIn: classSessions.reduce((sum, s) => sum + s.CheckedIn, 0),
+                                  Booked: classSessions.reduce((sum, s) => sum + s.Booked, 0),
+                                  Revenue: classSessions.reduce((sum, s) => sum + s.Revenue, 0),
+                                  LateCancelled: classSessions.reduce((sum, s) => sum + s.LateCancelled, 0),
+                                  Capacity: classSessions.reduce((sum, s) => sum + s.Capacity, 0)
+                                });
+                                setShowMemberDetailsModal(true);
+                              }
+                            }}
+                            title="Click to view all members across all sessions"
+                          >
                             <td className="px-2 py-1 text-slate-900 whitespace-nowrap text-[11px] border-r border-slate-200 font-bold">TOTALS</td>
                             <td className="px-2 py-1 border-r border-slate-200"></td>
                             <td className="px-2 py-1 text-right text-blue-900 font-bold whitespace-nowrap text-[11px] border-r border-slate-200">
@@ -4485,6 +5138,572 @@ function ProScheduler() {
           </motion.div>
         </div>
       )}
+
+      {/* Enhanced Member Details Modal */}
+      {showMemberDetailsModal && selectedSessionForMembers && (() => {
+        // Check if this is for ALL sessions (clicked on totals row)
+        const isAllSessions = selectedSessionForMembers.Date === 'ALL';
+        
+        // Get members for this specific session or all sessions for this UniqueID1
+        const sessionMembers = isAllSessions 
+          ? checkinsData.filter(
+              (checkin: CheckinData) => 
+                checkin.UniqueID1 === selectedSessionForMembers.UniqueID1
+            )
+          : checkinsData.filter(
+              (checkin: CheckinData) => 
+                checkin.UniqueID1 === selectedSessionForMembers.UniqueID1 &&
+                checkin.Date === selectedSessionForMembers.Date
+            );
+        
+        // Calculate how many times each member has ACTUALLY ATTENDED (checked in, not cancelled) THIS specific class (UniqueID1)
+        // Filter sessions that match THIS specific UniqueID1 and Date combination
+        const classHistorySessions = rawData.filter((s: SessionData) => 
+          s.UniqueID1 === selectedSessionForMembers.UniqueID1
+        ).sort((a, b) => new Date(b.Date).getTime() - new Date(a.Date).getTime()); // Sort descending by date
+        
+        // Get last 15 sessions for this specific UniqueID1
+        const last15Sessions = classHistorySessions.slice(0, 15);
+        
+        // Map to track actual attendance (CheckedIn=true, IsLateCancelled=false) in last 15 sessions
+        const memberLast15Attendance = new Map<string, number>();
+        last15Sessions.forEach((session: SessionData) => {
+          const sessionCheckins = checkinsData.filter(c => 
+            c.UniqueID1 === session.UniqueID1 &&
+            c.Date === session.Date &&
+            c.CheckedIn === true && 
+            c.IsLateCancelled === false
+          );
+          sessionCheckins.forEach(checkin => {
+            const key = checkin.MemberID;
+            memberLast15Attendance.set(key, (memberLast15Attendance.get(key) || 0) + 1);
+          });
+        });
+        
+        // Map to track total attendance for all class history (for nth visit)
+        const memberClassAttendance = new Map<string, number>();
+        classHistorySessions.forEach((session: SessionData) => {
+          const sessionCheckins = checkinsData.filter(c => 
+            c.UniqueID1 === session.UniqueID1 &&
+            c.Date === session.Date &&
+            c.CheckedIn === true && 
+            c.IsLateCancelled === false
+          );
+          sessionCheckins.forEach(checkin => {
+            const key = checkin.MemberID;
+            memberClassAttendance.set(key, (memberClassAttendance.get(key) || 0) + 1);
+          });
+        });
+        
+        // Identify regular members for THIS class (attended ≥10 times in last 15 sessions)
+        const regularMembersForClass = new Set(
+          Array.from(memberLast15Attendance.entries())
+            .filter(([_, count]) => count >= 10)
+            .map(([memberId]) => memberId)
+        );
+        
+        // Find regular members who SKIPPED this session
+        const regularMembersWhoSkipped = Array.from(regularMembersForClass).filter(memberId => {
+          // Check if this regular member attended THIS specific session
+          const attendedThisSession = sessionMembers.some(m => 
+            m.MemberID === memberId && 
+            m.CheckedIn === true && 
+            m.IsLateCancelled === false
+          );
+          return !attendedThisSession;
+        }).map(memberId => {
+          // Find member info from past sessions
+          const memberInfo = checkinsData.find(c => c.MemberID === memberId);
+          return {
+            memberId,
+            name: memberInfo ? `${memberInfo.FirstName} ${memberInfo.LastName}` : 'Unknown',
+            email: memberInfo?.Email || '',
+            totalVisits: memberClassAttendance.get(memberId) || 0
+          };
+        });
+        
+        const hasCheckinData = sessionMembers.length > 0;
+        
+        // Calculate additional metrics
+        const totalPaid = sessionMembers.reduce((sum, m) => sum + (m.Paid || 0), 0);
+        const checkedInCount = sessionMembers.filter(m => m.CheckedIn && !m.IsLateCancelled).length;
+        const cancelledCount = sessionMembers.filter(m => m.IsLateCancelled).length;
+        const noShowCount = sessionMembers.filter(m => !m.CheckedIn && !m.IsLateCancelled).length;
+        const regularMembersInSession = sessionMembers.filter(m => 
+          regularMembersForClass.has(m.MemberID) && 
+          m.CheckedIn && 
+          !m.IsLateCancelled
+        );
+        // Occasional visitors: 3+ total visits but not regular (not 10+ in last 15)
+        const occasionalVisitors = sessionMembers.filter(m => 
+          m.CheckedIn && 
+          !m.IsLateCancelled && 
+          !regularMembersForClass.has(m.MemberID) && 
+          (memberClassAttendance.get(m.MemberID) || 0) > 3
+        ).length;
+        const regularToOccasionalRatio = occasionalVisitors > 0 
+          ? (regularMembersInSession.length / occasionalVisitors).toFixed(2) 
+          : regularMembersInSession.length > 0 ? '∞' : '0';
+        
+        // Calculate average metrics
+        const avgPaid = sessionMembers.length > 0 ? totalPaid / sessionMembers.length : 0;
+        const avgClassNo = sessionMembers.length > 0 
+          ? sessionMembers.reduce((sum, m) => sum + (m.ClassNo || 0), 0) / sessionMembers.length 
+          : 0;
+        const newMembersCount = sessionMembers.filter(m => m.ClassNo <= 3).length;
+        
+        // If showing all sessions, we need to get unique members (one row per member with aggregated data)
+        const uniqueMembers = isAllSessions 
+          ? Array.from(
+              sessionMembers.reduce((map, member) => {
+                const existing = map.get(member.MemberID);
+                if (!existing) {
+                  map.set(member.MemberID, member);
+                } else {
+                  // Keep the most recent one (or aggregate if needed)
+                  if (new Date(member.Date) > new Date(existing.Date)) {
+                    map.set(member.MemberID, member);
+                  }
+                }
+                return map;
+              }, new Map<string, CheckinData>())
+            ).map(([_, member]) => member)
+          : sessionMembers;
+        
+        // Filter members based on search and filters
+        const filteredMembers = uniqueMembers.filter(member => {
+          if (memberSearchQuery.trim()) {
+            const query = memberSearchQuery.toLowerCase();
+            const fullName = `${member.FirstName} ${member.LastName}`.toLowerCase();
+            const email = (member.Email || '').toLowerCase();
+            if (!fullName.includes(query) && !email.includes(query)) {
+              return false;
+            }
+          }
+          
+          if (memberStatusFilter !== 'all') {
+            if (memberStatusFilter === 'checked-in' && !member.CheckedIn) return false;
+            if (memberStatusFilter === 'cancelled' && !member.IsLateCancelled) return false;
+            if (memberStatusFilter === 'no-show' && (member.CheckedIn || member.IsLateCancelled)) return false;
+          }
+          
+          if (memberTypeFilter !== 'all') {
+            if (memberTypeFilter === 'regulars' && !regularMembersForClass.has(member.MemberID)) return false;
+            if (memberTypeFilter === 'new' && member.ClassNo > 3) return false;
+          }
+          
+          return true;
+        });
+        
+        return (
+          <div 
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowMemberDetailsModal(false);
+                setSelectedSessionForMembers(null);
+                setMemberSearchQuery('');
+                setMemberStatusFilter('all');
+                setMemberTypeFilter('all');
+              }
+            }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="w-full max-w-7xl transform rounded-3xl bg-white/80 glass-card text-left align-middle shadow-2xl transition-all max-h-[90vh] overflow-hidden"
+            >
+              <div className="flex flex-col md:flex-row max-h-[90vh]">
+                {/* Left Profile Pane - Matching EnhancedDrilldownModal2 */}
+                <div className="md:w-1/3 bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white p-8 flex flex-col gap-6 overflow-y-auto max-h-[90vh]">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h2 className="text-2xl font-bold tracking-tight">{selectedSessionForMembers.Class}</h2>
+                      <p className="text-sm opacity-80 mt-2 flex items-center gap-2">
+                        <Calendar className="w-4 h-4" />
+                        {isAllSessions ? 'All Sessions' : format(parseISO(selectedSessionForMembers.Date), 'EEEE, MMM dd, yyyy')}
+                      </p>
+                      <p className="text-sm opacity-80 mt-1 flex items-center gap-2">
+                        <Clock className="w-4 h-4" />
+                        {selectedSessionForMembers.Time}
+                      </p>
+                      <p className="text-sm opacity-80 mt-1 flex items-center gap-2">
+                        <Users className="w-4 h-4" />
+                        {selectedSessionForMembers.Trainer}
+                      </p>
+                      <p className="text-sm opacity-80 mt-1 flex items-center gap-2">
+                        <MapPin className="w-4 h-4" />
+                        {selectedSessionForMembers.Location}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setShowMemberDetailsModal(false);
+                        setSelectedSessionForMembers(null);
+                        setMemberSearchQuery('');
+                        setMemberStatusFilter('all');
+                        setMemberTypeFilter('all');
+                      }}
+                      className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {/* Session Stats Card */}
+                  <div className="relative w-full rounded-2xl shadow-xl border border-white/20 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
+                    <div className="flex flex-col gap-4">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs uppercase tracking-wider opacity-80">Session Overview</span>
+                        <span className="text-lg font-semibold">Attendance & Revenue</span>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                          <div className="text-[10px] opacity-70 uppercase tracking-wider mb-1">Checked In</div>
+                          <div className="text-2xl font-bold">{checkedInCount}</div>
+                          <div className="text-[10px] opacity-60 mt-1">
+                            of {selectedSessionForMembers.Capacity}
+                          </div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                          <div className="text-[10px] opacity-70 uppercase tracking-wider mb-1">Fill Rate</div>
+                          <div className="text-2xl font-bold">
+                            {selectedSessionForMembers.Capacity > 0 
+                              ? Math.round((checkedInCount / selectedSessionForMembers.Capacity) * 100) 
+                              : 0}%
+                          </div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                          <div className="text-[10px] opacity-70 uppercase tracking-wider mb-1">Revenue</div>
+                          <div className="text-xl font-bold">{formatCurrency(totalPaid)}</div>
+                          <div className="text-[10px] opacity-60 mt-1">{formatCurrency(avgPaid)} avg</div>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                          <div className="text-[10px] opacity-70 uppercase tracking-wider mb-1">Avg Class No</div>
+                          <div className="text-2xl font-bold">{avgClassNo.toFixed(1)}</div>
+                          <div className="text-[10px] opacity-60 mt-1">{newMembersCount} new</div>
+                        </div>
+                      </div>
+                      
+                      {/* Visitor Breakdown */}
+                      <div className="mt-2 pt-4 border-t border-white/10">
+                        <div className="text-[10px] opacity-70 uppercase tracking-wider mb-3">Visitor Analysis</div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs opacity-80">Regulars (10+ of last 15)</span>
+                            <span className="text-sm font-bold text-green-400">{regularMembersInSession.length}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs opacity-80">Occasional (3+ visits)</span>
+                            <span className="text-sm font-bold text-amber-400">{occasionalVisitors}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs opacity-80">Regular:Occasional</span>
+                            <span className="text-sm font-bold text-blue-400">{regularToOccasionalRatio}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs opacity-80">Regulars Skipped</span>
+                            <span className="text-sm font-bold text-red-400">{regularMembersWhoSkipped.length}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Status Breakdown */}
+                      <div className="mt-2 pt-4 border-t border-white/10">
+                        <div className="text-[10px] opacity-70 uppercase tracking-wider mb-3">Status</div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs opacity-80">Cancelled</span>
+                            <span className="text-sm font-bold text-red-400">{cancelledCount}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs opacity-80">No Show</span>
+                            <span className="text-sm font-bold text-orange-400">{noShowCount}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Payment Breakdown */}
+                      <div className="mt-2 pt-4 border-t border-white/10">
+                        <div className="text-[10px] opacity-70 uppercase tracking-wider mb-3">Payment Types</div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs opacity-80">Memberships</span>
+                            <span className="text-sm font-bold">{selectedSessionForMembers.Memberships}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs opacity-80">Packages</span>
+                            <span className="text-sm font-bold">{selectedSessionForMembers.Packages}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs opacity-80">Intro Offers</span>
+                            <span className="text-sm font-bold">{selectedSessionForMembers.IntroOffers}</span>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-xs opacity-80">Single Classes</span>
+                            <span className="text-sm font-bold">{selectedSessionForMembers.SingleClasses}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Content Pane */}
+                <div className="md:w-2/3 bg-white/95 p-6 overflow-y-auto max-h-[90vh]">
+                  <h3 className="text-xl font-bold text-slate-900 mb-4">
+                    Member Details - {isAllSessions ? 'All Sessions' : `${format(parseISO(selectedSessionForMembers.Date), 'MMM dd, yyyy')} at ${selectedSessionForMembers.Time}`}
+                  </h3>
+                  
+                  {/* Filters */}
+                  {hasCheckinData && (
+                        <div className="bg-slate-50 rounded-xl p-4 mb-6 border border-slate-200">
+                          <div className="flex flex-wrap gap-3 items-center">
+                            <div className="flex-1 min-w-[200px]">
+                              <input
+                                type="text"
+                                placeholder="Search by name or email..."
+                                value={memberSearchQuery}
+                                onChange={(e) => setMemberSearchQuery(e.target.value)}
+                                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              />
+                            </div>
+                            <select
+                              value={memberStatusFilter}
+                              onChange={(e) => setMemberStatusFilter(e.target.value as any)}
+                              className="px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                            >
+                              <option value="all">All Status</option>
+                              <option value="checked-in">Checked In</option>
+                              <option value="cancelled">Cancelled</option>
+                              <option value="no-show">No Show</option>
+                            </select>
+                            <select
+                              value={memberTypeFilter}
+                              onChange={(e) => setMemberTypeFilter(e.target.value as any)}
+                              className="px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                            >
+                              <option value="all">All Members</option>
+                              <option value="regulars">Regulars (≥5 visits)</option>
+                              <option value="new">New (≤3 classes)</option>
+                            </select>
+                            <div className="text-sm text-slate-600">
+                              {filteredMembers.length} of {sessionMembers.length}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Member Table */}
+                      {hasCheckinData ? (
+                        <div className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead className="bg-gradient-to-r from-slate-100 to-blue-100 border-b-2 border-slate-300 sticky top-0">
+                                <tr>
+                                  <th className="text-left px-3 py-3 font-semibold text-slate-700 text-xs">Member Name</th>
+                                  <th className="text-left px-3 py-3 font-semibold text-slate-700 text-xs">Email</th>
+                                  <th className="text-left px-3 py-3 font-semibold text-slate-700 text-xs">Payment Method</th>
+                                  <th className="text-left px-3 py-3 font-semibold text-slate-700 text-xs">Category</th>
+                                  <th className="text-center px-3 py-3 font-semibold text-slate-700 text-xs">Class No</th>
+                                  <th className="text-center px-3 py-3 font-semibold text-slate-700 text-xs">Nth Visit<br/>(This Class)</th>
+                                  <th className="text-center px-3 py-3 font-semibold text-slate-700 text-xs">Regular</th>
+                                  <th className="text-center px-3 py-3 font-semibold text-slate-700 text-xs">Sessions<br/>Attended</th>
+                                  <th className="text-center px-3 py-3 font-semibold text-slate-700 text-xs">Cancellations</th>
+                                  <th className="text-center px-3 py-3 font-semibold text-slate-700 text-xs">No Shows</th>
+                                  <th className="text-left px-3 py-3 font-semibold text-slate-700 text-xs">Status</th>
+                                  <th className="text-right px-3 py-3 font-semibold text-slate-700 text-xs">Paid</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {filteredMembers
+                                  .sort((a, b) => {
+                                    const aIsRegular = regularMembersForClass.has(a.MemberID);
+                                    const bIsRegular = regularMembersForClass.has(b.MemberID);
+                                    if (aIsRegular !== bIsRegular) return bIsRegular ? 1 : -1;
+                                    if (a.CheckedIn !== b.CheckedIn) return b.CheckedIn ? 1 : -1;
+                                    return `${a.FirstName} ${a.LastName}`.localeCompare(`${b.FirstName} ${b.LastName}`);
+                                  })
+                                  .map((member, index) => {
+                                    const isRegular = regularMembersForClass.has(member.MemberID);
+                                    const nthVisit = memberClassAttendance.get(member.MemberID) || 1;
+                                    const isNew = member.ClassNo <= 3;
+                                    
+                                    // Calculate additional metrics for this member
+                                    const memberSessions = isAllSessions 
+                                      ? checkinsData.filter(c => c.MemberID === member.MemberID && c.UniqueID1 === selectedSessionForMembers.UniqueID1)
+                                      : [member];
+                                    const sessionsAttended = memberSessions.filter(s => s.CheckedIn && !s.IsLateCancelled).length;
+                                    const cancellationsCount = memberSessions.filter(s => s.IsLateCancelled).length;
+                                    const noShowsCount = memberSessions.filter(s => !s.CheckedIn && !s.IsLateCancelled).length;
+                                    
+                                    return (
+                                      <tr 
+                                        key={index}
+                                        className={`border-t border-slate-200 hover:bg-blue-50 transition-colors ${
+                                          member.IsLateCancelled ? 'bg-red-50/30' : 
+                                          isRegular ? 'bg-blue-50/30' : 
+                                          'bg-white'
+                                        }`}
+                                      >
+                                        <td className="px-3 py-3">
+                                          <div className="font-medium text-slate-900">
+                                            {member.FirstName} {member.LastName}
+                                          </div>
+                                        </td>
+                                        <td className="px-3 py-3 text-slate-700 text-xs">{member.Email || '-'}</td>
+                                        <td className="px-3 py-3 text-slate-700 text-xs">{member.PaymentMethodName || '-'}</td>
+                                        <td className="px-3 py-3 text-slate-700 text-xs">{member.CleanedCategory || '-'}</td>
+                                        <td className="px-3 py-3 text-center">
+                                          <span className={`inline-flex items-center justify-center px-2 py-0.5 rounded text-[11px] font-bold w-[45px] ${
+                                            isNew ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white' : 'bg-gradient-to-r from-slate-500 to-slate-600 text-white'
+                                          }`}>
+                                            {member.ClassNo}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
+                                          <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-[11px] font-bold bg-gradient-to-r from-blue-500 to-indigo-600 text-white w-[45px]">
+                                            {nthVisit}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
+                                          {isRegular ? (
+                                            <span className="inline-flex items-center justify-center gap-0.5 px-2 py-0.5 rounded text-[10px] font-bold bg-gradient-to-r from-blue-600 to-indigo-700 text-white w-[70px]">
+                                              <Users className="w-2.5 h-2.5" />
+                                              Regular
+                                            </span>
+                                          ) : (memberClassAttendance.get(member.MemberID) || 0) > 3 ? (
+                                            <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-[10px] font-bold bg-gradient-to-r from-amber-500 to-orange-600 text-white w-[70px]">
+                                              Occasional
+                                            </span>
+                                          ) : (
+                                            <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-400 text-white w-[70px]">New</span>
+                                          )}  
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
+                                          <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-[11px] font-bold bg-slate-200 text-slate-700 w-[45px]">
+                                            {sessionsAttended}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
+                                          <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-[11px] font-bold bg-red-100 text-red-700 w-[45px]">
+                                            {cancellationsCount}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
+                                          <span className="inline-flex items-center justify-center px-2 py-0.5 rounded text-[11px] font-bold bg-orange-100 text-orange-700 w-[45px]">
+                                            {noShowsCount}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-3 text-center">
+                                          {member.IsLateCancelled ? (
+                                            <span className="inline-flex items-center justify-center gap-0.5 text-[10px] font-bold bg-gradient-to-r from-red-500 to-rose-600 text-white px-2 py-0.5 rounded w-[85px]">
+                                              <X className="w-2.5 h-2.5" />
+                                              Cancelled
+                                            </span>
+                                          ) : member.CheckedIn ? (
+                                            <span className="inline-flex items-center justify-center gap-0.5 text-[10px] font-bold bg-gradient-to-r from-green-500 to-emerald-600 text-white px-2 py-0.5 rounded w-[85px]">
+                                              ✓ Checked In
+                                            </span>
+                                          ) : (
+                                            <span className="inline-flex items-center justify-center gap-0.5 text-[10px] font-bold bg-gradient-to-r from-slate-500 to-slate-600 text-white px-2 py-0.5 rounded w-[85px]">
+                                              No Show
+                                            </span>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-3 text-right font-semibold text-slate-900 text-xs">
+                                          {formatCurrency(member.Paid || 0)}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                              </tbody>
+                              <tfoot className="bg-gradient-to-r from-slate-100 to-blue-100 border-t-2 border-slate-300">
+                                <tr>
+                                  <td colSpan={11} className="px-3 py-3 text-right font-bold text-slate-900 text-sm">
+                                    Total Revenue:
+                                  </td>
+                                  <td className="px-3 py-3 text-right font-bold text-blue-700 text-sm">
+                                    {formatCurrency(filteredMembers.reduce((sum, m) => sum + (m.Paid || 0), 0))}
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                          
+                          {/* Regular Members Who Skipped This Session */}
+                          {regularMembersWhoSkipped.length > 0 && (
+                            <div className="mt-8">
+                              <div className="flex items-center gap-3 mb-4">
+                                <AlertTriangle className="w-5 h-5 text-amber-600" />
+                                <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider">
+                                  Regular Members Who Skipped This Session ({regularMembersWhoSkipped.length})
+                                </h4>
+                              </div>
+                              <div className="bg-amber-50/50 rounded-xl border border-amber-200 overflow-hidden">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-amber-100 border-b border-amber-200">
+                                    <tr>
+                                      <th className="px-4 py-3 text-left text-xs uppercase tracking-wider font-bold text-amber-900">
+                                        Member Name
+                                      </th>
+                                      <th className="px-4 py-3 text-left text-xs uppercase tracking-wider font-bold text-amber-900">
+                                        Email
+                                      </th>
+                                      <th className="px-4 py-3 text-center text-xs uppercase tracking-wider font-bold text-amber-900">
+                                        Total Visits
+                                      </th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {regularMembersWhoSkipped.map((skipped, index) => (
+                                      <tr 
+                                        key={index}
+                                        className="border-t border-amber-100 hover:bg-amber-100/50 transition-colors bg-white"
+                                      >
+                                        <td className="px-4 py-3">
+                                          <div className="font-medium text-amber-900">
+                                            {skipped.name}
+                                          </div>
+                                        </td>
+                                        <td className="px-4 py-3 text-amber-700 text-xs">{skipped.email || '-'}</td>
+                                        <td className="px-4 py-3 text-center">
+                                          <span className="inline-block px-3 py-1 rounded text-xs font-bold bg-amber-200 text-amber-900">
+                                            {skipped.totalVisits}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <div className="mt-3 text-xs text-amber-700 bg-amber-50 rounded-lg px-4 py-2 border border-amber-200">
+                                <span className="font-semibold">Note:</span> These are regular members (10+ attendances in last 15 sessions) who didn't attend this session. Consider reaching out to understand their absence.
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="bg-amber-50 rounded-xl p-6 border border-amber-200">
+                          <div className="flex items-start gap-3 text-amber-800">
+                            <AlertTriangle className="w-6 h-6 mt-0.5 flex-shrink-0" />
+                            <div>
+                              <h4 className="font-semibold mb-2">Checkins Data Not Available</h4>
+                              <p className="text-sm text-amber-700">
+                                Member details require checkins data with UniqueID1 mapping.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

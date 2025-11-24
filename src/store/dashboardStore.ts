@@ -51,6 +51,7 @@ const getDefaultFilters = (): FilterState => {
 export const useDashboardStore = create<DashboardState>((set, get) => ({
   // Initial data state
   rawData: [],
+  checkinsData: [],
   filteredData: [],
   processedData: [],
   scheduleData: {},
@@ -112,6 +113,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
         .sort()
         .pop() || '',
     };
+  },
+
+  setCheckinsData: (data: CheckinData[]) => {
+    console.log(`[STORE] Setting ${data.length} checkin records`);
+    set({ checkinsData: data });
   },
 
   setRawData: (data: SessionData[]) => {

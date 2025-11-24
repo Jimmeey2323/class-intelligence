@@ -289,6 +289,7 @@ export type RankingMetric =
 export interface DashboardState {
   // Data
   rawData: SessionData[];
+  checkinsData: CheckinData[]; // Individual member check-in records
   filteredData: SessionData[]; // Filtered sessions before grouping
   processedData: (SessionData | GroupedRow)[];
   scheduleData: { [day: string]: any[] }; // Schedule data from uploaded CSV
@@ -324,6 +325,7 @@ export interface DashboardState {
     lastSessionDate: string;
   } | null;
   setRawData: (data: SessionData[]) => void;
+  setCheckinsData: (data: CheckinData[]) => void;
   setFilters: (filters: Partial<FilterState>) => void;
   setViewMode: (mode: ViewMode) => void;
   setGroupBy: (groupBy: GroupBy) => void;

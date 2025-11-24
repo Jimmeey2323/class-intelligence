@@ -2,7 +2,7 @@ import { useCallback, useState, useEffect } from 'react';
 import { Upload, FileText, CheckCircle, AlertCircle, X, Cloud } from 'lucide-react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { parseMultipleCSVFiles, validateCSVStructure } from '../utils/csvParser';
-import { loadEnhancedSessionsFromGoogleSheets, loadActiveClassesFromGoogleSheets } from '../services/googleSheetsService';
+import { loadEnhancedSessionsFromGoogleSheets, loadActiveClassesFromGoogleSheets, loadCheckinsFromGoogleSheets } from '../services/googleSheetsService';
 
 interface FileUploadProps {
   onUploadComplete?: () => void;
@@ -21,7 +21,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoadingFromSheets, setIsLoadingFromSheets] = useState(false);
   const [sheetsError, setSheetsError] = useState<string | null>(null);
-  const { setRawData, rawData } = useDashboardStore();
+  const { setRawData, setCheckinsData, rawData } = useDashboardStore();
 
   // Load data from Google Sheets on mount
   useEffect(() => {
@@ -35,10 +35,11 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
       setSheetsError(null);
 
       try {
-        // Load both sessions and active classes in parallel
-        const [sessionsData, activeClassesData] = await Promise.all([
+        // Load sessions, active classes, and checkins in parallel
+        const [sessionsData, activeClassesData, checkinsData] = await Promise.all([
           loadEnhancedSessionsFromGoogleSheets(),
-          loadActiveClassesFromGoogleSheets()
+          loadActiveClassesFromGoogleSheets(),
+          loadCheckinsFromGoogleSheets()
         ]);
         
         if (sessionsData.length > 0) {
@@ -50,6 +51,16 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
             console.log('✅ Loaded active classes from Google Sheets:', {
               days: Object.keys(activeClassesData),
               totalClasses: Object.values(activeClassesData).reduce((sum, classes) => sum + classes.length, 0)
+            });
+          }
+          
+          // Update checkins data in store
+          if (checkinsData && checkinsData.length > 0) {
+            setCheckinsData(checkinsData);
+            console.log('✅ Loaded checkins from Google Sheets:', {
+              totalCheckins: checkinsData.length,
+              uniqueMembers: new Set(checkinsData.map(c => c.MemberID)).size,
+              uniqueSessions: new Set(checkinsData.map(c => c.UniqueID1)).size
             });
           }
           
