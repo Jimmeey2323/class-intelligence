@@ -85,3 +85,5 @@ export const DashboardSkeleton: React.FC = () => {
     </div>
   );
 };
+
+export default DashboardSkeleton;

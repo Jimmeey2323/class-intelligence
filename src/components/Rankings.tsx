@@ -65,10 +65,9 @@ export default function Rankings() {
     setIsDrilldownOpen(true);
   };
 
-  if (rawData.length === 0) return null;
-
-  // Group sessions by composite key
+  // Group sessions by composite key - MUST be before early return to comply with Rules of Hooks
   const rankedGroups = useMemo(() => {
+    if (rawData.length === 0) return [];
     const groups = new Map<string, SessionData[]>();
 
     rawData.forEach((session) => {
@@ -116,6 +115,9 @@ export default function Rankings() {
 
     return rankingGroups;
   }, [rawData, includeTrainerInRankings, filters.minCheckins, filters.minClasses, filters.statusFilter, allRawData]);
+
+  // Early return after all hooks have been called
+  if (rawData.length === 0) return null;
 
   const getMetricLabel = (metric: RankingMetric): string => {
     switch (metric) {

@@ -620,7 +620,9 @@ function ProScheduler() {
           const stdDev = Math.sqrt(variance);
           const consistency = 100 - Math.min(stdDev, 100); // Higher is more consistent
           
-          // Top 3 trainers for this class
+          // Top 3 trainers for this class - Initialize before conditional blocks
+          let topTrainers: Array<{ name: string; sessions: number; totalCheckIns: number; classAvg: number; avgFill: number; avgRevenue: number; score: number }> = [];
+          
           const trainerStats = new Map<string, { sessions: number; checkIns: number; revenue: number; capacity: number }>();
           historicalSessions.forEach(s => {
             if (!s.Trainer) return;
@@ -632,7 +634,7 @@ function ProScheduler() {
             trainerStats.set(s.Trainer, stats);
           });
           
-          const topTrainers = Array.from(trainerStats.entries())
+          topTrainers = Array.from(trainerStats.entries())
             .map(([name, stats]) => {
               const classAvg = stats.sessions > 0 ? stats.checkIns / stats.sessions : 0;
               const avgFill = stats.capacity > 0 ? (stats.checkIns / stats.capacity) * 100 : 0;
@@ -1691,66 +1693,100 @@ function ProScheduler() {
 
 
       {/* Advanced Control Panel */}
-      <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mb-6">
-        <button
-          onClick={() => setViewMode('calendar')}
-          className={`p-3 rounded-xl border transition-all ${viewMode === 'calendar' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-200 hover:border-blue-300'}`}
-        >
-          <Calendar className="w-4 h-4 mx-auto mb-1" />
-          <div className="text-xs font-medium">Calendar</div>
-        </button>
-        <button
-          onClick={() => setViewMode('analytics')}
-          className={`p-3 rounded-xl border transition-all ${viewMode === 'analytics' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-200 hover:border-blue-300'}`}
-        >
-          <TrendingUp className="w-4 h-4 mx-auto mb-1" />
-          <div className="text-xs font-medium">Analytics</div>
-        </button>
-        <button
-          onClick={() => setShowTrainerAnalytics(!showTrainerAnalytics)}
-          className={`p-3 rounded-xl border transition-all ${showTrainerAnalytics ? 'bg-green-500 text-white border-green-500' : 'bg-white border-gray-200 hover:border-green-300'}`}
-        >
-          <Users className="w-4 h-4 mx-auto mb-1" />
-          <div className="text-xs font-medium">Trainers</div>
-        </button>
-        <button
-          onClick={() => setShowDiscontinuedHighPerformers(!showDiscontinuedHighPerformers)}
-          className={`p-3 rounded-xl border transition-all ${showDiscontinuedHighPerformers ? 'bg-purple-500 text-white border-purple-500' : 'bg-white border-gray-200 hover:border-purple-300'}`}
-        >
-          <TrendingUp className="w-4 h-4 mx-auto mb-1" />
-          <div className="text-xs font-medium">Top Discontinued</div>
-        </button>
-        <button
-          onClick={() => setShowConflictResolver(!showConflictResolver)}
-          className={`p-3 rounded-xl border transition-all ${showConflictResolver ? 'bg-red-500 text-white border-red-500' : 'bg-white border-gray-200 hover:border-red-300'}`}
-        >
-          <AlertTriangle className="w-4 h-4 mx-auto mb-1" />
-          <div className="text-xs font-medium">Conflicts</div>
-        </button>
-        <button
-          onClick={() => setShowOptimizationPanel(!showOptimizationPanel)}
-          className={`p-3 rounded-xl border transition-all ${showOptimizationPanel ? 'bg-purple-500 text-white border-purple-500' : 'bg-white border-gray-200 hover:border-purple-300'}`}
-        >
-          <Star className="w-4 h-4 mx-auto mb-1" />
-          <div className="text-xs font-medium">Optimize</div>
-        </button>
-        <button
-          onClick={() => setShowDiscontinued(!showDiscontinued)}
-          className={`p-3 rounded-xl border transition-all ${showDiscontinued ? 'bg-gray-700 text-white border-gray-700' : 'bg-white border-gray-200 hover:border-gray-400'}`}
-        >
-          <X className="w-4 h-4 mx-auto mb-1" />
-          <div className="text-xs font-medium">Discontinued</div>
-          {discontinuedClasses.length > 0 && (
-            <div className="text-[9px] text-center mt-0.5">({discontinuedClasses.length})</div>
-          )}
-        </button>
-        <button
-          onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-          className={`p-3 rounded-xl border transition-all ${showAdvancedFilters ? 'bg-amber-500 text-white border-amber-500' : 'bg-white border-gray-200 hover:border-amber-300'}`}
-        >
-          <Edit3 className="w-4 h-4 mx-auto mb-1" />
-          <div className="text-xs font-medium">Filters</div>
-        </button>
+      <div className="glass-card rounded-2xl p-3 border border-white/20 shadow-xl backdrop-blur-xl mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
+          <button
+            onClick={() => setViewMode('calendar')}
+            className={`p-3 rounded-xl border transition-all duration-300 ${
+              viewMode === 'calendar'
+                ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white border-blue-500/30 shadow-lg scale-105'
+                : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-blue-300 hover:bg-white/90 text-slate-700'
+            }`}
+          >
+            <Calendar className="w-4 h-4 mx-auto mb-1" />
+            <div className="text-xs font-bold">Calendar</div>
+          </button>
+          <button
+            onClick={() => setViewMode('analytics')}
+            className={`p-3 rounded-xl border transition-all duration-300 ${
+              viewMode === 'analytics'
+                ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white border-blue-500/30 shadow-lg scale-105'
+                : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-blue-300 hover:bg-white/90 text-slate-700'
+            }`}
+          >
+            <TrendingUp className="w-4 h-4 mx-auto mb-1" />
+            <div className="text-xs font-bold">Analytics</div>
+          </button>
+          <button
+            onClick={() => setShowTrainerAnalytics(!showTrainerAnalytics)}
+            className={`p-3 rounded-xl border transition-all duration-300 ${
+              showTrainerAnalytics
+                ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white border-blue-500/30 shadow-lg scale-105'
+                : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-emerald-300 hover:bg-white/90 text-slate-700'
+            }`}
+          >
+            <Users className="w-4 h-4 mx-auto mb-1" />
+            <div className="text-xs font-bold">Trainers</div>
+          </button>
+          <button
+            onClick={() => setShowDiscontinuedHighPerformers(!showDiscontinuedHighPerformers)}
+            className={`p-3 rounded-xl border transition-all duration-300 ${
+              showDiscontinuedHighPerformers
+                ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white border-blue-500/30 shadow-lg scale-105'
+                : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-purple-300 hover:bg-white/90 text-slate-700'
+            }`}
+          >
+            <TrendingUp className="w-4 h-4 mx-auto mb-1" />
+            <div className="text-xs font-bold">Top Discontinued</div>
+          </button>
+          <button
+            onClick={() => setShowConflictResolver(!showConflictResolver)}
+            className={`p-3 rounded-xl border transition-all duration-300 ${
+              showConflictResolver
+                ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white border-blue-500/30 shadow-lg scale-105'
+                : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-red-300 hover:bg-white/90 text-slate-700'
+            }`}
+          >
+            <AlertTriangle className="w-4 h-4 mx-auto mb-1" />
+            <div className="text-xs font-bold">Conflicts</div>
+          </button>
+          <button
+            onClick={() => setShowOptimizationPanel(!showOptimizationPanel)}
+            className={`p-3 rounded-xl border transition-all duration-300 ${
+              showOptimizationPanel
+                ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white border-blue-500/30 shadow-lg scale-105'
+                : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-purple-300 hover:bg-white/90 text-slate-700'
+            }`}
+          >
+            <Star className="w-4 h-4 mx-auto mb-1" />
+            <div className="text-xs font-bold">Optimize</div>
+          </button>
+          <button
+            onClick={() => setShowDiscontinued(!showDiscontinued)}
+            className={`p-3 rounded-xl border transition-all duration-300 ${
+              showDiscontinued
+                ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white border-blue-500/30 shadow-lg scale-105'
+                : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-gray-400 hover:bg-white/90 text-slate-700'
+            }`}
+          >
+            <X className="w-4 h-4 mx-auto mb-1" />
+            <div className="text-xs font-bold">Discontinued</div>
+            {discontinuedClasses.length > 0 && (
+              <div className="text-[9px] text-center mt-0.5">({discontinuedClasses.length})</div>
+            )}
+          </button>
+          <button
+            onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+            className={`p-3 rounded-xl border transition-all duration-300 ${
+              showAdvancedFilters
+                ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white border-blue-500/30 shadow-lg scale-105'
+                : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-amber-300 hover:bg-white/90 text-slate-700'
+            }`}
+          >
+            <Edit3 className="w-4 h-4 mx-auto mb-1" />
+            <div className="text-xs font-bold">Filters</div>
+          </button>
+        </div>
       </div>
 
       {/* Advanced Filters Panel */}
@@ -1982,6 +2018,8 @@ function ProScheduler() {
         
         // Group all historical sessions by normalized class combo
         rawData.forEach((s: SessionData) => {
+          // Skip hosted classes
+          if (s.Class?.toLowerCase().includes('hosted')) return;
           const normalizedClass = normalizeClassName(s.Class);
           const key = `${s.Day}_${s.Time?.substring(0, 5)}_${normalizedClass}_${s.Location}`.toLowerCase();
           const existing = allHistoricalClasses.get(key) || {
@@ -2167,37 +2205,62 @@ function ProScheduler() {
                         </div>
                       </div>
                       
-                      {/* Key Metrics */}
-                      <div className="grid grid-cols-6 gap-3 mb-4">
-                        <div className="bg-white rounded-lg p-3 border border-slate-200">
-                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Avg Attendance</div>
-                          <div className="text-xl font-bold text-slate-900">{cls.avgCheckIns.toFixed(1)}</div>
-                          <div className="text-[9px] text-slate-500 mt-0.5">per class</div>
+                      {/* Key Metrics - Expanded Grid */}
+                      <div className="grid grid-cols-4 md:grid-cols-6 lg:grid-cols-10 gap-2.5 mb-4">
+                        <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-2.5 border border-blue-200 shadow-sm">
+                          <div className="text-[9px] text-blue-700 font-bold mb-1 uppercase tracking-wide">Avg Attendance</div>
+                          <div className="text-lg font-bold text-blue-900">{cls.avgCheckIns.toFixed(1)}</div>
+                          <div className="text-[8px] text-blue-600 mt-0.5">per class</div>
                         </div>
-                        <div className="bg-white rounded-lg p-3 border border-slate-200">
-                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Fill Rate</div>
-                          <div className={`text-xl font-bold ${cls.fillRate >= 80 ? 'text-emerald-600' : cls.fillRate >= 60 ? 'text-amber-600' : 'text-slate-900'}`}>
+                        <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 rounded-lg p-2.5 border border-emerald-200 shadow-sm">
+                          <div className="text-[9px] text-emerald-700 font-bold mb-1 uppercase tracking-wide">Fill Rate</div>
+                          <div className={`text-lg font-bold ${cls.fillRate >= 80 ? 'text-emerald-700' : cls.fillRate >= 60 ? 'text-amber-600' : 'text-slate-900'}`}>
                             {cls.fillRate.toFixed(1)}%
                           </div>
-                          <div className="text-[9px] text-slate-500 mt-0.5">capacity</div>
+                          <div className="text-[8px] text-emerald-600 mt-0.5">capacity</div>
                         </div>
-                        <div className="bg-white rounded-lg p-3 border border-slate-200">
-                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Sessions</div>
-                          <div className="text-xl font-bold text-slate-900">{cls.sessionCount}</div>
-                          <div className="text-[9px] text-slate-500 mt-0.5">total</div>
+                        <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-2.5 border border-purple-200 shadow-sm">
+                          <div className="text-[9px] text-purple-700 font-bold mb-1 uppercase tracking-wide">Sessions</div>
+                          <div className="text-lg font-bold text-purple-900">{cls.sessionCount}</div>
+                          <div className="text-[8px] text-purple-600 mt-0.5">total</div>
                         </div>
-                        <div className="bg-white rounded-lg p-3 border border-slate-200">
-                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Revenue</div>
-                          <div className="text-base font-bold text-slate-900">{formatCurrency(cls.totalRevenue)}</div>
-                          <div className="text-[9px] text-slate-500 mt-0.5">total</div>
+                        <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 rounded-lg p-2.5 border border-indigo-200 shadow-sm">
+                          <div className="text-[9px] text-indigo-700 font-bold mb-1 uppercase tracking-wide">Total Revenue</div>
+                          <div className="text-sm font-bold text-indigo-900">{formatRevenue(cls.totalRevenue)}</div>
+                          <div className="text-[8px] text-indigo-600 mt-0.5">earned</div>
                         </div>
-                        <div className="bg-white rounded-lg p-3 border border-slate-200">
-                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Consistency</div>
-                          <div className="text-xl font-bold text-slate-900">{cls.consistency}%</div>
-                          <div className="text-[9px] text-slate-500 mt-0.5">reliable</div>
+                        <div className="bg-gradient-to-br from-cyan-50 to-cyan-100 rounded-lg p-2.5 border border-cyan-200 shadow-sm">
+                          <div className="text-[9px] text-cyan-700 font-bold mb-1 uppercase tracking-wide">Consistency</div>
+                          <div className="text-lg font-bold text-cyan-900">{cls.consistency}%</div>
+                          <div className="text-[8px] text-cyan-600 mt-0.5">reliable</div>
                         </div>
-                        <div className="bg-white rounded-lg p-3 border border-slate-200">
-                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Cancel Rate</div>
+                        <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-lg p-2.5 border border-orange-200 shadow-sm">
+                          <div className="text-[9px] text-orange-700 font-bold mb-1 uppercase tracking-wide">Cancel Rate</div>
+                          <div className="text-lg font-bold text-orange-900">{cls.cancellationRate.toFixed(1)}%</div>
+                          <div className="text-[8px] text-orange-600 mt-0.5">of bookings</div>
+                        </div>
+                        <div className="bg-gradient-to-br from-pink-50 to-pink-100 rounded-lg p-2.5 border border-pink-200 shadow-sm">
+                          <div className="text-[9px] text-pink-700 font-bold mb-1 uppercase tracking-wide">Total Booked</div>
+                          <div className="text-lg font-bold text-pink-900">{cls.totalBooked}</div>
+                          <div className="text-[8px] text-pink-600 mt-0.5">bookings</div>
+                        </div>
+                        <div className="bg-gradient-to-br from-rose-50 to-rose-100 rounded-lg p-2.5 border border-rose-200 shadow-sm">
+                          <div className="text-[9px] text-rose-700 font-bold mb-1 uppercase tracking-wide">Cancellations</div>
+                          <div className="text-lg font-bold text-rose-900">{cls.totalLateCancelled}</div>
+                          <div className="text-[8px] text-rose-600 mt-0.5">late cancel</div>
+                        </div>
+                        <div className="bg-gradient-to-br from-teal-50 to-teal-100 rounded-lg p-2.5 border border-teal-200 shadow-sm">
+                          <div className="text-[9px] text-teal-700 font-bold mb-1 uppercase tracking-wide">Memberships</div>
+                          <div className="text-lg font-bold text-teal-900">{cls.totalMemberships}</div>
+                          <div className="text-[8px] text-teal-600 mt-0.5">member visits</div>
+                        </div>
+                        <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-lg p-2.5 border border-amber-200 shadow-sm">
+                          <div className="text-[9px] text-amber-700 font-bold mb-1 uppercase tracking-wide">Packages</div>
+                          <div className="text-lg font-bold text-amber-900">{cls.totalPackages}</div>
+                          <div className="text-[8px] text-amber-600 mt-0.5">package visits</div>
+                        </div>
+                        <div className="bg-gradient-to-br from-violet-50 to-violet-100 rounded-lg p-2.5 border border-violet-200 shadow-sm">
+                          <div className="text-[9px] text-violet-700 font-bold mb-1 uppercase tracking-wide">Cancel Rate</div>
                           <div className="text-xl font-bold text-slate-900">{cls.cancellationRate.toFixed(1)}%</div>
                           <div className="text-[9px] text-slate-500 mt-0.5">cancelled</div>
                         </div>
@@ -2862,7 +2925,7 @@ function ProScheduler() {
 
                       {/* Day Columns with Location Sub-columns */}
                       {DAYS_OF_WEEK.map((day) => {
-                        const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
+                        // const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
                         const activeLocations = filters.locations.length > 0 ? filters.locations : uniqueLocations;
                         
                         return (
@@ -3336,6 +3399,9 @@ function ProScheduler() {
           acc[time].revenue += session.Revenue;
           return acc;
         }, {} as Record<string, { sessions: number; checkIns: number; revenue: number; fillRate: number }>);
+        
+        // Use the timeSlotStats for calculations
+        console.log('Time slot stats:', timeSlotStats);
 
         // Top performers
         const topFormats = Object.entries(formatStats)

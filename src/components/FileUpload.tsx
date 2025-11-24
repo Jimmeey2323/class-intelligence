@@ -1,8 +1,15 @@
-import { useCallback, useState, useEffect } from 'react';
-import { Upload, FileText, CheckCircle, AlertCircle, X, Cloud } from 'lucide-react';
+import { useCallback, useState, useEffect, useRef } from 'react';
+import { FileText, CheckCircle, AlertCircle, X, Cloud, UploadCloud, Loader, Trash2 } from 'lucide-react';
+import { motion, AnimatePresence, useMotionTemplate, useMotionValue, animate } from 'framer-motion';
 import { useDashboardStore } from '../store/dashboardStore';
 import { parseMultipleCSVFiles, validateCSVStructure } from '../utils/csvParser';
 import { loadEnhancedSessionsFromGoogleSheets, loadActiveClassesFromGoogleSheets, loadCheckinsFromGoogleSheets } from '../services/googleSheetsService';
+import { TextShimmer, Particles } from './AnimationUtils';
+
+
+const cn = (...classes: (string | undefined | null | boolean)[]) => {
+  return classes.filter(Boolean).join(' ');
+};
 
 interface FileUploadProps {
   onUploadComplete?: () => void;
@@ -13,7 +20,10 @@ interface FileStatus {
   status: 'pending' | 'validating' | 'valid' | 'invalid' | 'processing' | 'complete';
   error?: string;
   progress?: number;
+  id?: string;
 }
+
+const COLORS_TOP = ['#13FFAA', '#1E67C6', '#CE84CF', '#DD335C'];
 
 export default function FileUpload({ onUploadComplete }: FileUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
@@ -22,11 +32,25 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
   const [isLoadingFromSheets, setIsLoadingFromSheets] = useState(false);
   const [sheetsError, setSheetsError] = useState<string | null>(null);
   const { setRawData, setCheckinsData, rawData } = useDashboardStore();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasExistingData = rawData.length > 0;
+  
+  const color = useMotionValue(COLORS_TOP[0]);
+
+  useEffect(() => {
+    animate(color, COLORS_TOP, {
+      ease: 'easeInOut',
+      duration: 10,
+      repeat: Infinity,
+      repeatType: 'mirror',
+    });
+  }, []);
+
+  const backgroundImage = useMotionTemplate`radial-gradient(125% 125% at 50% 0%, #020617 50%, ${color})`;
 
   // Load data from Google Sheets on mount
   useEffect(() => {
     const loadInitialData = async () => {
-      // Only load if no data is present
       if (rawData.length > 0) {
         return;
       }
@@ -35,7 +59,6 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
       setSheetsError(null);
 
       try {
-        // Load sessions, active classes, and checkins in parallel
         const [sessionsData, activeClassesData, checkinsData] = await Promise.all([
           loadEnhancedSessionsFromGoogleSheets(),
           loadActiveClassesFromGoogleSheets(),
@@ -45,23 +68,14 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
         if (sessionsData.length > 0) {
           setRawData(sessionsData);
           
-          // Update active classes data in store
           if (activeClassesData && Object.keys(activeClassesData).length > 0) {
             useDashboardStore.setState({ activeClassesData });
-            console.log('✅ Loaded active classes from Google Sheets:', {
-              days: Object.keys(activeClassesData),
-              totalClasses: Object.values(activeClassesData).reduce((sum, classes) => sum + classes.length, 0)
-            });
+            console.log('✅ Loaded active classes from Google Sheets');
           }
           
-          // Update checkins data in store
           if (checkinsData && checkinsData.length > 0) {
             setCheckinsData(checkinsData);
-            console.log('✅ Loaded checkins from Google Sheets:', {
-              totalCheckins: checkinsData.length,
-              uniqueMembers: new Set(checkinsData.map(c => c.MemberID)).size,
-              uniqueSessions: new Set(checkinsData.map(c => c.UniqueID1)).size
-            });
+            console.log('✅ Loaded checkins from Google Sheets');
           }
           
           setTimeout(() => {
@@ -77,7 +91,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
     };
 
     loadInitialData();
-  }, []); // Only run once on mount
+  }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -113,16 +127,15 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
   }, []);
 
   const processFiles = async (uploadedFiles: File[]) => {
-    // Initialize file statuses
     const fileStatuses: FileStatus[] = uploadedFiles.map((file) => ({
       file,
       status: 'validating',
       progress: 0,
+      id: `${URL.createObjectURL(file)}-${Date.now()}`,
     }));
     setFiles(fileStatuses);
     setIsProcessing(true);
 
-    // Validate each file
     for (let i = 0; i < fileStatuses.length; i++) {
       fileStatuses[i].progress = 20;
       setFiles([...fileStatuses]);
@@ -134,7 +147,6 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
       setFiles([...fileStatuses]);
     }
 
-    // Process valid files
     const validFiles = fileStatuses.filter((f) => f.status === 'valid').map((f) => f.file);
 
     if (validFiles.length === 0) {
@@ -142,7 +154,6 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
       return;
     }
 
-    // Update status to processing
     fileStatuses.forEach((f) => {
       if (f.status === 'valid') {
         f.status = 'processing';
@@ -152,7 +163,6 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
     setFiles([...fileStatuses]);
 
     try {
-      // Simulate progress during parsing
       const progressInterval = setInterval(() => {
         fileStatuses.forEach((f) => {
           if (f.status === 'processing' && f.progress && f.progress < 90) {
@@ -166,7 +176,6 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
       
       clearInterval(progressInterval);
 
-      // Update status to complete
       fileStatuses.forEach((f) => {
         if (f.status === 'processing') {
           f.status = 'complete';
@@ -175,10 +184,8 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
       });
       setFiles([...fileStatuses]);
 
-      // Set data in store
       setRawData(data);
 
-      // Notify completion
       setTimeout(() => {
         onUploadComplete?.();
       }, 1000);
@@ -194,152 +201,381 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const getStatusIcon = (status: FileStatus['status']) => {
-    switch (status) {
-      case 'validating':
-      case 'processing':
-        return <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />;
-      case 'valid':
-      case 'complete':
-        return <CheckCircle className="w-5 h-5 text-green-500" />;
-      case 'invalid':
-        return <AlertCircle className="w-5 h-5 text-red-500" />;
-      default:
-        return <FileText className="w-5 h-5 text-gray-400" />;
+  const triggerFileInput = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
     }
   };
 
+  const formatFileSize = (bytes: number): string => {
+    if (!bytes) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
+  };
+
   return (
-    <div className="glass-card rounded-3xl p-8">
-      <h2 className="text-2xl font-bold mb-6 text-gray-800">Upload Session Data</h2>
-
-      {/* Loading from Google Sheets indicator */}
-      {isLoadingFromSheets && (
-        <div className="mb-6 p-4 rounded-xl bg-blue-50 border border-blue-200">
-          <div className="flex items-center gap-3">
-            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-            <div className="flex items-center gap-2">
-              <Cloud className="w-5 h-5 text-blue-600" />
-              <p className="text-sm font-medium text-blue-800">
-                Loading data from Google Sheets...
-              </p>
-            </div>
-          </div>
-        </div>
+    <div className="fixed inset-0 bg-gray-950 overflow-auto z-50">
+      {/* Close button - only show if there's existing data */}
+      {hasExistingData && onUploadComplete && (
+        <motion.button
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.5 }}
+          onClick={onUploadComplete}
+          className="fixed top-6 right-6 z-50 p-3 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-white hover:bg-white/20 transition-all duration-300 shadow-lg hover:shadow-xl group"
+        >
+          <X className="w-6 h-6 group-hover:rotate-90 transition-transform duration-300" />
+        </motion.button>
       )}
-
-      {/* Sheets error display */}
-      {sheetsError && (
-        <div className="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-200">
-          <div className="flex items-start gap-3">
-            <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-amber-800">
-                Could not load data from Google Sheets
-              </p>
-              <p className="text-xs text-amber-700 mt-1">{sheetsError}</p>
-              <p className="text-xs text-amber-600 mt-2">
-                You can still upload CSV files manually below.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Drop zone */}
-      <div
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        className={`
-          relative border-3 border-dashed rounded-2xl p-12 transition-all duration-300
-          ${isDragging 
-            ? 'border-blue-500 bg-blue-50 scale-[1.02]' 
-            : 'border-gray-300 bg-white hover:border-blue-400 hover:bg-blue-50/50'
-          }
-          ${isLoadingFromSheets ? 'opacity-50 pointer-events-none' : ''}
-        `}
+      
+      <motion.section
+        style={{
+          backgroundImage,
+        }}
+        className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden px-4 py-12 text-gray-200"
       >
-        <input
-          type="file"
-          multiple
-          accept=".csv"
-          onChange={handleFileSelect}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-          disabled={isProcessing}
+        <Particles
+          className="absolute inset-0"
+          quantity={200}
+          ease={80}
+          color="#ffffff"
+          refresh
         />
 
-        <div className="flex flex-col items-center justify-center space-y-4">
-          <div className="p-6 rounded-full bg-gradient-to-br from-blue-100 to-blue-200">
-            <Upload className="w-12 h-12 text-blue-600" />
-          </div>
-
-          <div className="text-center">
-            <p className="text-xl font-semibold text-gray-700 mb-2">
-              Drop CSV files here or click to browse
-            </p>
-            <p className="text-sm text-gray-500">
-              Files must contain "Session" in the name and be in CSV format
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* File list */}
-      {files.length > 0 && (
-        <div className="mt-6 space-y-3">
-          <h3 className="text-lg font-semibold text-gray-700">Files</h3>
-          {files.map((fileStatus, index) => (
+        {/* Simple CSS Star Field Alternative */}
+        <div className="absolute inset-0 z-0 overflow-hidden">
+          {[...Array(150)].map((_, i) => (
             <div
-              key={index}
-              className="flex flex-col p-4 rounded-xl bg-white border border-gray-200 hover:shadow-md transition-all duration-300"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-3 flex-1 min-w-0">
-                  {getStatusIcon(fileStatus.status)}
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-gray-800 truncate">{fileStatus.file.name}</p>
-                    <p className="text-sm text-gray-500">
-                      {(fileStatus.file.size / 1024).toFixed(1)} KB
-                    </p>
-                    {fileStatus.error && (
-                      <p className="text-xs text-red-500 mt-1">{fileStatus.error}</p>
-                    )}
-                  </div>
-                </div>
-
-                {fileStatus.status !== 'processing' && fileStatus.status !== 'validating' && (
-                  <button
-                    onClick={() => removeFile(index)}
-                    className="p-2 rounded-lg hover:bg-gray-100 transition-colors touch-manipulation"
-                    aria-label="Remove file"
-                  >
-                    <X className="w-4 h-4 text-gray-500" />
-                  </button>
-                )}
-              </div>
-              
-              {/* Progress bar */}
-              {(fileStatus.status === 'validating' || fileStatus.status === 'processing') && fileStatus.progress !== undefined && (
-                <div className="mt-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-gray-600">
-                      {fileStatus.status === 'validating' ? 'Validating...' : 'Processing...'}
-                    </span>
-                    <span className="text-xs font-medium text-blue-600">{fileStatus.progress}%</span>
-                  </div>
-                  <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-300 ease-out"
-                      style={{ width: `${fileStatus.progress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
+              key={i}
+              className="absolute rounded-full bg-white"
+              style={{
+                width: Math.random() * 3 + 'px',
+                height: Math.random() * 3 + 'px',
+                top: Math.random() * 100 + '%',
+                left: Math.random() * 100 + '%',
+                opacity: Math.random() * 0.5 + 0.2,
+                animation: `twinkle ${Math.random() * 3 + 2}s infinite ${Math.random() * 2}s`,
+              }}
+            />
           ))}
         </div>
-      )}
+
+        <div className="relative z-10 flex flex-col items-center text-center w-full px-4 max-w-6xl">
+          {/* Hero Content */}
+          <motion.span
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6 }}
+            className="mb-6 inline-block rounded-full bg-gradient-to-r from-blue-600/20 to-purple-600/20 backdrop-blur-md border border-blue-400/30 px-6 py-2.5 text-sm font-medium shadow-lg shadow-blue-500/20"
+          >
+            ✨ Real-time Processing • Advanced Analytics • Interactive Dashboards
+          </motion.span>
+
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 0.2 }}
+            className="mb-8"
+          >
+            <TextShimmer
+              as="h1"
+              className="max-w-4xl bg-gradient-to-br from-white to-gray-400 bg-clip-text text-center text-3xl font-bold leading-tight text-transparent sm:text-5xl sm:leading-tight md:text-6xl md:leading-tight"
+              duration={3}
+            >
+              Attendance Analytics & Class Performance Index
+            </TextShimmer>
+          </motion.div>
+
+          <motion.p
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 0.4 }}
+            className="mb-12 max-w-3xl text-center text-lg leading-relaxed text-gray-300 md:text-xl md:leading-relaxed"
+          >
+            Transform your fitness studio data into actionable insights with our powerful analytics engine. 
+            Upload your class data and unlock comprehensive performance metrics, trainer comparisons, and growth opportunities.
+          </motion.p>
+
+          {/* Loading from Sheets Indicator */}
+          {isLoadingFromSheets && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6 p-6 rounded-2xl bg-blue-500/10 border border-blue-400/30 backdrop-blur-sm max-w-2xl w-full"
+            >
+              <div className="flex items-center gap-3 justify-center">
+                <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                <Cloud className="w-6 h-6 text-blue-400" />
+                <p className="text-base font-medium text-blue-200">
+                  Loading data from Google Sheets...
+                </p>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Sheets Error */}
+          {sheetsError && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6 p-6 rounded-2xl bg-amber-500/10 border border-amber-400/30 backdrop-blur-sm max-w-2xl w-full"
+            >
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-6 h-6 text-amber-400 flex-shrink-0" />
+                <div className="text-left">
+                  <p className="text-base font-medium text-amber-200">
+                    Could not load data from Google Sheets
+                  </p>
+                  <p className="text-sm text-amber-300/80 mt-2">{sheetsError}</p>
+                  <p className="text-sm text-amber-400 mt-2">
+                    You can still upload CSV files manually below.
+                  </p>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* File Upload Section */}
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 0.6 }}
+            className="w-full max-w-4xl"
+          >
+            <motion.div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={triggerFileInput}
+              initial={false}
+              animate={{
+                borderColor: isDragging ? '#3b82f6' : 'rgba(255,255,255,0.1)',
+                scale: isDragging ? 1.02 : 1,
+              }}
+              whileHover={{ scale: 1.01 }}
+              transition={{ duration: 0.2 }}
+              className={cn(
+                'relative rounded-3xl p-12 text-center cursor-pointer bg-white/5 border border-white/20 shadow-2xl hover:shadow-blue-500/20 backdrop-blur-xl transition-all duration-300',
+                isDragging && 'ring-4 ring-blue-400/50 border-blue-400 shadow-blue-500/40 bg-white/10',
+                isLoadingFromSheets && 'opacity-50 pointer-events-none'
+              )}
+            >
+              <div className="flex flex-col items-center gap-6">
+                <motion.div
+                  animate={{ y: isDragging ? [-5, 0, -5] : 0 }}
+                  transition={{
+                    duration: 1.5,
+                    repeat: isDragging ? Infinity : 0,
+                    ease: 'easeInOut',
+                  }}
+                  className="relative"
+                >
+                  <motion.div
+                    animate={{
+                      opacity: isDragging ? [0.5, 1, 0.5] : 1,
+                      scale: isDragging ? [0.95, 1.05, 0.95] : 1,
+                    }}
+                    transition={{
+                      duration: 2,
+                      repeat: isDragging ? Infinity : 0,
+                      ease: 'easeInOut',
+                    }}
+                    className="absolute -inset-4 bg-blue-400/10 rounded-full blur-md"
+                    style={{ display: isDragging ? 'block' : 'none' }}
+                  />
+                  <UploadCloud
+                    className={cn(
+                      'w-24 h-24 drop-shadow-2xl',
+                      isDragging
+                        ? 'text-blue-400 filter drop-shadow-[0_0_20px_rgba(59,130,246,0.8)]'
+                        : 'text-gray-300 group-hover:text-blue-400 transition-all duration-300 hover:drop-shadow-[0_0_15px_rgba(59,130,246,0.6)]',
+                    )}
+                  />
+                </motion.div>
+
+                <div className="space-y-3">
+                  <h3 className="text-2xl font-semibold text-white">
+                    {isDragging
+                      ? 'Drop CSV files here'
+                      : files.length
+                      ? 'Add more CSV files'
+                      : 'Upload your CSV files'}
+                  </h3>
+                  <p className="text-gray-300 text-lg max-w-md mx-auto">
+                    {isDragging ? (
+                      <span className="font-medium text-blue-400">
+                        Release to upload
+                      </span>
+                    ) : (
+                      <>
+                        Drag & drop CSV files here, or{' '}
+                        <span className="text-blue-400 font-medium">browse</span>
+                      </>
+                    )}
+                  </p>
+                  <p className="text-sm text-gray-400">
+                    Files must contain 
+                    <span className="font-mono bg-white/10 px-2 py-1 rounded text-blue-400 ml-1">
+                      "Session"
+                    </span>
+                    {' '}in the filename
+                  </p>
+                </div>
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".csv"
+                  multiple
+                  onChange={handleFileSelect}
+                  disabled={isProcessing}
+                />
+              </div>
+            </motion.div>
+
+            {/* File List */}
+            <div className="mt-8 max-w-4xl mx-auto">
+              <AnimatePresence>
+                {files.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex justify-between items-center mb-4 px-2"
+                  >
+                    <h3 className="font-semibold text-xl text-white">
+                      Uploaded files ({files.length})
+                    </h3>
+                    {files.length > 1 && (
+                      <button
+                        onClick={() => setFiles([])}
+                        className="text-sm font-medium px-3 py-1 bg-white/10 hover:bg-white/20 rounded-md text-gray-300 hover:text-red-400 transition-colors duration-200"
+                      >
+                        Clear all
+                      </button>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div className="flex flex-col gap-3 overflow-y-auto pr-2 max-h-96">
+                <AnimatePresence>
+                  {files.map((fileStatus, index) => (
+                    <motion.div
+                      key={fileStatus.id || index}
+                      initial={{ opacity: 0, y: 20, scale: 0.97 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -20, scale: 0.95 }}
+                      transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+                      className="px-4 py-4 flex items-start gap-4 rounded-2xl bg-white/10 backdrop-blur-lg border border-white/10 shadow-lg hover:shadow-xl hover:bg-white/15 transition-all duration-300"
+                    >
+                      <div className="relative flex-shrink-0">
+                        <FileText className="w-16 h-16 text-blue-400" />
+                        {fileStatus.status === 'complete' && (
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.5 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="absolute -right-2 -bottom-2 bg-gray-800 rounded-full shadow-sm"
+                          >
+                            <CheckCircle className="w-5 h-5 text-emerald-400" />
+                          </motion.div>
+                        )}
+                        {fileStatus.status === 'invalid' && (
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.5 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="absolute -right-2 -bottom-2 bg-gray-800 rounded-full shadow-sm"
+                          >
+                            <AlertCircle className="w-5 h-5 text-red-400" />
+                          </motion.div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-col gap-1 w-full">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <h4
+                              className="font-medium text-lg truncate text-white"
+                              title={fileStatus.file.name}
+                            >
+                              {fileStatus.file.name}
+                            </h4>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-3 text-sm text-gray-400">
+                            <span className="text-sm">
+                              {formatFileSize(fileStatus.file.size)}
+                            </span>
+                            <span className="flex items-center gap-1.5">
+                              {fileStatus.progress !== undefined && (
+                                <span className="font-medium">
+                                  {Math.round(fileStatus.progress)}%
+                                </span>
+                              )}
+                              {(fileStatus.status === 'validating' || fileStatus.status === 'processing') ? (
+                                <Loader className="w-4 h-4 animate-spin text-blue-400" />
+                              ) : fileStatus.status === 'complete' ? (
+                                <Trash2
+                                  className="w-4 h-4 cursor-pointer text-gray-400 hover:text-red-400 transition-colors duration-200"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeFile(index);
+                                  }}
+                                  aria-label="Remove file"
+                                />
+                              ) : null}
+                            </span>
+                          </div>
+
+                          {fileStatus.error && (
+                            <p className="text-xs text-red-400 mt-1">{fileStatus.error}</p>
+                          )}
+                        </div>
+
+                        {(fileStatus.status === 'validating' || fileStatus.status === 'processing') && fileStatus.progress !== undefined && (
+                          <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden mt-3">
+                            <motion.div
+                              initial={{ width: 0 }}
+                              animate={{ width: `${fileStatus.progress}%` }}
+                              transition={{
+                                duration: 0.4,
+                                type: 'spring',
+                                stiffness: 100,
+                                ease: 'easeOut',
+                              }}
+                              className={cn(
+                                'h-full rounded-full shadow-inner',
+                                fileStatus.progress < 100 ? 'bg-blue-500' : 'bg-emerald-500',
+                              )}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </motion.section>
+
+      {/* Footer Signature */}
+      <footer className="relative py-12 bg-gradient-to-t from-gray-950 via-gray-900 to-transparent w-full border-t border-white/5">
+        <div className="text-center">
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 1 }}
+            className="text-gray-400 text-xl tracking-wide" 
+            style={{ fontFamily: 'Brush Script MT, cursive' }}
+          >
+            ✨ Crafted by Jimmeey
+          </motion.p>
+        </div>
+      </footer>
     </div>
   );
 }
