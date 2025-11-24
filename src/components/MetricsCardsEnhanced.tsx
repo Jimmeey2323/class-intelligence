@@ -187,7 +187,7 @@ export default function MetricsCards() {
 
   return (
     <>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
         {cards.map((card, index) => {
           const Icon = card.icon;
           const isHovered = hoveredCard === card.id;
@@ -201,8 +201,9 @@ export default function MetricsCards() {
               onMouseEnter={() => setHoveredCard(card.id)}
               onMouseLeave={() => setHoveredCard(null)}
               onClick={() => setSelectedMetric(card.id)}
-              className="relative glass-card rounded-xl p-4 cursor-pointer overflow-hidden group hover:shadow-2xl transition-all duration-300"
-              whileHover={{ y: -4, scale: 1.02 }}
+              className="relative glass-card rounded-2xl p-5 sm:p-4 cursor-pointer overflow-hidden group hover:shadow-2xl transition-all duration-300 active:scale-95 touch-manipulation min-h-[120px] sm:min-h-[140px]"
+              whileHover={{ y: -6, scale: 1.03 }}
+              whileTap={{ scale: 0.98 }}
             >
               {/* Gradient Top Border */}
               <div className={`absolute top-0 left-0 right-0 h-2 bg-gradient-to-r ${card.gradient}`} />
@@ -212,13 +213,13 @@ export default function MetricsCards() {
 
               <div className="relative z-10">
                 <div className="flex flex-col items-center mb-3">
-                  <div className={`p-3 rounded-lg bg-gradient-to-br ${card.gradient} shadow-lg mb-3`}>
-                    <Icon className="w-5 h-5 text-white" />
+                  <div className={`p-3 sm:p-2.5 rounded-xl bg-gradient-to-br ${card.gradient} shadow-lg mb-3 transition-transform duration-300 group-hover:scale-110 group-hover:rotate-6`}>
+                    <Icon className="w-6 h-6 sm:w-5 sm:h-5 text-white" />
                   </div>
-                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide text-center mb-2">
+                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider text-center mb-2">
                     {card.title}
                   </p>
-                  <p className="text-2xl font-bold text-gray-900 text-center">{card.value}</p>
+                  <p className="text-3xl sm:text-2xl font-bold text-gray-900 text-center transition-colors duration-300 group-hover:bg-gradient-to-r group-hover:from-blue-600 group-hover:to-purple-600 group-hover:bg-clip-text group-hover:text-transparent">{card.value}</p>
                 </div>
 
                 {/* Hover Chart */}

@@ -12,6 +12,7 @@ interface FileStatus {
   file: File;
   status: 'pending' | 'validating' | 'valid' | 'invalid' | 'processing' | 'complete';
   error?: string;
+  progress?: number;
 }
 
 export default function FileUpload({ onUploadComplete }: FileUploadProps) {
@@ -105,15 +106,20 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
     const fileStatuses: FileStatus[] = uploadedFiles.map((file) => ({
       file,
       status: 'validating',
+      progress: 0,
     }));
     setFiles(fileStatuses);
     setIsProcessing(true);
 
     // Validate each file
     for (let i = 0; i < fileStatuses.length; i++) {
+      fileStatuses[i].progress = 20;
+      setFiles([...fileStatuses]);
+      
       const validation = await validateCSVStructure(fileStatuses[i].file);
       fileStatuses[i].status = validation.valid ? 'valid' : 'invalid';
       fileStatuses[i].error = validation.errors.join(', ');
+      fileStatuses[i].progress = validation.valid ? 40 : 100;
       setFiles([...fileStatuses]);
     }
 
@@ -127,16 +133,34 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
 
     // Update status to processing
     fileStatuses.forEach((f) => {
-      if (f.status === 'valid') f.status = 'processing';
+      if (f.status === 'valid') {
+        f.status = 'processing';
+        f.progress = 50;
+      }
     });
     setFiles([...fileStatuses]);
 
     try {
+      // Simulate progress during parsing
+      const progressInterval = setInterval(() => {
+        fileStatuses.forEach((f) => {
+          if (f.status === 'processing' && f.progress && f.progress < 90) {
+            f.progress += 5;
+          }
+        });
+        setFiles([...fileStatuses]);
+      }, 200);
+      
       const data = await parseMultipleCSVFiles(validFiles);
+      
+      clearInterval(progressInterval);
 
       // Update status to complete
       fileStatuses.forEach((f) => {
-        if (f.status === 'processing') f.status = 'complete';
+        if (f.status === 'processing') {
+          f.status = 'complete';
+          f.progress = 100;
+        }
       });
       setFiles([...fileStatuses]);
 
@@ -257,29 +281,49 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
           {files.map((fileStatus, index) => (
             <div
               key={index}
-              className="flex items-center justify-between p-4 rounded-xl bg-white border border-gray-200 hover:shadow-md transition-shadow"
+              className="flex flex-col p-4 rounded-xl bg-white border border-gray-200 hover:shadow-md transition-all duration-300"
             >
-              <div className="flex items-center gap-3 flex-1">
-                {getStatusIcon(fileStatus.status)}
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-gray-800 truncate">{fileStatus.file.name}</p>
-                  <p className="text-sm text-gray-500">
-                    {(fileStatus.file.size / 1024).toFixed(1)} KB
-                  </p>
-                  {fileStatus.error && (
-                    <p className="text-xs text-red-500 mt-1">{fileStatus.error}</p>
-                  )}
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  {getStatusIcon(fileStatus.status)}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-gray-800 truncate">{fileStatus.file.name}</p>
+                    <p className="text-sm text-gray-500">
+                      {(fileStatus.file.size / 1024).toFixed(1)} KB
+                    </p>
+                    {fileStatus.error && (
+                      <p className="text-xs text-red-500 mt-1">{fileStatus.error}</p>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              {fileStatus.status !== 'processing' && fileStatus.status !== 'validating' && (
-                <button
-                  onClick={() => removeFile(index)}
-                  className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
-                  aria-label="Remove file"
-                >
-                  <X className="w-4 h-4 text-gray-500" />
-                </button>
+                {fileStatus.status !== 'processing' && fileStatus.status !== 'validating' && (
+                  <button
+                    onClick={() => removeFile(index)}
+                    className="p-2 rounded-lg hover:bg-gray-100 transition-colors touch-manipulation"
+                    aria-label="Remove file"
+                  >
+                    <X className="w-4 h-4 text-gray-500" />
+                  </button>
+                )}
+              </div>
+              
+              {/* Progress bar */}
+              {(fileStatus.status === 'validating' || fileStatus.status === 'processing') && fileStatus.progress !== undefined && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium text-gray-600">
+                      {fileStatus.status === 'validating' ? 'Validating...' : 'Processing...'}
+                    </span>
+                    <span className="text-xs font-medium text-blue-600">{fileStatus.progress}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-300 ease-out"
+                      style={{ width: `${fileStatus.progress}%` }}
+                    />
+                  </div>
+                </div>
               )}
             </div>
           ))}

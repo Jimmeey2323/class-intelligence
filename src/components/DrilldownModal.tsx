@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, useEffect } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
 import { X, Calendar, MapPin, TrendingUp, Users } from 'lucide-react';
 import { SessionData } from '../types';
@@ -13,6 +13,17 @@ interface DrilldownModalProps {
 }
 
 export default function DrilldownModal({ isOpen, onClose, sessions, title }: DrilldownModalProps) {
+  // ESC key handler
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [isOpen, onClose]);
+
   if (sessions.length === 0) return null;
 
   // Calculate aggregate metrics

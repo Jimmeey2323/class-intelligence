@@ -354,6 +354,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       return;
     }
     
+    // Use search results if available, otherwise use rawData
+    const dataToFilter = filters.searchResults && filters.searchResults.length < rawData.length 
+      ? filters.searchResults 
+      : rawData;
+    
     // Hosted class pattern (same as in cleaners.ts)
     const hostedPattern = /hosted|bridal|lrs|x p57|rugby|wework|olympics|birthday|host|raheja|pop|workshop|community|physique|soundrise|outdoor|p57 x|x/i;
     
@@ -362,7 +367,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     today.setHours(0, 0, 0, 0); // Start of today
     
     // Filter data
-    let filtered = rawData.filter((row) => {
+    let filtered = dataToFilter.filter((row) => {
       const rowDate = new Date(row.Date);
       
       // CRITICAL: Always exclude future classes (dates >= today)

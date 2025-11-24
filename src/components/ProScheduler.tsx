@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, Fragment, useRef } from 'react';
+import { useState, useMemo, useEffect, Fragment, useRef, memo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { SessionData } from '../types';
 import { format, parseISO, isWithinInterval } from 'date-fns';
@@ -15,7 +15,9 @@ import {
   X,
   Calendar,
   Repeat,
-  Undo2
+  Undo2,
+  ArrowRightLeft,
+  Award
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -211,6 +213,15 @@ interface ScheduleClass {
   revenuePerCheckIn: number;
   bookingToCheckInRate: number;
   consistency: number;
+  isDiscontinued?: boolean;
+  trend?: string;
+  lastWeekTrainer?: string | null;
+  bestPerformingTrainer?: string | null;
+  totalCheckIns?: number;
+  totalCapacity?: number;
+  totalBooked?: number;
+  totalLateCancelled?: number;
+  totalWaitlisted?: number;
   topTrainers: Array<{ 
     name: string; 
     sessions: number; 
@@ -269,6 +280,8 @@ function ProScheduler() {
   const [showSimilarClasses, setShowSimilarClasses] = useState<string | null>(null);
   const [editedClasses, setEditedClasses] = useState<Map<string, ScheduleClass>>(new Map());
   const [createdClasses, setCreatedClasses] = useState<Set<string>>(new Set());
+  const [showDiscontinued, setShowDiscontinued] = useState(false);
+  const [showDiscontinuedHighPerformers, setShowDiscontinuedHighPerformers] = useState(false);
   const drilldownModalRef = useRef<HTMLDivElement>(null);
   
   // Format currency helper - with L/K/Cr formatter for large numbers
@@ -534,8 +547,8 @@ function ProScheduler() {
           const totalSingleClasses = historicalSessions.reduce((sum, s) => sum + (s.SingleClasses || 0), 0);
           const totalRevenue = historicalSessions.reduce((sum, s) => sum + (s.Revenue || 0), 0);
           
-          const avgCheckIns = sessionCount > 0 ? totalCheckIns / sessionCount : 20;
-          const avgBooked = sessionCount > 0 ? totalBooked / sessionCount : 22;
+          const avgCheckIns = sessionCount > 0 ? totalCheckIns / sessionCount : 0;
+          const avgBooked = sessionCount > 0 ? totalBooked / sessionCount : 0;
           const avgLateCancelled = sessionCount > 0 ? totalLateCancelled / sessionCount : 0;
           const avgWaitlisted = sessionCount > 0 ? totalWaitlisted / sessionCount : 0;
           const avgComplimentary = sessionCount > 0 ? totalComplimentary / sessionCount : 0;
@@ -544,12 +557,12 @@ function ProScheduler() {
           const avgIntroOffers = sessionCount > 0 ? totalIntroOffers / sessionCount : 0;
           const avgSingleClasses = sessionCount > 0 ? totalSingleClasses / sessionCount : 0;
           
-          const fillRate = sessionCount > 0 && totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 75;
+          const fillRate = sessionCount > 0 && totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
           const cancellationRate = totalBooked > 0 ? (totalLateCancelled / totalBooked) * 100 : 0;
           const waitlistRate = sessionCount > 0 && totalCapacity > 0 ? (totalWaitlisted / totalCapacity) * 100 : 0;
           const complimentaryRate = totalCheckIns > 0 ? (totalComplimentary / totalCheckIns) * 100 : 0;
-          const bookingToCheckInRate = totalBooked > 0 ? (totalCheckIns / totalBooked) * 100 : 90;
-          const revenuePerCheckIn = totalCheckIns > 0 ? totalRevenue / totalCheckIns : 2500;
+          const bookingToCheckInRate = totalBooked > 0 ? (totalCheckIns / totalBooked) * 100 : 0;
+          const revenuePerCheckIn = totalCheckIns > 0 ? totalRevenue / totalCheckIns : 0;
           
           // Calculate consistency score (standard deviation of fill rates)
           const fillRates = historicalSessions.map(s => s.Capacity > 0 ? (s.CheckedIn / s.Capacity) * 100 : 0);
@@ -656,8 +669,8 @@ function ProScheduler() {
             class: activeClass.className || 'Unknown Class',
             trainer: activeClass.trainer || 'TBD',
             location: activeClass.location || 'Unknown Location',
-            capacity: sessionCount > 0 ? Math.round(totalCapacity / sessionCount) || 25 : 25,
-            avgCheckIns: Math.round(avgCheckIns * 10) / 10,
+            capacity: sessionCount > 0 ? Math.round(totalCapacity / sessionCount) || 0 : 0,
+            avgCheckIns: sessionCount > 0 ? Math.round(avgCheckIns * 10) / 10 : 0,
             fillRate: Math.round(fillRate),
             sessionCount: sessionCount,
             revenue: Math.round(revenue),
@@ -680,7 +693,36 @@ function ProScheduler() {
             revenuePerCheckIn: Math.round(revenuePerCheckIn),
             bookingToCheckInRate: Math.round(bookingToCheckInRate * 10) / 10,
             consistency: Math.round(consistency * 10) / 10,
-            topTrainers
+            topTrainers,
+            // Trainer change indicators
+            lastWeekTrainer: (() => {
+              // Get last week's trainer for this slot
+              const lastWeekStart = new Date(today);
+              lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+              const lastWeekEnd = new Date(today);
+              lastWeekEnd.setDate(lastWeekEnd.getDate() - 1);
+              
+              const lastWeekSessions = rawData.filter((s: SessionData) => {
+                const sessionDate = parseISO(s.Date);
+                if (sessionDate < lastWeekStart || sessionDate > lastWeekEnd) return false;
+                return s.Day === day && 
+                       s.Time?.substring(0, 5) === normalizedTime && 
+                       s.Class?.toLowerCase() === activeClass.className?.toLowerCase() &&
+                       s.Location?.toLowerCase() === activeClass.location?.toLowerCase();
+              });
+              
+              if (lastWeekSessions.length === 0) return null;
+              
+              // Return most common trainer from last week
+              const trainerCounts = new Map<string, number>();
+              lastWeekSessions.forEach(s => {
+                if (s.Trainer) {
+                  trainerCounts.set(s.Trainer, (trainerCounts.get(s.Trainer) || 0) + 1);
+                }
+              });
+              return Array.from(trainerCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+            })(),
+            bestPerformingTrainer: topTrainers.length > 0 ? topTrainers[0].name : null
           });
         });
       });
@@ -871,6 +913,113 @@ function ProScheduler() {
     return classes;
   }, [activeClassesData, rawData, filters.dateFrom, filters.dateTo, filters.activeOnly, editedClasses, createdClasses]);
 
+  // Calculate discontinued classes (classes from last week not in active list)
+  const discontinuedClasses = useMemo(() => {
+    const classes: ScheduleClass[] = [];
+    
+    // Get date range for last week
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const lastWeekStart = new Date(today);
+    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+    const lastWeekEnd = new Date(today);
+    lastWeekEnd.setDate(lastWeekEnd.getDate() - 1);
+    
+    // Get unique class combinations from last week's data
+    const lastWeekSessions = rawData.filter((s: SessionData) => {
+      const sessionDate = parseISO(s.Date);
+      return sessionDate >= lastWeekStart && sessionDate <= lastWeekEnd;
+    });
+    
+    // Group by day + time + class + location
+    const lastWeekClassMap = new Map<string, SessionData[]>();
+    lastWeekSessions.forEach((s: SessionData) => {
+      const key = `${s.Day}_${s.Time?.substring(0, 5)}_${s.Class}_${s.Location}`.toLowerCase();
+      const existing = lastWeekClassMap.get(key) || [];
+      existing.push(s);
+      lastWeekClassMap.set(key, existing);
+    });
+    
+    // Check each last week class against active classes
+    lastWeekClassMap.forEach((sessions, key) => {
+      const [day, time, className, location] = key.split('_');
+      
+      // Check if this class exists in active classes
+      const isActive = scheduleClasses.some(cls => 
+        cls.day.toLowerCase() === day &&
+        cls.time === time &&
+        cls.class.toLowerCase() === className &&
+        cls.location.toLowerCase() === location
+      );
+      
+      if (!isActive && sessions.length > 0) {
+        // Calculate metrics for discontinued class
+        const totalCheckIns = sessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0);
+        const totalCapacity = sessions.reduce((sum, s) => sum + (s.Capacity || 0), 0);
+        const totalBooked = sessions.reduce((sum, s) => sum + (s.Booked || 0), 0);
+        const totalLateCancelled = sessions.reduce((sum, s) => sum + (s.LateCancelled || 0), 0);
+        const totalRevenue = sessions.reduce((sum, s) => sum + (s.Revenue || 0), 0);
+        const totalWaitlisted = sessions.reduce((sum, s) => sum + (s.Waitlisted || 0), 0);
+        
+        const avgCheckIns = sessions.length > 0 ? totalCheckIns / sessions.length : 0;
+        const fillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
+        const cancellationRate = totalBooked > 0 ? (totalLateCancelled / totalBooked) * 100 : 0;
+        const revenuePerCheckIn = totalCheckIns > 0 ? totalRevenue / totalCheckIns : 0;
+        
+        // Get most frequent trainer
+        const trainerCounts = new Map<string, number>();
+        sessions.forEach(s => {
+          const count = trainerCounts.get(s.Trainer) || 0;
+          trainerCounts.set(s.Trainer, count + 1);
+        });
+        const mostFrequentTrainer = Array.from(trainerCounts.entries())
+          .sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown';
+        
+        classes.push({
+          id: `discontinued_${key}`,
+          day: day.charAt(0).toUpperCase() + day.slice(1),
+          time: time,
+          class: sessions[0].Class,
+          trainer: mostFrequentTrainer,
+          location: sessions[0].Location,
+          capacity: Math.round(totalCapacity / sessions.length),
+          avgCheckIns: Math.round(avgCheckIns * 10) / 10,
+          fillRate: Math.round(fillRate * 10) / 10,
+          revenue: Math.round(totalRevenue / sessions.length),
+          sessionCount: sessions.length,
+          totalCheckIns,
+          totalCapacity,
+          totalBooked,
+          totalLateCancelled,
+          totalWaitlisted,
+          totalRevenue,
+          avgBooked: totalBooked / sessions.length,
+          avgLateCancelled: totalLateCancelled / sessions.length,
+          avgWaitlisted: totalWaitlisted / sessions.length,
+          cancellationRate: Math.round(cancellationRate * 10) / 10,
+          waitlistRate: totalCapacity > 0 ? Math.round((totalWaitlisted / totalCapacity) * 1000) / 10 : 0,
+          revenuePerCheckIn: Math.round(revenuePerCheckIn),
+          status: 'Discontinued',
+          avgComplimentary: 0,
+          complimentaryRate: 0,
+          avgMemberships: 0,
+          avgPackages: 0,
+          avgIntroOffers: 0,
+          avgSingleClasses: 0,
+          bookingToCheckInRate: totalBooked > 0 ? (totalCheckIns / totalBooked) * 100 : 0,
+          conflicts: [`❌ Discontinued - Last seen in week of ${format(lastWeekEnd, 'MMM dd')}`],
+          recommendations: [],
+          topTrainers: [],
+          consistency: 0,
+          trend: 'neutral',
+          isDiscontinued: true
+        });
+      }
+    });
+    
+    return classes;
+  }, [rawData, scheduleClasses]);
+
   // Revenue formatter utility (K/L/Cr with 1 decimal)
   const formatRevenue = (amount: number): string => {
     if (amount >= 10000000) return `₹${(amount / 10000000).toFixed(1)}Cr`;
@@ -941,7 +1090,12 @@ function ProScheduler() {
 
   // Apply Pro Scheduler filters independently (do not use global filters)
   const filteredClasses = useMemo(() => {
-    return scheduleClasses.filter(cls => {
+    // Combine regular and discontinued classes based on showDiscontinued state
+    const classesToFilter = showDiscontinued 
+      ? [...scheduleClasses, ...discontinuedClasses]
+      : scheduleClasses;
+    
+    return classesToFilter.filter(cls => {
       // Location filter
       if (filters.locations.length > 0 && !filters.locations.includes(cls.location)) return false;
       // Trainer filter
@@ -949,10 +1103,10 @@ function ProScheduler() {
       // Class filter
       if (filters.classes.length > 0 && !filters.classes.includes(cls.class)) return false;
       // Active only filter
-      if (filters.activeOnly && cls.status !== 'Active') return false;
+      if (filters.activeOnly && cls.status !== 'Active' && !cls.isDiscontinued) return false;
       return true;
     });
-  }, [scheduleClasses, filters]);
+  }, [scheduleClasses, discontinuedClasses, showDiscontinued, filters]);
 
   // Get unique values for dropdowns
   const uniqueTrainers = useMemo(() => {
@@ -1103,11 +1257,11 @@ function ProScheduler() {
 
     const cardColor = getFormatColor();
     
-    const hasConflicts = cls.conflicts.length > 0;
     const isHighPerformance = cls.fillRate > 85;
     const isHovered = hoveredClassId === cls.id;
     const isEdited = editedClasses.has(cls.id);
     const isNewlyCreated = createdClasses.has(cls.id);
+    const isDiscontinued = cls.isDiscontinued || false;
 
     return (
       <motion.div
@@ -1118,11 +1272,11 @@ function ProScheduler() {
         onClick={() => handleClassClick(cls)}
         onMouseEnter={() => setHoveredClassId(cls.id)}
         onMouseLeave={() => setHoveredClassId(null)}
-        className={`bg-gradient-to-br ${cardColor} backdrop-blur-sm border rounded-xl shadow-sm hover:shadow-lg cursor-pointer transition-all duration-300 overflow-hidden group relative`}
+        className={`bg-gradient-to-br ${isDiscontinued ? 'from-gray-200 to-gray-300 border-gray-400 opacity-70' : cardColor} backdrop-blur-sm border rounded-xl shadow-sm hover:shadow-lg cursor-pointer transition-all duration-300 overflow-hidden group relative ${isDiscontinued ? 'grayscale' : ''}`}
       >
         {/* Status Indicators - Top Right */}
         <div className="absolute top-1.5 right-1.5 flex gap-1 z-10">
-          {isEdited && (
+          {isEdited && !isDiscontinued && (
             <>
               <button
                 onClick={(e) => {
@@ -1156,12 +1310,13 @@ function ProScheduler() {
               {cls.class}
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {hasConflicts && (
-                <div className="bg-red-500 text-white rounded-full p-0.5" title="Conflicts">
-                  <AlertTriangle className="w-2.5 h-2.5" />
+              {isDiscontinued && (
+                <div className="flex items-center gap-1 bg-gray-500 text-white rounded-md px-2 py-1" title="Discontinued Class">
+                  <AlertTriangle className="w-3 h-3" />
+                  <span className="text-[10px] font-bold">Discontinued</span>
                 </div>
               )}
-              {isHighPerformance && (
+              {!isDiscontinued && isHighPerformance && (
                 <div className="bg-emerald-500 text-white rounded-full p-0.5" title="High performance">
                   <Star className="w-2.5 h-2.5" />
                 </div>
@@ -1169,7 +1324,7 @@ function ProScheduler() {
             </div>
           </div>
 
-          {/* Trainer Name */}
+          {/* Trainer Name with Change Indicators */}
           <div className="flex items-center gap-2 text-[10px] text-slate-600 mb-2">
             {findTrainerImage(cls.trainer) ? (
               // eslint-disable-next-line jsx-a11y/img-redundant-alt
@@ -1177,7 +1332,25 @@ function ProScheduler() {
             ) : (
               <Users className="w-2.5 h-2.5" />
             )}
-            <span className="truncate">{cls.trainer}</span>
+            <span className="truncate flex-1">{cls.trainer}</span>
+            
+            {/* Trainer Change Indicators */}
+            {!isDiscontinued && cls.lastWeekTrainer && cls.lastWeekTrainer !== cls.trainer && (
+              <div 
+                className="bg-amber-500 text-white rounded-full p-0.5 flex-shrink-0" 
+                title={`Trainer changed from ${cls.lastWeekTrainer}`}
+              >
+                <ArrowRightLeft className="w-2.5 h-2.5" />
+              </div>
+            )}
+            {!isDiscontinued && cls.bestPerformingTrainer && cls.bestPerformingTrainer !== cls.trainer && (
+              <div 
+                className="bg-purple-500 text-white rounded-full p-0.5 flex-shrink-0" 
+                title={`Best performer: ${cls.bestPerformingTrainer}`}
+              >
+                <Award className="w-2.5 h-2.5" />
+              </div>
+            )}
           </div>
 
           {/* Metrics - Compact Display */}
@@ -1185,11 +1358,12 @@ function ProScheduler() {
             {/* Fill Rate */}
             <div className="flex items-center gap-1.5 flex-1">
               <div className={`text-sm font-bold ${
+                cls.sessionCount === 0 ? 'text-gray-400' :
                 cls.fillRate >= 80 ? 'text-green-600' : 
                 cls.fillRate >= 60 ? 'text-amber-600' : 
                 'text-red-600'
               }`}>
-                {cls.fillRate}%
+                {cls.sessionCount === 0 ? '-' : `${cls.fillRate}%`}
               </div>
               <div className="flex-1 max-w-[50px]">
                 <div className="bg-slate-200 rounded-full h-1">
@@ -1203,8 +1377,10 @@ function ProScheduler() {
 
             {/* Average Attendance */}
             <div className="text-right">
-              <div className="text-sm font-bold text-emerald-600">
-                {cls.avgCheckIns}
+              <div className={`text-sm font-bold ${
+                cls.sessionCount === 0 ? 'text-gray-400' : 'text-emerald-600'
+              }`}>
+                {cls.sessionCount === 0 ? '-' : cls.avgCheckIns}
               </div>
               <div className="text-[9px] text-slate-500">
                 avg
@@ -1250,29 +1426,50 @@ function ProScheduler() {
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-medium text-gray-600">Fill Rate</span>
                     <div className="flex items-center gap-1.5">
-                      <div className="w-10 bg-gray-200 rounded-full h-1">
-                        <div 
-                          className={`bg-gradient-to-r ${fillRateColor} h-1 rounded-full transition-all duration-500`}
-                          style={{ width: `${Math.min(cls.fillRate, 100)}%` }}
-                        ></div>
-                      </div>
-                      <span className="text-[10px] font-bold text-gray-800">{cls.fillRate}%</span>
+                      {cls.sessionCount > 0 ? (
+                        <>
+                          <div className="w-10 bg-gray-200 rounded-full h-1">
+                            <div 
+                              className={`bg-gradient-to-r ${fillRateColor} h-1 rounded-full transition-all duration-500`}
+                              style={{ width: `${Math.min(cls.fillRate, 100)}%` }}
+                            ></div>
+                          </div>
+                          <span className="text-[10px] font-bold text-gray-800">{cls.fillRate}%</span>
+                        </>
+                      ) : (
+                        <span className="text-[10px] font-bold text-gray-400">-</span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="font-medium text-gray-600">Attendance</span>
-                    <span className="font-bold text-gray-800">{cls.avgCheckIns}/{cls.capacity}</span>
+                    <span className={`font-bold ${cls.sessionCount === 0 ? 'text-gray-400' : 'text-gray-800'}`}>
+                      {cls.sessionCount === 0 ? '-' : `${cls.avgCheckIns}/${cls.capacity}`}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="font-medium text-gray-600">Revenue</span>
-                    <span className="font-bold text-emerald-600">₹{(cls.revenue/100).toLocaleString('en-IN')}</span>
+                    <span className={`font-bold ${cls.sessionCount === 0 ? 'text-gray-400' : 'text-emerald-600'}`}>
+                      {cls.sessionCount === 0 ? '-' : `₹${(cls.revenue/100).toLocaleString('en-IN')}`}
+                    </span>
                   </div>
                 </div>
+
+                {/* No Data Message */}
+                {cls.sessionCount === 0 && (
+                  <div className="bg-amber-50/70 rounded-lg p-2 text-center">
+                    <div className="text-[10px] font-semibold text-amber-700">No Historical Data</div>
+                    <div className="text-[9px] text-amber-600 mt-0.5">This class hasn't been held yet</div>
+                  </div>
+                )}
 
                 {/* Client Attendance Patterns */}
                 {(() => {
                   // Calculate attendance patterns based on historical sessions for this class
                   const avgCheckIns = cls.avgCheckIns;
+                  
+                  // Don't show patterns if no historical data
+                  if (cls.sessionCount === 0) return null;
                   
                   // Estimate client patterns based on fill rate and historical data
                   const estimateClientPatterns = () => {
@@ -1411,7 +1608,7 @@ function ProScheduler() {
 
 
       {/* Advanced Control Panel */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mb-6">
         <button
           onClick={() => setViewMode('calendar')}
           className={`p-3 rounded-xl border transition-all ${viewMode === 'calendar' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-200 hover:border-blue-300'}`}
@@ -1434,6 +1631,13 @@ function ProScheduler() {
           <div className="text-xs font-medium">Trainers</div>
         </button>
         <button
+          onClick={() => setShowDiscontinuedHighPerformers(!showDiscontinuedHighPerformers)}
+          className={`p-3 rounded-xl border transition-all ${showDiscontinuedHighPerformers ? 'bg-purple-500 text-white border-purple-500' : 'bg-white border-gray-200 hover:border-purple-300'}`}
+        >
+          <TrendingUp className="w-4 h-4 mx-auto mb-1" />
+          <div className="text-xs font-medium">Top Discontinued</div>
+        </button>
+        <button
           onClick={() => setShowConflictResolver(!showConflictResolver)}
           className={`p-3 rounded-xl border transition-all ${showConflictResolver ? 'bg-red-500 text-white border-red-500' : 'bg-white border-gray-200 hover:border-red-300'}`}
         >
@@ -1446,6 +1650,16 @@ function ProScheduler() {
         >
           <Star className="w-4 h-4 mx-auto mb-1" />
           <div className="text-xs font-medium">Optimize</div>
+        </button>
+        <button
+          onClick={() => setShowDiscontinued(!showDiscontinued)}
+          className={`p-3 rounded-xl border transition-all ${showDiscontinued ? 'bg-gray-700 text-white border-gray-700' : 'bg-white border-gray-200 hover:border-gray-400'}`}
+        >
+          <X className="w-4 h-4 mx-auto mb-1" />
+          <div className="text-xs font-medium">Discontinued</div>
+          {discontinuedClasses.length > 0 && (
+            <div className="text-[9px] text-center mt-0.5">({discontinuedClasses.length})</div>
+          )}
         </button>
         <button
           onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
@@ -1671,63 +1885,384 @@ function ProScheduler() {
         </div>
       )}
 
+      {/* Discontinued High Performers Panel */}
+      {showDiscontinuedHighPerformers && (() => {
+        // Get all historical classes with good performance that are discontinued
+        const allHistoricalClasses = new Map<string, {
+          sessions: SessionData[];
+          key: string;
+          day: string;
+          time: string;
+          className: string;
+          location: string;
+        }>();
+        
+        // Group all historical sessions by class combo
+        rawData.forEach((s: SessionData) => {
+          const key = `${s.Day}_${s.Time?.substring(0, 5)}_${s.Class}_${s.Location}`.toLowerCase();
+          const existing = allHistoricalClasses.get(key) || {
+            sessions: [],
+            key,
+            day: s.Day,
+            time: s.Time?.substring(0, 5) || '',
+            className: s.Class,
+            location: s.Location
+          };
+          existing.sessions.push(s);
+          allHistoricalClasses.set(key, existing);
+        });
+        
+        // Filter for high performers that are discontinued
+        const highPerformersDiscontinued: Array<{
+          key: string;
+          day: string;
+          time: string;
+          className: string;
+          location: string;
+          avgCheckIns: number;
+          fillRate: number;
+          sessionCount: number;
+          totalRevenue: number;
+          cancellationRate: number;
+          lastDate: Date;
+          topTrainers: Array<{ trainer: string; count: number; avgFill: number; avgRevenue: number }>;          consistency: number;
+          avgCapacity: number;
+        }> = [];
+        
+        allHistoricalClasses.forEach(({ sessions, key, day, time, className, location }) => {
+          // Check if discontinued
+          const isActive = scheduleClasses.some(cls => 
+            cls.day.toLowerCase() === day.toLowerCase() &&
+            cls.time === time &&
+            cls.class.toLowerCase() === className.toLowerCase() &&
+            cls.location.toLowerCase() === location.toLowerCase()
+          );
+          
+          if (!isActive && sessions.length >= 5) { // At least 5 sessions for reliability
+            const totalCheckIns = sessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0);
+            const totalCapacity = sessions.reduce((sum, s) => sum + (s.Capacity || 0), 0);
+            const totalRevenue = sessions.reduce((sum, s) => sum + (s.Revenue || 0), 0);
+            const totalBooked = sessions.reduce((sum, s) => sum + (s.Booked || 0), 0);
+            const totalLateCancelled = sessions.reduce((sum, s) => sum + (s.LateCancelled || 0), 0);
+            
+            const avgCheckIns = totalCheckIns / sessions.length;
+            const fillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
+            const cancellationRate = totalBooked > 0 ? (totalLateCancelled / totalBooked) * 100 : 0;
+            
+            // Calculate consistency (lower std deviation = more consistent)
+            const checkInVariance = sessions.reduce((sum, s) => {
+              const diff = (s.CheckedIn || 0) - avgCheckIns;
+              return sum + diff * diff;
+            }, 0) / sessions.length;
+            const consistency = 100 - Math.min(Math.sqrt(checkInVariance) / avgCheckIns * 100, 100);
+            
+            // Get trainer stats
+            const trainerMap = new Map<string, { count: number; checkIns: number; revenue: number; capacity: number }>();
+            sessions.forEach(s => {
+              const existing = trainerMap.get(s.Trainer) || { count: 0, checkIns: 0, revenue: 0, capacity: 0 };
+              existing.count++;
+              existing.checkIns += s.CheckedIn || 0;
+              existing.revenue += s.Revenue || 0;
+              existing.capacity += s.Capacity || 0;
+              trainerMap.set(s.Trainer, existing);
+            });
+            
+            const topTrainers = Array.from(trainerMap.entries())
+              .map(([trainer, data]) => ({
+                trainer,
+                count: data.count,
+                avgFill: data.capacity > 0 ? (data.checkIns / data.capacity) * 100 : 0,
+                avgRevenue: data.revenue / data.count
+              }))
+              .sort((a, b) => b.avgFill - a.avgFill)
+              .slice(0, 3);
+            
+            // Get last date
+            const lastDate = sessions.reduce((latest, s) => {
+              const date = parseISO(s.Date);
+              return date > latest ? date : latest;
+            }, parseISO(sessions[0].Date));
+            
+            // Only include if good performance (avgCheckIns >= 15 OR fillRate >= 70%)
+            if (avgCheckIns >= 15 || fillRate >= 70) {
+              highPerformersDiscontinued.push({
+                key,
+                day,
+                time,
+                className,
+                location,
+                avgCheckIns,
+                fillRate,
+                sessionCount: sessions.length,
+                totalRevenue,
+                cancellationRate,
+                lastDate,
+                topTrainers,
+                consistency: Math.round(consistency),
+                avgCapacity: totalCapacity / sessions.length
+              });
+            }
+          }
+        });
+        
+        // Sort by avgCheckIns descending
+        highPerformersDiscontinued.sort((a, b) => b.avgCheckIns - a.avgCheckIns);
+        
+        return (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-lg mb-6">
+            <div className="bg-gradient-to-r from-purple-50 to-purple-100 px-6 py-4 border-b border-purple-200 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="bg-purple-600 p-2 rounded-lg">
+                  <TrendingUp className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">High-Performing Discontinued Classes</h2>
+                  <p className="text-slate-600 text-xs">Historical data for classes that performed well but are no longer scheduled</p>
+                </div>
+              </div>
+              <div className="bg-purple-600 text-white px-4 py-2 rounded-lg">
+                <div className="text-xl font-bold">{highPerformersDiscontinued.length}</div>
+                <div className="text-[10px] uppercase tracking-wide opacity-80">Classes Found</div>
+              </div>
+            </div>
+            
+            <div className="p-6">
+              {highPerformersDiscontinued.length === 0 ? (
+                <div className="text-center py-12">
+                  <TrendingUp className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+                  <p className="text-lg font-semibold text-slate-600 mb-2">No High-Performing Discontinued Classes</p>
+                  <p className="text-slate-500 text-sm">All well-performing classes are still active</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {highPerformersDiscontinued.map((cls) => (
+                    <div key={cls.key} className="bg-gradient-to-br from-slate-50 to-white rounded-xl p-5 border border-slate-200 shadow-sm hover:shadow-md transition-all">
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h3 className="text-base font-bold text-slate-900">{cls.className}</h3>
+                            <span className="bg-purple-100 text-purple-700 text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wide">Discontinued</span>
+                            {cls.fillRate >= 80 && (
+                              <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-1 rounded">Top Performer</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-4 text-xs text-slate-600">
+                            <span className="flex items-center gap-1">
+                              <Calendar className="w-3 h-3" />
+                              {cls.day} at {cls.time}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <MapPin className="w-3 h-3" />
+                              {cls.location}
+                            </span>
+                            <span className="text-slate-500">
+                              Last scheduled: <span className="font-semibold text-slate-700">{format(cls.lastDate, 'MMM dd, yyyy')}</span>
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Key Metrics */}
+                      <div className="grid grid-cols-6 gap-3 mb-4">
+                        <div className="bg-white rounded-lg p-3 border border-slate-200">
+                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Avg Attendance</div>
+                          <div className="text-xl font-bold text-slate-900">{cls.avgCheckIns.toFixed(1)}</div>
+                          <div className="text-[9px] text-slate-500 mt-0.5">per class</div>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 border border-slate-200">
+                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Fill Rate</div>
+                          <div className={`text-xl font-bold ${cls.fillRate >= 80 ? 'text-emerald-600' : cls.fillRate >= 60 ? 'text-amber-600' : 'text-slate-900'}`}>
+                            {cls.fillRate.toFixed(1)}%
+                          </div>
+                          <div className="text-[9px] text-slate-500 mt-0.5">capacity</div>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 border border-slate-200">
+                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Sessions</div>
+                          <div className="text-xl font-bold text-slate-900">{cls.sessionCount}</div>
+                          <div className="text-[9px] text-slate-500 mt-0.5">total</div>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 border border-slate-200">
+                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Revenue</div>
+                          <div className="text-base font-bold text-slate-900">{formatCurrency(cls.totalRevenue)}</div>
+                          <div className="text-[9px] text-slate-500 mt-0.5">total</div>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 border border-slate-200">
+                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Consistency</div>
+                          <div className="text-xl font-bold text-slate-900">{cls.consistency}%</div>
+                          <div className="text-[9px] text-slate-500 mt-0.5">reliable</div>
+                        </div>
+                        <div className="bg-white rounded-lg p-3 border border-slate-200">
+                          <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Cancel Rate</div>
+                          <div className="text-xl font-bold text-slate-900">{cls.cancellationRate.toFixed(1)}%</div>
+                          <div className="text-[9px] text-slate-500 mt-0.5">cancelled</div>
+                        </div>
+                      </div>
+                      
+                      {/* Top Trainers */}
+                      <div className="border-t border-slate-200 pt-4">
+                        <div className="text-xs font-semibold text-slate-600 mb-3 uppercase tracking-wide flex items-center gap-2">
+                          <Users className="w-4 h-4 text-slate-500" />
+                          Top Trainers for This Class
+                        </div>
+                        <div className="grid grid-cols-3 gap-3">
+                          {cls.topTrainers.map((trainer, idx) => (
+                            <div key={trainer.trainer} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                              <div className="flex items-center gap-2 mb-2">
+                                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold ${
+                                  idx === 0 ? 'bg-amber-500' : idx === 1 ? 'bg-slate-400' : 'bg-amber-700'
+                                }`}>
+                                  {idx + 1}
+                                </div>
+                                <span className="text-xs font-semibold text-slate-900 truncate">{trainer.trainer}</span>
+                              </div>
+                              <div className="space-y-1 text-[10px] text-slate-600">
+                                <div className="flex justify-between">
+                                  <span>Fill Rate:</span>
+                                  <span className="font-semibold text-slate-900">{trainer.avgFill.toFixed(1)}%</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Sessions:</span>
+                                  <span className="font-semibold text-slate-900">{trainer.count}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Avg Revenue:</span>
+                                  <span className="font-semibold text-slate-900">{formatCurrency(trainer.avgRevenue)}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Trainer Analytics Panel */}
       {showTrainerAnalytics && (
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm mb-6">
-          <div className="bg-gradient-to-r from-green-50 to-emerald-50 px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Trainer Analytics</h2>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-lg mb-6">
+          <div className="bg-gradient-to-r from-slate-50 to-slate-100 px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-slate-700 p-2 rounded-lg">
+                <Users className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Trainer Analytics</h2>
+                <p className="text-slate-600 text-xs">Performance metrics and schedule breakdown</p>
+              </div>
+            </div>
+            <div className="bg-slate-700 text-white px-4 py-2 rounded-lg">
+              <div className="text-xl font-bold">{Object.keys(trainerAnalytics).length}</div>
+              <div className="text-[10px] uppercase tracking-wide opacity-80">Trainers</div>
+            </div>
           </div>
-          <div className="p-6">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="p-8">
+            <div className="space-y-8">
               {Object.entries(trainerAnalytics).map(([trainerName, analytics]) => {
                 const workloadColors = {
-                  Light: 'bg-green-100 text-green-800',
-                  Medium: 'bg-yellow-100 text-yellow-800',
-                  Heavy: 'bg-orange-100 text-orange-800',
-                  Overloaded: 'bg-red-100 text-red-800'
+                  Light: 'bg-slate-100 text-slate-700',
+                  Medium: 'bg-slate-200 text-slate-800',
+                  Heavy: 'bg-slate-300 text-slate-900',
+                  Overloaded: 'bg-slate-400 text-white'
                 };
+                
+                // Calculate location/day breakdown (exclude discontinued classes)
+                const trainerClasses = filteredClasses.filter(c => c.trainer === trainerName && !c.isDiscontinued);
+                const locationDayMap = new Map<string, Map<string, number>>();
+                
+                trainerClasses.forEach(cls => {
+                  if (!locationDayMap.has(cls.location)) {
+                    locationDayMap.set(cls.location, new Map());
+                  }
+                  const dayMap = locationDayMap.get(cls.location)!;
+                  dayMap.set(cls.day, (dayMap.get(cls.day) || 0) + 1);
+                });
+                
                 return (
-                  <div key={trainerName} className="bg-gray-50 rounded-xl p-4 border">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          {(() => {
-                            const img = findTrainerImage(trainerName);
-                            const pct = Math.min((analytics.totalHours / 15) * 100, 100);
-                            const color = getWorkloadColor(analytics.totalHours);
-                            return (
-                              <div className="flex items-center gap-3">
-                                <div className="self-start -mt-1">
-                                  <CircularAvatar percent={pct} color={color} size={48} stroke={4} imgSrc={img} initials={trainerName.split(' ').map(n=>n[0]).join('').substring(0,2).toUpperCase()} />
-                                </div>
-                                <div className="font-semibold text-gray-900">{trainerName}</div>
+                  <div key={trainerName} className="bg-gradient-to-br from-white via-gray-50/50 to-blue-50/30 rounded-2xl p-6 border-2 border-gray-200 shadow-lg hover:shadow-2xl hover:border-green-300 transition-all duration-300 transform hover:-translate-y-1">
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-5 pb-5 border-b-2 border-gray-200">
+                      <div className="flex items-center gap-3">
+                        {(() => {
+                          const img = findTrainerImage(trainerName);
+                          const pct = Math.min((analytics.totalHours / 15) * 100, 100);
+                          const color = getWorkloadColor(analytics.totalHours);
+                          return (
+                            <div className="flex items-center gap-3">
+                              <div className="self-start">
+                                <CircularAvatar percent={pct} color={color} size={56} stroke={4} imgSrc={img} initials={trainerName.split(' ').map(n=>n[0]).join('').substring(0,2).toUpperCase()} />
                               </div>
-                            );
-                          })()}
-                        </div>
-                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${workloadColors[analytics.workload]}`}>
-                          {analytics.workload}
-                        </span>
+                              <div>
+                                <div className="font-bold text-gray-900 text-lg">{trainerName}</div>
+                                <div className="text-xs text-gray-500">{analytics.totalClasses} classes • {analytics.totalHours}h/week</div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Classes:</span>
-                        <span className="font-medium">{analytics.totalClasses}</span>
+                      <span className={`px-3 py-1.5 text-sm font-bold rounded-full ${workloadColors[analytics.workload]}`}>
+                        {analytics.workload}
+                      </span>
+                    </div>
+                    
+                    {/* Quick Stats */}
+                    <div className="grid grid-cols-4 gap-3 mb-4">
+                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                        <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Avg Fill</div>
+                        <div className="text-xl font-bold text-slate-900">{Math.round(analytics.avgFillRate)}%</div>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Hours/Week:</span>
-                        <span className="font-medium">{analytics.totalHours}</span>
+                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                        <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Revenue</div>
+                        <div className="text-base font-bold text-slate-900">₹{Math.round(analytics.totalRevenue/100).toLocaleString()}</div>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Avg Fill:</span>
-                        <span className="font-medium">{Math.round(analytics.avgFillRate)}%</span>
+                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                        <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Locations</div>
+                        <div className="text-xl font-bold text-slate-900">{analytics.locations.length}</div>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Revenue:</span>
-                        <span className="font-medium text-green-600">₹{Math.round(analytics.totalRevenue/100).toLocaleString()}</span>
+                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                        <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Formats</div>
+                        <div className="text-xl font-bold text-slate-900">{analytics.classTypes.length}</div>
                       </div>
-                      <div className="pt-2 border-t">
-                        <div className="text-xs text-gray-500 mb-1">Locations: {analytics.locations.length}</div>
-                        <div className="text-xs text-gray-500">Class Types: {analytics.classTypes.length}</div>
+                    </div>
+                    
+                    {/* Location/Day Breakdown */}
+                    <div className="mt-4">
+                      <div className="text-xs font-semibold text-slate-600 mb-3 flex items-center gap-2 px-1 uppercase tracking-wide">
+                        <MapPin className="w-4 h-4 text-slate-500" />
+                        Weekly Schedule
+                      </div>
+                      <div className="space-y-4">
+                        {Array.from(locationDayMap.entries()).map(([location, dayMap]) => (
+                          <div key={location} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                            <div className="font-medium text-xs text-slate-700 mb-2">
+                              {location}
+                            </div>
+                            <div className="grid grid-cols-7 gap-1.5">
+                              {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(fullDay => {
+                                const count = dayMap.get(fullDay) || 0;
+                                const shortDay = fullDay.substring(0, 1);
+                                return (
+                                  <div
+                                    key={fullDay}
+                                    className={`text-center rounded py-1.5 text-[11px] font-semibold transition-colors ${
+                                      count > 0
+                                        ? 'bg-slate-700 text-white'
+                                        : 'bg-slate-200 text-slate-400'
+                                    }`}
+                                    title={`${fullDay}: ${count} class${count !== 1 ? 'es' : ''}`}
+                                  >
+                                    <div>{shortDay}</div>
+                                    {count > 0 && <div className="text-[9px] mt-0.5 opacity-90">{count}</div>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   </div>
@@ -1750,7 +2285,7 @@ function ProScheduler() {
               <span className="text-xs text-slate-500 font-medium">
                 {(() => {
                   const trainerHours = new Map<string, { classes: number; hours: number }>();
-                  filteredClasses.forEach(cls => {
+                  filteredClasses.filter(cls => !cls.isDiscontinued).forEach(cls => {
                     if (!trainerHours.has(cls.trainer)) {
                       trainerHours.set(cls.trainer, { classes: 0, hours: 0 });
                     }
@@ -1767,7 +2302,7 @@ function ProScheduler() {
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3">
               {(() => {
                 const trainerHours = new Map<string, { classes: number; hours: number }>();
-                filteredClasses.forEach(cls => {
+                filteredClasses.filter(cls => !cls.isDiscontinued).forEach(cls => {
                   if (!trainerHours.has(cls.trainer)) {
                     trainerHours.set(cls.trainer, { classes: 0, hours: 0 });
                   }
@@ -1844,6 +2379,7 @@ function ProScheduler() {
       </div>
 
       {/* Calendar Grid with View Mode Selector */}
+      {viewMode === 'calendar' && !showTrainerAnalytics && (
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="bg-gradient-to-r from-gray-50 to-blue-50 px-6 py-4 border-b border-gray-200">
           <div className="flex items-center justify-between">
@@ -2018,19 +2554,17 @@ function ProScheduler() {
                 </h3>
               </div>
 
-              {/* Sticky Header Row - Days with Location Sub-columns */}
-              <div className="sticky top-0 z-20 bg-gradient-to-r from-gray-100 to-gray-200 shadow-sm border-b-2 border-gray-300">
-                <div className="flex">
+              {/* Scrollable Container for Both Header and Body */}
+              <div className="overflow-x-auto">
+                {/* Sticky Header Row - Days with Location Sub-columns */}
+                <div className="sticky top-0 z-20 bg-gradient-to-r from-gray-100 to-gray-200 shadow-sm border-b-2 border-gray-300">
+                  <div className="flex min-w-max">
                   <div className="flex-shrink-0 w-24 border-r-2 border-gray-300 p-3 flex items-center justify-center bg-gray-100">
                     <span className="text-sm font-bold text-gray-700">Time</span>
                   </div>
                   {DAYS_OF_WEEK.map((day) => {
                     const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
-                    const activeLocations = uniqueLocations.filter(location => 
-                      dayClasses.some(cls => cls.location === location)
-                    );
-                    
-                    if (activeLocations.length === 0) return null;
+                    const activeLocations = uniqueLocations.length > 0 ? uniqueLocations : ['Default'];
                     
                     return (
                       <div key={day.key} className="flex-1 min-w-[280px] border-r-2 border-gray-300 last:border-r-0">
@@ -2061,10 +2595,10 @@ function ProScheduler() {
                     );
                   })}
                 </div>
-              </div>
+                </div>
 
-              {/* Scrollable Time Slots Container */}
-              <div className="overflow-auto max-h-[70vh] bg-white">
+                {/* Scrollable Time Slots Container */}
+                <div className="overflow-y-auto max-h-[70vh] bg-white">
                 {TIME_SLOTS.map((slot) => {
                   const slotHour = parseInt(slot.time24.split(':')[0]);
                   const isNonFunctional = slotHour < 7 || slotHour > 20;
@@ -2074,7 +2608,7 @@ function ProScheduler() {
                   const hasClassesAtThisTime = slotClasses.length > 0;
 
                   return (
-                    <div key={slot.time24} className={`flex border-b border-gray-100 ${hasClassesAtThisTime ? 'bg-white' : 'bg-gray-25'}`}>
+                    <div key={slot.time24} className={`flex min-w-max border-b border-gray-100 ${hasClassesAtThisTime ? 'bg-white' : 'bg-gray-25'}`}>
                       {/* Time Label */}
                       <div className={`flex-shrink-0 w-24 border-r-2 border-gray-200 p-2 flex items-center justify-center ${hasClassesAtThisTime ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'}`}>
                         <div className="text-xs font-bold text-gray-700 text-center">
@@ -2090,11 +2624,7 @@ function ProScheduler() {
                       {/* Day Columns with Location Sub-columns */}
                       {DAYS_OF_WEEK.map((day) => {
                         const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
-                        const activeLocations = uniqueLocations.filter(location => 
-                          dayClasses.some(cls => cls.location === location)
-                        );
-                        
-                        if (activeLocations.length === 0) return null;
+                        const activeLocations = uniqueLocations.length > 0 ? uniqueLocations : ['Default'];
                         
                         return (
                           <div key={`${day.key}-${slot.time24}`} className="flex-1 min-w-[280px] border-r-2 border-gray-200 last:border-r-0">
@@ -2182,6 +2712,7 @@ function ProScheduler() {
                     </div>
                   );
                 })}
+                </div>
               </div>
 
               {uniqueLocations.length === 0 && (
@@ -2352,7 +2883,7 @@ function ProScheduler() {
                     </div>
                   );
                 })}
-              </div>
+                </div>
             </div>
           )}
 
@@ -2449,6 +2980,7 @@ function ProScheduler() {
           )}
         </div>
       </div>
+      )}
 
       {/* Enhanced Drilldown Modal with Detailed Analytics */}
       {showDrilldown && selectedClass && (() => {
@@ -3957,4 +4489,4 @@ function ProScheduler() {
   );
 }
 
-export default ProScheduler;
+export default memo(ProScheduler);

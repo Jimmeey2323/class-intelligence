@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
 import { X, Plus, Users, MapPin, Clock } from 'lucide-react';
 import { useDashboardStore } from '../store/dashboardStore';
@@ -22,6 +22,17 @@ export default function CreateClassModal({ isOpen, onClose, selectedDate, select
     type: 'Group Class',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // ESC key handler
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [isOpen, onClose]);
 
   // Get unique values from existing data for suggestions
   const uniqueClasses = [...new Set(rawData.map((s: SessionData) => s.Class))].sort();

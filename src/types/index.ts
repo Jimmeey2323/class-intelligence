@@ -223,6 +223,7 @@ export interface FilterState {
   statusFilter?: 'all' | 'active' | 'inactive';
   excludeHostedClasses?: boolean;
   includeTrainer?: boolean;
+  searchResults?: SessionData[];
 }
 
 // View modes

@@ -3,6 +3,8 @@ import { useDashboardStore } from '../store/dashboardStore';
 import { getUniqueValues } from '../utils/calculations';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
+import FuzzySearch from './FuzzySearch';
+import { SessionData } from '../types';
 
 export default function FilterSection() {
   const { filters, setFilters, isFilterCollapsed, toggleFilterCollapse, rawData } = useDashboardStore();
@@ -11,6 +13,11 @@ export default function FilterSection() {
   const locations = getUniqueValues(rawData, 'Location');
   const classTypes = getUniqueValues(rawData, 'Type');
   const classes = getUniqueValues(rawData, 'Class');
+
+  const handleSearchResults = (results: SessionData[]) => {
+    // Store search results in filters as searchResults
+    setFilters({ searchResults: results });
+  };
 
   return (
     <div className="glass-card rounded-3xl overflow-hidden">
@@ -80,6 +87,24 @@ export default function FilterSection() {
                 />
               </div>
             </div>
+          </div>
+
+          {/* Fuzzy Search */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+              <Activity className="w-4 h-4 text-purple-600" />
+              Smart Search {filters.searchResults && filters.searchResults.length < rawData.length && <span className="text-xs text-purple-600">(active)</span>}
+            </label>
+            <FuzzySearch
+              data={rawData}
+              keys={['Class', 'Trainer', 'Location', 'SessionName', 'Type']}
+              placeholder="Search classes, trainers, locations..."
+              onResultsChange={handleSearchResults}
+              className="w-full"
+            />
+            <p className="text-xs text-gray-500">
+              Fuzzy search across all fields. Searches as you type with typo tolerance.
+            </p>
           </div>
 
           {/* Multi-select Filters */}

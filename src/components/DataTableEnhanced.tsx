@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import EnhancedDrilldownModal from './EnhancedDrilldownModal2';
+import EmptyState from './EmptyState';
 
 // (Sparkline removed per design requirements)
 
@@ -1093,7 +1094,27 @@ export default function DataTableEnhanced() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {table.getRowModel().rows.map((row, index) => {
+              {table.getRowModel().rows.length === 0 ? (
+                <tr>
+                  <td colSpan={table.getVisibleLeafColumns().length} className="p-0">
+                    <EmptyState
+                      type="no-results"
+                      action={
+                        <button
+                          onClick={() => {
+                            setGroupBy('Class');
+                            setExcludeHostedClasses(false);
+                          }}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+                        >
+                          Reset Filters
+                        </button>
+                      }
+                    />
+                  </td>
+                </tr>
+              ) : (
+                table.getRowModel().rows.map((row, index) => {
                 const isGroupRow = 'isGroupRow' in row.original && row.original.isGroupRow;
                 // Do not gray out rows—show all with standard emphasis
                 return (
@@ -1129,7 +1150,8 @@ export default function DataTableEnhanced() {
                     ))}
                   </motion.tr>
                 );
-              })}
+              })
+              )}
             </tbody>
             {/* Totals Footer (aligned to visible columns) */}
             <tfoot className="bg-gradient-to-r from-gray-100 to-gray-200">

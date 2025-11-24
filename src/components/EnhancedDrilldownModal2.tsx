@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useMemo, useState, useEffect } from 'react';
 import { Dialog, Transition } from '@headlessui/react';
 import { X } from 'lucide-react';
 import { SessionData } from '../types';
@@ -25,6 +25,17 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
   const trainers = useMemo(() => Array.from(new Set(sessions.map(s => s.Trainer).filter(Boolean))).sort(), [sessions]);
   const locations = useMemo(() => Array.from(new Set(sessions.map(s => s.Location).filter(Boolean))).sort(), [sessions]);
   const days = useMemo(() => Array.from(new Set(sessions.map(s => format(parseISO(s.Date), 'EEEE')).filter(Boolean))), [sessions]);
+
+  // ESC key handler
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [isOpen, onClose]);
 
   const filteredSessions = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -219,112 +230,118 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                             <X className="w-5 h-5" />
                           </button>
                         </div>
-                        {/* 3D Animated Performance Graph */}
-                        <div className="relative w-full aspect-[3/4] rounded-2xl shadow-xl border border-white/20 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-                          <div className="absolute inset-0 flex items-center justify-center p-6">
-                            <div className="w-full h-full relative" style={{ perspective: '1000px' }}>
-                              {/* 3D Bar Chart Animation */}
-                              <div className="absolute inset-0 flex items-end justify-around gap-2 pb-8" style={{ transformStyle: 'preserve-3d', transform: 'rotateX(20deg) rotateY(-15deg)' }}>
-                                {(() => {
-                                  // Calculate data for visualization
-                                  const fillRate = metrics.avgFillRate;
-                                  const cancelRate = metrics.cancellationRate;
-                                  const avgCheckIns = metrics.avgCheckIns;
-                                  
-                                  const bars = [
-                                    { label: 'Fill', value: fillRate, color: 'from-blue-400 to-blue-600', height: fillRate },
-                                    { label: 'Attendance', value: avgCheckIns, color: 'from-green-400 to-green-600', height: Math.min((avgCheckIns / 30) * 100, 100) },
-                                    { label: 'Cancel', value: cancelRate, color: 'from-red-400 to-red-600', height: cancelRate },
-                                  ];
-                                  
-                                  return bars.map((bar, i) => (
-                                    <div key={i} className="flex flex-col items-center" style={{ animation: `barRise 1s ease-out ${i * 0.2}s both` }}>
-                                      <div className="text-xs font-bold text-white mb-2 opacity-90">
-                                        {bar.value.toFixed(0)}{bar.label === 'Attendance' ? '' : '%'}
+                        {/* Top 5 Trainers */}
+                        <div className="relative w-full rounded-2xl shadow-xl border border-white/20 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
+                          <div className="flex flex-col gap-4">
+                            <div className="flex flex-col gap-1">
+                              <span className="text-xs uppercase tracking-wider opacity-80">Top Performers</span>
+                              <span className="text-lg font-semibold">{primaryClass}</span>
+                            </div>
+                            
+                            {(() => {
+                              // Calculate trainer statistics
+                              const trainerStats = sessions.reduce((acc, session) => {
+                                const trainer = session.Trainer || 'Unknown';
+                                if (!acc[trainer]) {
+                                  acc[trainer] = {
+                                    name: trainer,
+                                    sessions: 0,
+                                    totalCheckIns: 0,
+                                    totalCapacity: 0,
+                                    totalRevenue: 0,
+                                    totalCancellations: 0,
+                                  };
+                                }
+                                acc[trainer].sessions += 1;
+                                acc[trainer].totalCheckIns += session.CheckedIn || 0;
+                                acc[trainer].totalCapacity += session.Capacity || 0;
+                                acc[trainer].totalRevenue += session.Revenue || 0;
+                                acc[trainer].totalCancellations += session.LateCancelled || 0;
+                                return acc;
+                              }, {} as Record<string, { name: string; sessions: number; totalCheckIns: number; totalCapacity: number; totalRevenue: number; totalCancellations: number }>);
+                              
+                              // Calculate metrics and sort
+                              const trainersWithMetrics = Object.values(trainerStats).map(t => ({
+                                ...t,
+                                avgAttendance: t.sessions > 0 ? t.totalCheckIns / t.sessions : 0,
+                                fillRate: t.totalCapacity > 0 ? (t.totalCheckIns / t.totalCapacity) * 100 : 0,
+                                avgRevenue: t.sessions > 0 ? t.totalRevenue / t.sessions : 0,
+                              })).sort((a, b) => b.totalRevenue - a.totalRevenue).slice(0, 5);
+                              
+                              return trainersWithMetrics.length > 0 ? (
+                                <div className="flex flex-col gap-3">
+                                  {trainersWithMetrics.map((trainer, index) => (
+                                    <div 
+                                      key={trainer.name} 
+                                      className="flex flex-col gap-2 p-3 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-all"
+                                      style={{ animation: `slideIn 0.3s ease-out ${index * 0.1}s both` }}
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-lg font-bold text-blue-400">#{index + 1}</span>
+                                          <span className="font-semibold text-white">{trainer.name}</span>
+                                        </div>
+                                        <span className="text-xs text-white/60">{trainer.sessions} sessions</span>
                                       </div>
-                                      <div 
-                                        className={`w-16 bg-gradient-to-t ${bar.color} rounded-t-lg shadow-2xl relative`}
-                                        style={{ 
-                                          height: `${bar.height}%`,
-                                          transformStyle: 'preserve-3d',
-                                          transform: 'translateZ(20px)',
-                                        }}
-                                      >
-                                        <div className="absolute inset-0 bg-white/20 animate-pulse" />
-                                      </div>
-                                      <div className="text-[10px] font-semibold text-white/70 mt-2 uppercase tracking-wider">
-                                        {bar.label}
+                                      <div className="grid grid-cols-3 gap-2 text-xs">
+                                        <div className="flex flex-col">
+                                          <span className="text-white/60">Avg Attendance</span>
+                                          <span className="font-bold text-green-400">{trainer.avgAttendance.toFixed(1)}</span>
+                                        </div>
+                                        <div className="flex flex-col">
+                                          <span className="text-white/60">Fill Rate</span>
+                                          <span className="font-bold text-blue-400">{trainer.fillRate.toFixed(1)}%</span>
+                                        </div>
+                                        <div className="flex flex-col">
+                                          <span className="text-white/60">Avg Revenue</span>
+                                          <span className="font-bold text-amber-400">{formatCurrency(trainer.avgRevenue)}</span>
+                                        </div>
                                       </div>
                                     </div>
-                                  ));
-                                })()}
-                              </div>
-                              
-                              {/* Grid lines */}
-                              <div className="absolute inset-0 pointer-events-none">
-                                {[...Array(5)].map((_, i) => (
-                                  <div 
-                                    key={i}
-                                    className="absolute w-full border-t border-white/10"
-                                    style={{ bottom: `${(i + 1) * 20}%` }}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                          
-                          {/* Bottom label */}
-                          <div className="absolute bottom-4 left-4 right-4 flex flex-col gap-1">
-                            <span className="text-xs uppercase tracking-wider opacity-80">Performance Overview</span>
-                            <span className="text-lg font-semibold">{primaryClass}</span>
-                          </div>
-                          
-                          {/* Floating particles animation */}
-                          <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                            {[...Array(20)].map((_, i) => (
-                              <div
-                                key={i}
-                                className="absolute w-1 h-1 bg-white/30 rounded-full"
-                                style={{
-                                  left: `${Math.random() * 100}%`,
-                                  top: `${Math.random() * 100}%`,
-                                  animation: `float ${3 + Math.random() * 4}s ease-in-out infinite`,
-                                  animationDelay: `${Math.random() * 2}s`,
-                                }}
-                              />
-                            ))}
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-center text-white/60 py-8">
+                                  No trainer data available
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                         
                         <style>{`
-                          @keyframes barRise {
+                          @keyframes slideIn {
                             from {
-                              transform: translateZ(20px) scaleY(0);
+                              transform: translateX(-20px);
                               opacity: 0;
                             }
                             to {
-                              transform: translateZ(20px) scaleY(1);
+                              transform: translateX(0);
                               opacity: 1;
                             }
                           }
-                          
-                          @keyframes float {
-                            0%, 100% {
-                              transform: translateY(0) translateX(0);
-                              opacity: 0.3;
-                            }
-                            50% {
-                              transform: translateY(-20px) translateX(10px);
-                              opacity: 0.6;
-                            }
-                          }
                         `}</style>
-                        <div className="grid grid-cols-2 gap-3" aria-label="Core trainer stats">
-                          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3"><div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Sessions</div><div className="text-xl font-bold">{metrics.totalSessions}</div></div>
-                          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3"><div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Attendance Avg</div><div className="text-xl font-bold">{metrics.avgCheckIns.toFixed(1)}</div></div>
-                          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3"><div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Fill Rate</div><div className="text-xl font-bold">{formatPercentage(metrics.avgFillRate)}</div></div>
-                          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3"><div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Cancel Rate</div><div className="text-xl font-bold text-red-300">{formatPercentage(metrics.cancellationRate)}</div></div>
-                          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 col-span-2"><div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Total Revenue</div><div className="text-xl font-bold text-green-300">{formatCurrency(metrics.totalRevenue)}</div></div>
+                        <div className="grid grid-cols-2 gap-2" aria-label="Core trainer stats">
+                          <div className="bg-white/5 backdrop-blur-sm rounded-lg p-3 border border-white/10 hover:bg-white/10 transition-all duration-300">
+                            <div className="text-[9px] font-bold uppercase tracking-wider text-white/50 mb-1">Sessions</div>
+                            <div className="text-2xl font-bold">{metrics.totalSessions}</div>
+                          </div>
+                          <div className="bg-white/5 backdrop-blur-sm rounded-lg p-3 border border-white/10 hover:bg-white/10 transition-all duration-300">
+                            <div className="text-[9px] font-bold uppercase tracking-wider text-white/50 mb-1">Avg Attend</div>
+                            <div className="text-2xl font-bold">{metrics.avgCheckIns.toFixed(1)}</div>
+                          </div>
+                          <div className="bg-white/5 backdrop-blur-sm rounded-lg p-3 border border-white/10 hover:bg-white/10 transition-all duration-300">
+                            <div className="text-[9px] font-bold uppercase tracking-wider text-white/50 mb-1">Fill Rate</div>
+                            <div className="text-2xl font-bold">{formatPercentage(metrics.avgFillRate)}</div>
+                          </div>
+                          <div className="bg-white/5 backdrop-blur-sm rounded-lg p-3 border border-white/10 hover:bg-white/10 transition-all duration-300">
+                            <div className="text-[9px] font-bold uppercase tracking-wider text-white/50 mb-1">Cancel</div>
+                            <div className="text-2xl font-bold">{formatPercentage(metrics.cancellationRate)}</div>
+                          </div>
+                          <div className="bg-white/5 backdrop-blur-sm rounded-lg p-3 border border-white/10 hover:bg-white/10 transition-all duration-300 col-span-2">
+                            <div className="text-[9px] font-bold uppercase tracking-wider text-white/50 mb-1">Total Revenue</div>
+                            <div className="text-2xl font-bold">{formatCurrency(metrics.totalRevenue)}</div>
+                          </div>
                         </div>
                         <div className="space-y-3">
                           <div className="bg-white/10 rounded-xl p-4" aria-label="Class profile summary">
@@ -353,22 +370,67 @@ export default function EnhancedDrilldownModal({ isOpen, onClose, sessions, titl
                         <div className="text-sm text-slate-500">Advanced profile & performance analytics</div>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-8">
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">TOTAL SESSIONS</div><div className="text-lg font-bold text-slate-800">{metrics.totalSessions}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">EMPTY</div><div className="text-lg font-bold text-red-600">{metrics.emptySessions}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">NON-EMPTY</div><div className="text-lg font-bold text-green-600">{metrics.nonEmptySessions}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">CAPACITY</div><div className="text-lg font-bold text-slate-800">{metrics.totalCapacity}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">BOOKED</div><div className="text-lg font-bold text-blue-600">{metrics.totalBooked}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">CHECKED IN</div><div className="text-lg font-bold text-green-700">{metrics.totalCheckIns}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">LATE CANCEL</div><div className="text-lg font-bold text-red-600">{metrics.totalCancellations}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">AVG (ALL)</div><div className="text-lg font-bold text-slate-800">{metrics.avgCheckIns.toFixed(1)}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">AVG (NO EMPTY)</div><div className="text-lg font-bold text-blue-600">{metrics.avgCheckInsWithoutEmpty.toFixed(1)}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">FILL RATE</div><div className="text-lg font-bold text-slate-800">{formatPercentage(metrics.avgFillRate)}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">WAITLIST RATE</div><div className="text-lg font-bold text-indigo-700">{formatPercentage(metrics.waitlistRate)}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">CANCEL RATE</div><div className="text-lg font-bold text-red-600">{formatPercentage(metrics.cancellationRate)}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">REVENUE</div><div className="text-lg font-bold text-green-700">{formatCurrency(metrics.totalRevenue)}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">REV / SEAT</div><div className="text-lg font-bold text-green-700">{formatCurrency(metrics.revenuePerSeat)}</div></div>
-                      <div className="bg-white rounded-xl p-3 shadow-sm border"><div className="text-[10px] font-semibold text-gray-500 uppercase">REV LOST</div><div className="text-lg font-bold text-red-700">{formatCurrency(metrics.revenueLostToCancellation)}</div></div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mb-8">
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Sessions</div>
+                        <div className="text-xl font-bold text-slate-900">{metrics.totalSessions}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Empty</div>
+                        <div className="text-xl font-bold text-slate-900">{metrics.emptySessions}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Non-Empty</div>
+                        <div className="text-xl font-bold text-slate-900">{metrics.nonEmptySessions}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Capacity</div>
+                        <div className="text-xl font-bold text-slate-900">{metrics.totalCapacity}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Booked</div>
+                        <div className="text-xl font-bold text-slate-900">{metrics.totalBooked}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Checked In</div>
+                        <div className="text-xl font-bold text-slate-900">{metrics.totalCheckIns}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Late Cancel</div>
+                        <div className="text-xl font-bold text-slate-900">{metrics.totalCancellations}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Avg (All)</div>
+                        <div className="text-xl font-bold text-slate-900">{metrics.avgCheckIns.toFixed(1)}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Avg (No Empty)</div>
+                        <div className="text-xl font-bold text-slate-900">{metrics.avgCheckInsWithoutEmpty.toFixed(1)}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Fill Rate</div>
+                        <div className="text-xl font-bold text-slate-900">{formatPercentage(metrics.avgFillRate)}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Waitlist Rate</div>
+                        <div className="text-xl font-bold text-slate-900">{formatPercentage(metrics.waitlistRate)}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Cancel Rate</div>
+                        <div className="text-xl font-bold text-slate-900">{formatPercentage(metrics.cancellationRate)}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Revenue</div>
+                        <div className="text-xl font-bold text-slate-900">{formatCurrency(metrics.totalRevenue)}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Rev / Seat</div>
+                        <div className="text-xl font-bold text-slate-900">{formatCurrency(metrics.revenuePerSeat)}</div>
+                      </div>
+                      <div className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-3 border border-slate-200 hover:shadow-md transition-all duration-300">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Rev Lost</div>
+                        <div className="text-xl font-bold text-slate-900">{formatCurrency(metrics.revenueLostToCancellation)}</div>
+                      </div>
                     </div>
                     {metrics.recommendations.length > 0 && (
                       <div className="bg-gradient-to-br from-purple-50 to-blue-50 rounded-2xl p-6 border border-purple-200 shadow-sm mb-8">

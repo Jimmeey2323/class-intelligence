@@ -6,6 +6,7 @@ import { TrendingUp, TrendingDown, Award, BarChart3, Search } from 'lucide-react
 import { generateCompositeKey, parseCompositeKey } from '../utils/cleaners';
 import { motion } from 'framer-motion';
 import EnhancedDrilldownModal from './EnhancedDrilldownModal2';
+import { ProgressBar } from './VisualIndicators';
 
 type RankingMetric =
   | 'classAvg'
@@ -361,12 +362,12 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
                 onClick={() => handleCardClick(group)}
-                className={`flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-green-700 hover:shadow-md transition-all cursor-pointer`}
+                className={`flex items-center gap-3 p-4 rounded-xl bg-white border-2 border-gray-100 hover:border-green-700 hover:shadow-lg hover:scale-[1.02] transition-all duration-300 cursor-pointer active:scale-[0.98]`}
               >
-                <div className="flex items-center justify-center min-w-[32px] h-8 rounded-lg bg-gradient-to-br from-green-700 to-green-800 text-white font-bold text-sm">
+                <div className="flex items-center justify-center min-w-[36px] h-9 rounded-lg bg-gradient-to-br from-green-600 to-green-700 text-white font-bold text-sm shadow-md">
                   {index + 1}
                 </div>
-                <div className="flex-1 min-w-0">
+                <div className="flex-1 min-w-0 space-y-1.5">
                   <p className={`font-bold truncate text-sm text-gray-900`}>
                     {group.className}
                   </p>
@@ -374,36 +375,48 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
                     {group.day} • {group.time} • {group.location}
                   </p>
                   {group.trainer && (
-                    <p className={`text-xs truncate text-blue-600`}>
+                    <p className={`text-xs truncate text-blue-600 font-medium`}>
                       {group.trainer}
                     </p>
                   )}
-                  <div className={`flex items-center gap-3 mt-1 text-xs text-gray-500`}>
-                    <span>{group.metrics.classes} classes</span>
+                  <div className={`flex items-center gap-3 text-xs text-gray-500`}>
+                    <span className="font-medium">{group.metrics.classes} classes</span>
                     <span>•</span>
                     <span>{formatNumber(group.metrics.totalCheckIns)} check-ins</span>
-                    <span>•</span>
-                    <span>{group.metrics.emptyClasses} empty</span>
                     <span>•</span>
                     <span className={group.metrics.status === 'Active' ? 'text-green-700 font-semibold' : 'text-red-700 font-semibold'}>
                       {group.metrics.status}
                     </span>
                   </div>
+                  {/* Progress bar for fill rate */}
+                  {(topMetric === 'fillRate' || topMetric === 'classAvg') && (
+                    <div className="pt-1">
+                      <ProgressBar 
+                        value={group.metrics.fillRate} 
+                        max={100}
+                        color="green"
+                        showLabel={false}
+                        height="sm"
+                      />
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
-                  <TrendingUp className={`w-4 h-4 text-green-700`} />
-                  <div className="relative group">
-                    <span className={`font-bold text-sm cursor-help text-gray-900`}>
-                      {formatMetricValue(topMetric, group.metrics[topMetric])}
-                    </span>
-                    {topMetric === 'compositeScore' && (
-                      <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
-                        <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-pre-line shadow-lg max-w-sm">
-                          {getTooltipContent(topMetric, group)}
-                          <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
+                <div className="flex flex-col items-end gap-1">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className={`w-4 h-4 text-green-600`} />
+                    <div className="relative group">
+                      <span className={`font-bold text-lg cursor-help text-gray-900`}>
+                        {formatMetricValue(topMetric, group.metrics[topMetric])}
+                      </span>
+                      {topMetric === 'compositeScore' && (
+                        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-50">
+                          <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-pre-line shadow-lg max-w-sm">
+                            {getTooltipContent(topMetric, group)}
+                            <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </div>
               </motion.div>
