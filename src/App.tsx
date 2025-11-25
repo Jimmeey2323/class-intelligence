@@ -7,14 +7,15 @@ import DataTableEnhanced from './components/DataTableEnhanced';
 import Rankings from './components/Rankings';
 import MetricsCardsEnhanced from './components/MetricsCardsEnhanced';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { LayoutDashboard, Target, Users, Sparkles } from 'lucide-react';
+import { LayoutDashboard, Target, Users, Sparkles, BarChart3 } from 'lucide-react';
 import LoadingSkeletons from './components/LoadingSkeletons';
 
 // Lazy load heavy components
 const ProScheduler = lazy(() => import('./components/ProScheduler'));
 const MemberBehaviorAnalytics = lazy(() => import('./components/MemberBehaviorAnalytics').then(module => ({ default: module.MemberBehaviorAnalytics })));
+const ClassDeepDive = lazy(() => import('./components/ClassDeepDive'));
 
-type ViewTab = 'dashboard' | 'pro-scheduler' | 'members';
+type ViewTab = 'dashboard' | 'pro-scheduler' | 'members' | 'class-dive';
 
 function App() {
   const { rawData } = useDashboardStore();
@@ -142,6 +143,20 @@ function App() {
             <span className="hidden sm:inline relative z-10">Pro Scheduler</span>
             <span className="sm:hidden relative z-10">Schedule</span>
           </motion.button>
+          <motion.button
+            onClick={() => setActiveView('class-dive')}
+            whileHover={{ scale: activeView !== 'class-dive' ? 1.02 : 1 }}
+            whileTap={{ scale: 0.98 }}
+            className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold transition-all duration-300 flex items-center gap-2 touch-manipulation min-h-[44px] whitespace-nowrap relative overflow-hidden ${
+              activeView === 'class-dive'
+                ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white shadow-xl scale-105 border border-blue-500/30'
+                : 'text-slate-700 hover:bg-white/60 active:scale-95 border border-transparent hover:border-slate-300'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4 sm:w-5 sm:h-5 relative z-10" />
+            <span className="hidden sm:inline relative z-10">Class Deep Dive</span>
+            <span className="sm:hidden relative z-10">Deep Dive</span>
+          </motion.button>
         </motion.div>
       )}
 
@@ -195,6 +210,22 @@ function App() {
             <ErrorBoundary fallbackTitle="Pro Scheduler Error">
               <Suspense fallback={<LoadingSkeletons />}>
                 <ProScheduler />
+              </Suspense>
+            </ErrorBoundary>
+          </motion.div>
+        )}
+
+        {hasData && activeView === 'class-dive' && (
+          <motion.div
+            key="class-dive"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: 0.4 }}
+          >
+            <ErrorBoundary fallbackTitle="Class Deep Dive Error">
+              <Suspense fallback={<LoadingSkeletons />}>
+                <ClassDeepDive />
               </Suspense>
             </ErrorBoundary>
           </motion.div>

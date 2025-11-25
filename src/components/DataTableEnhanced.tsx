@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, memo, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import {
   useReactTable,
@@ -54,7 +54,7 @@ export default function DataTableEnhanced() {
     setRankingMetric,
   } = useDashboardStore();
 
-  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 50 });
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 25 });
   const [showColumnSettings, setShowColumnSettings] = useState(false);
   const [columnSizing, setColumnSizing] = useState<Record<string, number>>({});
   const [density, setDensity] = useState<'comfortable' | 'compact'>(() => {
@@ -152,17 +152,18 @@ export default function DataTableEnhanced() {
   const [drilldownSessions, setDrilldownSessions] = useState<SessionData[]>([]);
   const [drilldownTitle, setDrilldownTitle] = useState('');
 
-  const openDrilldownFromGroup = (group: GroupedRow) => {
+  const openDrilldownFromGroup = useCallback((group: GroupedRow) => {
     setDrilldownSessions(group.children || []);
     setDrilldownTitle(group.groupValue);
     setIsDrilldownOpen(true);
-  };
-  const openDrilldownFromSession = (session: SessionData) => {
+  }, []);
+  
+  const openDrilldownFromSession = useCallback((session: SessionData) => {
     setDrilldownSessions([session]);
     const title = `${session.SessionName || session.Class} - ${session.Day} ${session.Time} (${session.Location})`;
     setDrilldownTitle(title);
     setIsDrilldownOpen(true);
-  };
+  }, []);
 
   // Table view configurations
   const tableViews: { value: TableView; label: string; columns: string[] }[] = [
@@ -1027,9 +1028,9 @@ export default function DataTableEnhanced() {
       >
         <div className="overflow-x-auto">
           <table className="w-full min-w-max border-separate border-spacing-0">
-            <thead className="sticky top-0 z-20">
+            <thead className="sticky top-0 z-20 bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 shadow-lg">
               {table.getHeaderGroups().map((headerGroup) => (
-                <tr key={headerGroup.id} className="bg-gradient-to-r from-black via-purple-950 to-purple-900">
+                <tr key={headerGroup.id} className="border-b-2 border-blue-400/30">
                   {headerGroup.headers.map((header) => {
                     const canSort = header.column.getCanSort();
                     const isSorted = header.column.getIsSorted();
@@ -1039,8 +1040,8 @@ export default function DataTableEnhanced() {
                       <th
                         key={header.id}
                         style={{ width: header.getSize() }}
-                        className={`${thPaddingClass} sticky top-0 z-10 text-left text-xs font-bold text-white uppercase tracking-wider whitespace-nowrap relative group ${
-                          canSort ? 'cursor-pointer hover:bg-blue-600 transition-colors' : ''
+                        className={`${thPaddingClass} sticky top-0 z-10 text-left text-xs font-bold text-white uppercase tracking-wider whitespace-nowrap relative group backdrop-blur-sm ${
+                          canSort ? 'cursor-pointer hover:bg-blue-700/50 transition-all duration-200' : ''
                         }`}
                         role="columnheader"
                         scope="col"
@@ -1078,7 +1079,7 @@ export default function DataTableEnhanced() {
                           <div
                             onMouseDown={header.getResizeHandler()}
                             onTouchStart={header.getResizeHandler()}
-                            className="absolute right-0 top-0 h-full w-1 bg-white opacity-0 group-hover:opacity-50 hover:!opacity-100 cursor-col-resize"
+                            className="absolute right-0 top-0 h-full w-1 bg-blue-400 opacity-0 group-hover:opacity-60 hover:!opacity-100 cursor-col-resize transition-opacity backdrop-blur-sm"
                           />
                         )}
                       </th>
@@ -1089,7 +1090,7 @@ export default function DataTableEnhanced() {
               {/* Animated bottom border under header row */}
               <tr>
                 <th colSpan={table.getVisibleLeafColumns().length} className="p-0">
-                  <div className="h-0.5 w-full bg-gradient-to-r from-blue-400 via-cyan-400 to-indigo-400 animate-pulse" />
+                  <div className="h-1 w-full bg-gradient-to-r from-blue-400 via-cyan-300 to-indigo-400 shadow-lg shadow-blue-500/50" />
                 </th>
               </tr>
             </thead>
@@ -1120,9 +1121,9 @@ export default function DataTableEnhanced() {
                 return (
                   <motion.tr
                     key={row.id}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: index * 0.01 }}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.15 }}
                     onClick={() => {
                       const original = row.original as any;
                       if ('isGroupRow' in original && original.isGroupRow) {
@@ -1131,12 +1132,12 @@ export default function DataTableEnhanced() {
                         openDrilldownFromSession(original as SessionData);
                       }
                     }}
-                    className={`cursor-pointer transition-all duration-200 h-[35px] max-h-[35px] ${
+                    className={`cursor-pointer transition-all duration-150 border-b border-gray-100 ${
                       isGroupRow
-                        ? 'bg-gray-100 text-black border-b border-gray-300'
+                        ? 'bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 font-semibold shadow-sm'
                         : index % 2 === 0
-                        ? 'bg-white hover:bg-blue-50'
-                        : 'bg-gray-50 hover:bg-blue-50'
+                        ? 'bg-white hover:bg-gradient-to-r hover:from-blue-50/30 hover:to-transparent'
+                        : 'bg-gray-50/50 hover:bg-gradient-to-r hover:from-blue-50/30 hover:to-transparent'
                     }`}
                   >
                     {row.getVisibleCells().map((cell) => (

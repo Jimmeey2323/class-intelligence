@@ -1,376 +1,502 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Users, Target, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
-import { loadMemberBehaviorAnalytics } from '../services/googleSheetsService';
-import { MemberAttendancePattern, BookingBehavior, MemberCohort } from '../types';
+import React, { useState, useMemo } from 'react';
+import { format, parseISO, differenceInDays } from 'date-fns';
+import { Users, TrendingDown, UserX, AlertTriangle, Calendar, X, Award, Activity, UserCheck, Clock } from 'lucide-react';
+import { useDashboardStore } from '../store/dashboardStore';
+import { formatCurrency } from '../utils/calculations';
 
-const COLORS = {
-  consistent: '#10b981',
-  random: '#f59e0b',
-  mixed: '#3b82f6',
-  new: '#8b5cf6',
-  returning: '#06b6d4',
-  loyal: '#10b981',
-  'at-risk': '#f59e0b',
-  churned: '#ef4444',
-};
+interface MemberStats {
+  memberID: string;
+  memberName: string;
+  email: string;
+  totalBookings: number;
+  totalCheckIns: number;
+  cancellations: number;
+  noShows: number;
+  cancellationRate: number;
+  showUpRate: number;
+  totalRevenue: number;
+  firstVisit: string;
+  lastVisit: string;
+  daysSinceLastVisit: number;
+  visitFrequency: number;
+  preferredLocation: string;
+  preferredDay: string;
+  preferredTime: string;
+  trainersAttended: string[];
+}
 
-// Cache for analytics data
-let cachedAnalytics: any = null;
+interface ChurnedMember extends MemberStats {
+  previousFrequency: number;
+  daysSinceLastClass: number;
+  wasRegular: boolean;
+}
+
+interface TrainerChange {
+  className: string;
+  oldTrainer: string;
+  newTrainer: string;
+  changeDate: string;
+  attendanceBeforeChange: number;
+  attendanceAfterChange: number;
+  dropPercentage: number;
+  droppedMembers: {
+    memberName: string;
+    email: string;
+    lastVisitBeforeChange: string;
+    totalVisitsWithOldTrainer: number;
+  }[];
+}
 
 export const MemberBehaviorAnalytics: React.FC = () => {
-  const [loading, setLoading] = useState(!cachedAnalytics);
-  const [memberPatterns, setMemberPatterns] = useState<MemberAttendancePattern[]>([]);
-  const [bookingByPayment, setBookingByPayment] = useState<BookingBehavior[]>([]);
-  const [bookingByClass, setBookingByClass] = useState<BookingBehavior[]>([]);
-  const [cohorts, setCohorts] = useState<MemberCohort[]>([]);
-  const [activeTab, setActiveTab] = useState<'overview' | 'patterns' | 'booking' | 'cohorts'>('overview');
+  const { filteredData, checkinsData } = useDashboardStore();
+  const [selectedFormats, setSelectedFormats] = useState<string[]>([]);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
-    try {
-      // Use cached data if available
-      if (cachedAnalytics) {
-        setMemberPatterns(cachedAnalytics.memberPatterns);
-        setBookingByPayment(cachedAnalytics.bookingByPaymentCategory);
-        setBookingByClass(cachedAnalytics.bookingByClass);
-        setCohorts(cachedAnalytics.cohortAnalysis);
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-      const analytics = await loadMemberBehaviorAnalytics();
-      
-      // Cache the results
-      cachedAnalytics = analytics;
-      
-      setMemberPatterns(analytics.memberPatterns);
-      setBookingByPayment(analytics.bookingByPaymentCategory);
-      setBookingByClass(analytics.bookingByClass);
-      setCohorts(analytics.cohortAnalysis);
-    } catch (error) {
-      console.error('Failed to load member behavior analytics:', error);
-    } finally {
-      setLoading(false);
-    }
+  const normalizeClassName = (name: string): string => {
+    return name.replace(/\s*express\s*/gi, '').trim();
   };
 
-  // Memoize expensive calculations
-  const overviewMetrics = useMemo(() => {
-    const totalMembers = memberPatterns.length;
-    const consistentMembers = memberPatterns.filter(m => m.bookingPattern === 'consistent').length;
-    const randomMembers = memberPatterns.filter(m => m.bookingPattern === 'random').length;
-    const newMembersCount = memberPatterns.filter(m => m.isNew).length;
-    const avgCancellationRate = totalMembers > 0 
-      ? memberPatterns.reduce((sum, m) => sum + m.cancellationRate, 0) / totalMembers 
-      : 0;
-    const avgConsistencyScore = totalMembers > 0
-      ? memberPatterns.reduce((sum, m) => sum + m.consistencyScore, 0) / totalMembers
-      : 0;
+  const classFormats = useMemo(() => {
+    const formats = new Set<string>();
+    checkinsData.forEach(checkin => {
+      if (checkin.CleanedClass) {
+        formats.add(normalizeClassName(checkin.CleanedClass));
+      }
+    });
+    return Array.from(formats).sort();
+  }, [checkinsData]);
 
-    return {
-      totalMembers,
-      consistentMembers,
-      randomMembers,
-      newMembersCount,
-      avgCancellationRate,
-      avgConsistencyScore,
-    };
-  }, [memberPatterns]);
+  const filteredCheckins = useMemo(() => {
+    if (selectedFormats.length === 0) return [];
+    const validSessionIds = new Set(filteredData.map(s => s.SessionID));
+    return checkinsData.filter(checkin => {
+      const normalizedClass = normalizeClassName(checkin.CleanedClass);
+      return selectedFormats.includes(normalizedClass) && validSessionIds.has(checkin.SessionID);
+    });
+  }, [checkinsData, filteredData, selectedFormats]);
 
-  // Memoize chart data
-  const chartData = useMemo(() => {
-    const { totalMembers, consistentMembers, randomMembers, newMembersCount } = overviewMetrics;
+  const memberStats = useMemo((): MemberStats[] => {
+    if (filteredCheckins.length === 0) return [];
+
+    const memberMap = new Map<string, {
+      checkins: typeof filteredCheckins;
+      bookings: number;
+      checkIns: number;
+      cancellations: number;
+      noShows: number;
+      revenue: number;
+    }>();
+
+    filteredCheckins.forEach(checkin => {
+      const memberId = checkin.MemberID || checkin.Email;
+      if (!memberMap.has(memberId)) {
+        memberMap.set(memberId, {
+          checkins: [],
+          bookings: 0,
+          checkIns: 0,
+          cancellations: 0,
+          noShows: 0,
+          revenue: 0
+        });
+      }
+
+      const memberData = memberMap.get(memberId)!;
+      memberData.checkins.push(checkin);
+      memberData.bookings++;
+      if (checkin.CheckedIn) memberData.checkIns++;
+      if (checkin.IsLateCancelled) memberData.cancellations++;
+      if (!checkin.CheckedIn && !checkin.IsLateCancelled) memberData.noShows++;
+      memberData.revenue += checkin.Paid || 0;
+    });
+
+    const today = new Date();
     
-    return {
-      bookingPatternData: [
-        { name: 'Consistent', value: consistentMembers, color: COLORS.consistent },
-        { name: 'Random', value: randomMembers, color: COLORS.random },
-        { name: 'Mixed', value: totalMembers - consistentMembers - randomMembers, color: COLORS.mixed },
-      ],
-      memberTypeData: [
-        { name: 'New', value: newMembersCount, color: COLORS.new },
-        { name: 'Returning', value: totalMembers - newMembersCount, color: COLORS.returning },
-      ],
-      cohortData: cohorts.map(c => ({
-        name: c.cohortType.charAt(0).toUpperCase() + c.cohortType.slice(1),
-        members: c.memberCount,
-        revenue: c.totalRevenue,
-        classes: c.totalClasses,
-        cancellationRate: c.cancellationRate,
-      })),
-    };
-  }, [overviewMetrics, cohorts]);
+    return Array.from(memberMap.entries())
+      .map(([memberId, data]) => {
+        const dates = data.checkins.map(c => new Date(c.Date)).sort((a, b) => a.getTime() - b.getTime());
+        const firstVisit = dates[0];
+        const lastVisit = dates[dates.length - 1];
+        const daysSinceLastVisit = differenceInDays(today, lastVisit);
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 space-y-4">
-        <Loader2 className="w-12 h-12 text-blue-500 animate-spin" />
-        <div className="text-lg font-medium bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-          Analyzing member behavior...
-        </div>
-      </div>
+        let visitFrequency = 0;
+        if (dates.length > 1) {
+          const daysBetweenVisits = dates.slice(1).map((date, i) => 
+            differenceInDays(date, dates[i])
+          );
+          visitFrequency = daysBetweenVisits.reduce((sum, days) => sum + days, 0) / daysBetweenVisits.length;
+        }
+
+        const locationCounts = new Map<string, number>();
+        const dayCounts = new Map<string, number>();
+        const timeCounts = new Map<string, number>();
+        const trainers = new Set<string>();
+
+        data.checkins.forEach(c => {
+          if (c.Location) locationCounts.set(c.Location, (locationCounts.get(c.Location) || 0) + 1);
+          if (c.DayOfWeek) dayCounts.set(c.DayOfWeek, (dayCounts.get(c.DayOfWeek) || 0) + 1);
+          if (c.Time) timeCounts.set(c.Time.substring(0, 5), (timeCounts.get(c.Time.substring(0, 5)) || 0) + 1);
+          if (c.TeacherName) trainers.add(c.TeacherName);
+        });
+
+        const preferredLocation = Array.from(locationCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || '-';
+        const preferredDay = Array.from(dayCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || '-';
+        const preferredTime = Array.from(timeCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || '-';
+
+        const firstCheckin = data.checkins[0];
+        
+        return {
+          memberID: memberId,
+          memberName: `${firstCheckin.FirstName} ${firstCheckin.LastName}`,
+          email: firstCheckin.Email,
+          totalBookings: data.bookings,
+          totalCheckIns: data.checkIns,
+          cancellations: data.cancellations,
+          noShows: data.noShows,
+          cancellationRate: data.bookings > 0 ? (data.cancellations / data.bookings) * 100 : 0,
+          showUpRate: data.bookings > 0 ? (data.checkIns / data.bookings) * 100 : 0,
+          totalRevenue: data.revenue,
+          firstVisit: format(firstVisit, 'yyyy-MM-dd'),
+          lastVisit: format(lastVisit, 'yyyy-MM-dd'),
+          daysSinceLastVisit,
+          visitFrequency,
+          preferredLocation,
+          preferredDay,
+          preferredTime,
+          trainersAttended: Array.from(trainers)
+        };
+      })
+      .sort((a, b) => b.totalCheckIns - a.totalCheckIns);
+  }, [filteredCheckins]);
+
+  const churnedMembers = useMemo((): ChurnedMember[] => {
+    return memberStats
+      .filter(member => {
+        const wasRegular = member.totalCheckIns >= 3 && member.visitFrequency > 0 && member.visitFrequency <= 14;
+        const hasChurned = member.daysSinceLastVisit > member.visitFrequency * 3;
+        return wasRegular && hasChurned;
+      })
+      .map(member => ({
+        ...member,
+        previousFrequency: member.visitFrequency,
+        daysSinceLastClass: member.daysSinceLastVisit,
+        wasRegular: true
+      }))
+      .sort((a, b) => b.totalCheckIns - a.totalCheckIns)
+      .slice(0, 20);
+  }, [memberStats]);
+
+  const trainerChanges = useMemo((): TrainerChange[] => {
+    if (selectedFormats.length === 0) return [];
+
+    const changes: TrainerChange[] = [];
+
+    selectedFormats.forEach(className => {
+      const classSessions = filteredData
+        .filter(s => normalizeClassName(s.Class) === className)
+        .sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
+
+      if (classSessions.length < 5) return;
+
+      let currentTrainer = classSessions[0].Trainer;
+      let changeIndex = -1;
+
+      for (let i = 1; i < classSessions.length; i++) {
+        if (classSessions[i].Trainer !== currentTrainer) {
+          changeIndex = i;
+          break;
+        }
+      }
+
+      if (changeIndex === -1 || changeIndex < 3 || changeIndex >= classSessions.length - 2) return;
+
+      const oldTrainer = currentTrainer;
+      const newTrainer = classSessions[changeIndex].Trainer;
+      const changeDate = classSessions[changeIndex].Date;
+
+      const beforeSessions = classSessions.slice(Math.max(0, changeIndex - 5), changeIndex);
+      const afterSessions = classSessions.slice(changeIndex, Math.min(classSessions.length, changeIndex + 5));
+
+      const avgBefore = beforeSessions.reduce((sum, s) => sum + s.CheckedIn, 0) / beforeSessions.length;
+      const avgAfter = afterSessions.reduce((sum, s) => sum + s.CheckedIn, 0) / afterSessions.length;
+      const dropPercentage = avgBefore > 0 ? ((avgBefore - avgAfter) / avgBefore) * 100 : 0;
+
+      if (dropPercentage > 15) {
+        const beforeSessionIds = new Set(beforeSessions.map(s => s.SessionID));
+        const afterSessionIds = new Set(afterSessions.map(s => s.SessionID));
+
+        const membersBeforeChange = new Set(
+          checkinsData
+            .filter(c => beforeSessionIds.has(c.SessionID) && c.CheckedIn)
+            .map(c => c.MemberID || c.Email)
+        );
+
+        const membersAfterChange = new Set(
+          checkinsData
+            .filter(c => afterSessionIds.has(c.SessionID) && c.CheckedIn)
+            .map(c => c.MemberID || c.Email)
+        );
+
+        const droppedMemberIds = Array.from(membersBeforeChange).filter(id => !membersAfterChange.has(id));
+
+        const droppedMembers = droppedMemberIds.map(memberId => {
+          const memberCheckins = checkinsData.filter(c => 
+            (c.MemberID || c.Email) === memberId && 
+            beforeSessionIds.has(c.SessionID) &&
+            c.CheckedIn
+          );
+
+          if (memberCheckins.length === 0) return null;
+
+          const sortedCheckins = memberCheckins.sort((a, b) => new Date(b.Date).getTime() - new Date(a.Date).getTime());
+          const firstCheckin = memberCheckins[0];
+
+          return {
+            memberName: `${firstCheckin.FirstName} ${firstCheckin.LastName}`,
+            email: firstCheckin.Email,
+            lastVisitBeforeChange: sortedCheckins[0].Date,
+            totalVisitsWithOldTrainer: memberCheckins.length
+          };
+        }).filter((m): m is NonNullable<typeof m> => m !== null);
+
+        if (droppedMembers.length >= 2) {
+          changes.push({
+            className,
+            oldTrainer,
+            newTrainer,
+            changeDate,
+            attendanceBeforeChange: Math.round(avgBefore),
+            attendanceAfterChange: Math.round(avgAfter),
+            dropPercentage: Math.round(dropPercentage),
+            droppedMembers: droppedMembers.slice(0, 10)
+          });
+        }
+      }
+    });
+
+    return changes.sort((a, b) => b.dropPercentage - a.dropPercentage);
+  }, [selectedFormats, filteredData, checkinsData]);
+
+  const handleFormatToggle = (className: string) => {
+    setSelectedFormats(prev => 
+      prev.includes(className)
+        ? prev.filter(c => c !== className)
+        : [...prev, className]
     );
-  }
+  };
 
-  const { totalMembers, consistentMembers, avgCancellationRate, avgConsistencyScore } = overviewMetrics;
-  const { bookingPatternData, memberTypeData, cohortData } = chartData;
+  const handleClearAll = () => {
+    setSelectedFormats([]);
+  };
+
+  const topAttendees = memberStats.slice(0, 15);
+  const totalMembers = memberStats.length;
+  const activeMembers = memberStats.filter(m => m.daysSinceLastVisit <= 30).length;
+  const atRiskMembers = memberStats.filter(m => m.daysSinceLastVisit > 30 && m.daysSinceLastVisit <= 60).length;
+  const totalRevenue = memberStats.reduce((sum, m) => sum + m.totalRevenue, 0);
+  const avgVisitsPerMember = totalMembers > 0 ? memberStats.reduce((sum, m) => sum + m.totalCheckIns, 0) / totalMembers : 0;
 
   return (
-    <div className="space-y-6">
-      {/* Tabs */}
-      <div className="glass-card rounded-2xl p-2 inline-flex gap-2">
-        {['overview', 'patterns', 'booking', 'cohorts'].map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab as any)}
-            className={`px-6 py-3 rounded-xl font-bold transition-all ${
-              activeTab === tab
-                ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg'
-                : 'text-gray-700 hover:bg-white/50'
-            }`}
-          >
-            {tab.charAt(0).toUpperCase() + tab.slice(1)}
-          </button>
-        ))}
+    <div className="space-y-6 p-6">
+      {/* Class Format Selector */}
+      <div className="bg-white/80 glass-card rounded-3xl p-6 border border-white/20 shadow-2xl">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="bg-gradient-to-br from-indigo-700 to-blue-900 p-2.5 rounded-xl">
+            <Users className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">Member Behavior Analytics</h2>
+            <p className="text-xs text-slate-600">Select class formats to analyze member attendance, churn, and trainer impact</p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-semibold text-slate-700 mb-2">
+              Select Class Formats
+            </label>
+            <select
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value && !selectedFormats.includes(value)) {
+                  setSelectedFormats(prev => [...prev, value]);
+                }
+              }}
+              value=""
+              className="w-full px-4 py-3 rounded-xl border-2 border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-all text-slate-900 font-medium cursor-pointer"
+            >
+              <option value="">+ Add class format</option>
+              {classFormats.filter(c => !selectedFormats.includes(c)).map(format => (
+                <option key={format} value={format}>{format}</option>
+              ))}
+            </select>
+          </div>
+
+          {selectedFormats.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold text-slate-600 uppercase tracking-wider">
+                  Selected: {selectedFormats.length}
+                </span>
+                <button
+                  onClick={handleClearAll}
+                  className="text-xs font-semibold text-red-600 hover:text-red-700 transition-colors"
+                >
+                  Clear All
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {selectedFormats.map(className => (
+                  <div
+                    key={className}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-100 border border-indigo-200 text-indigo-800 text-sm font-semibold"
+                  >
+                    <span>{className}</span>
+                    <button
+                      onClick={() => handleFormatToggle(className)}
+                      className="hover:bg-indigo-200 rounded-full p-0.5 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Overview Tab */}
-      {activeTab === 'overview' && (
+      {/* Main Content */}
+      {memberStats.length > 0 && (
         <div className="space-y-6">
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="glass-card rounded-2xl p-6 hover:scale-105 transition-transform">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">Total Members</p>
-                  <p className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-blue-800 bg-clip-text text-transparent">
-                    {totalMembers}
-                  </p>
-                </div>
-                <div className="p-3 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-600 shadow-lg">
-                  <Users className="w-8 h-8 text-white" />
-                </div>
+          {/* Overview Metrics */}
+          <div className="bg-white/80 glass-card rounded-3xl p-6 border border-white/20 shadow-xl">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="bg-gradient-to-br from-slate-700 to-slate-900 p-2.5 rounded-xl">
+                <Activity className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-slate-900">Member Overview</h3>
+                <p className="text-xs text-slate-600">Key member metrics for selected formats</p>
               </div>
             </div>
 
-            <div className="glass-card rounded-2xl p-6 hover:scale-105 transition-transform">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">Consistent Attendees</p>
-                  <p className="text-3xl font-bold bg-gradient-to-r from-green-600 to-green-800 bg-clip-text text-transparent">
-                    {consistentMembers}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {totalMembers > 0 ? ((consistentMembers / totalMembers) * 100).toFixed(1) : 0}%
-                  </p>
-                </div>
-                <div className="p-3 rounded-2xl bg-gradient-to-br from-green-500 to-green-600 shadow-lg">
-                  <Target className="w-8 h-8 text-white" />
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+              <div className="text-center">
+                <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Total Members</div>
+                <div className="text-2xl font-bold text-slate-900">{totalMembers}</div>
+              </div>
+
+              <div className="text-center">
+                <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Active</div>
+                <div className="flex items-center justify-center">
+                  <span className="inline-flex px-2.5 py-1 rounded-lg text-sm font-bold border border-green-200 text-green-800 min-w-[3rem] justify-center">
+                    {activeMembers}
+                  </span>
                 </div>
               </div>
-            </div>
 
-            <div className="glass-card rounded-2xl p-6 hover:scale-105 transition-transform">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">Avg Consistency</p>
-                  <p className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-purple-800 bg-clip-text text-transparent">
-                    {avgConsistencyScore.toFixed(0)}/100
-                  </p>
-                </div>
-                <div className="p-3 rounded-2xl bg-gradient-to-br from-purple-500 to-purple-600 shadow-lg">
-                  <CheckCircle className="w-8 h-8 text-white" />
+              <div className="text-center">
+                <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">At Risk</div>
+                <div className="flex items-center justify-center">
+                  <span className="inline-flex px-2.5 py-1 rounded-lg text-sm font-bold border border-yellow-200 text-yellow-800 min-w-[3rem] justify-center">
+                    {atRiskMembers}
+                  </span>
                 </div>
               </div>
-            </div>
 
-            <div className="glass-card rounded-2xl p-6 hover:scale-105 transition-transform">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-gray-600">Avg Cancellation Rate</p>
-                  <p className="text-3xl font-bold bg-gradient-to-r from-orange-600 to-orange-800 bg-clip-text text-transparent">
-                    {avgCancellationRate.toFixed(1)}%
-                  </p>
+              <div className="text-center">
+                <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Churned</div>
+                <div className="flex items-center justify-center">
+                  <span className="inline-flex px-2.5 py-1 rounded-lg text-sm font-bold border border-red-200 text-red-800 min-w-[3rem] justify-center">
+                    {churnedMembers.length}
+                  </span>
                 </div>
-                <div className="p-3 rounded-2xl bg-gradient-to-br from-orange-500 to-orange-600 shadow-lg">
-                  <AlertCircle className="w-8 h-8 text-white" />
-                </div>
+              </div>
+
+              <div className="text-center">
+                <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Avg Visits</div>
+                <div className="text-2xl font-bold text-slate-900">{avgVisitsPerMember.toFixed(1)}</div>
+              </div>
+
+              <div className="text-center">
+                <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Revenue</div>
+                <div className="text-xl font-bold text-slate-900">{formatCurrency(totalRevenue, true)}</div>
               </div>
             </div>
           </div>
 
-          {/* Charts Row */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Booking Pattern Distribution */}
-            <div className="glass-card rounded-2xl p-6">
-              <h3 className="text-xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent mb-4">
-                Booking Patterns
-              </h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie
-                    data={bookingPatternData}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                    outerRadius={80}
-                    fill="#8884d8"
-                    dataKey="value"
-                  >
-                    {bookingPatternData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
+          {/* Top Attendees */}
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+            <div className="p-6 border-b border-slate-200">
+              <div className="flex items-center gap-3">
+                <div className="bg-gradient-to-br from-green-700 to-green-900 p-2.5 rounded-xl">
+                  <Award className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900">Top Attendees</h3>
+                  <p className="text-xs text-slate-600">Most frequent visitors for selected classes</p>
+                </div>
+              </div>
             </div>
 
-            {/* New vs Returning */}
-            <div className="glass-card rounded-2xl p-6">
-              <h3 className="text-xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent mb-4">
-                Member Mix
-              </h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie
-                    data={memberTypeData}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
-                    outerRadius={80}
-                    fill="#8884d8"
-                    dataKey="value"
-                  >
-                    {memberTypeData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Cohort Overview */}
-          <div className="glass-card rounded-2xl p-6">
-            <h3 className="text-xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent mb-4">
-              Member Cohorts
-            </h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={cohortData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="name" stroke="#6b7280" />
-                <YAxis stroke="#6b7280" />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: 'white',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '12px',
-                    boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                  }}
-                />
-                <Legend />
-                <Bar dataKey="members" fill="#3b82f6" name="Members" />
-                <Bar dataKey="classes" fill="#10b981" name="Total Classes" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {/* Patterns Tab */}
-      {activeTab === 'patterns' && (
-        <div className="space-y-6">
-          <div className="glass-card rounded-2xl p-6">
-            <h3 className="text-xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent mb-4">
-              Member Attendance Patterns
-            </h3>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto max-h-[500px] overflow-y-auto scrollbar-thin">
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b-2 border-gray-200">
-                    <th className="text-left py-3 px-4 text-gray-700 font-semibold">Member</th>
-                    <th className="text-left py-3 px-4 text-gray-700 font-semibold">Pattern</th>
-                    <th className="text-right py-3 px-4 text-gray-700 font-semibold">Classes</th>
-                    <th className="text-right py-3 px-4 text-gray-700 font-semibold">Consistency</th>
-                    <th className="text-right py-3 px-4 text-gray-700 font-semibold">Cancel Rate</th>
-                    <th className="text-left py-3 px-4 text-gray-700 font-semibold">Top Class</th>
+                <thead className="bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white sticky top-0 z-10">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider">Member</th>
+                    <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider">Email</th>
+                    <th className="px-3 py-2 text-right font-bold text-[10px] uppercase tracking-wider">Visits</th>
+                    <th className="px-3 py-2 text-right font-bold text-[10px] uppercase tracking-wider">Frequency</th>
+                    <th className="px-3 py-2 text-right font-bold text-[10px] uppercase tracking-wider">Cancel %</th>
+                    <th className="px-3 py-2 text-right font-bold text-[10px] uppercase tracking-wider">Show Up</th>
+                    <th className="px-3 py-2 text-right font-bold text-[10px] uppercase tracking-wider">Revenue</th>
+                    <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider">Pref. Day</th>
+                    <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider">Pref. Time</th>
+                    <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider">Last Visit</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {memberPatterns.slice(0, 50).map((member, idx) => {
-                    const topClass = Object.entries(member.classLoyalty).sort((a, b) => b[1] - a[1])[0];
-                    return (
-                      <tr key={idx} className="border-b border-gray-100 hover:bg-blue-50 transition-colors">
-                        <td className="py-3 px-4 text-gray-900 font-medium">{member.memberName}</td>
-                        <td className="py-3 px-4">
-                          <span
-                            className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                              member.bookingPattern === 'consistent'
-                                ? 'bg-green-100 text-green-700'
-                                : member.bookingPattern === 'random'
-                                ? 'bg-orange-100 text-orange-700'
-                                : 'bg-blue-100 text-blue-700'
-                            }`}
-                          >
-                            {member.bookingPattern}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-right text-gray-900 font-medium">{member.totalClasses}</td>
-                        <td className="py-3 px-4 text-right text-gray-900 font-medium">{member.consistencyScore}/100</td>
-                        <td className="py-3 px-4 text-right text-gray-900 font-medium">{member.cancellationRate.toFixed(1)}%</td>
-                        <td className="py-3 px-4 text-gray-700">{topClass ? `${topClass[0]} (${topClass[1]}x)` : '-'}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Booking Behavior Tab */}
-      {activeTab === 'booking' && (
-        <div className="space-y-6">
-          {/* By Payment Category */}
-          <div className="glass-card rounded-2xl p-6">
-            <h3 className="text-xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent mb-4">
-              Booking Behavior by Payment Type
-            </h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b-2 border-gray-200">
-                    <th className="text-left py-3 px-4 text-gray-700 font-semibold">Payment Type</th>
-                    <th className="text-right py-3 px-4 text-gray-700 font-semibold">Members</th>
-                    <th className="text-right py-3 px-4 text-gray-700 font-semibold">Bookings</th>
-                    <th className="text-right py-3 px-4 text-gray-700 font-semibold">Cancel Rate</th>
-                    <th className="text-right py-3 px-4 text-gray-700 font-semibold">Show Up</th>
-                    <th className="text-right py-3 px-4 text-gray-700 font-semibold">Revenue</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bookingByPayment.map((behavior, idx) => (
-                    <tr key={idx} className="border-b border-gray-100 hover:bg-blue-50 transition-colors">
-                      <td className="py-3 px-4 text-gray-900 font-semibold">{behavior.segment}</td>
-                      <td className="py-3 px-4 text-right text-gray-900">{behavior.totalMembers}</td>
-                      <td className="py-3 px-4 text-right text-gray-900">{behavior.totalBookings}</td>
-                      <td className="py-3 px-4 text-right">
-                        <span className={behavior.cancellationRate > 20 ? 'text-red-600 font-semibold' : 'text-green-600 font-semibold'}>
-                          {behavior.cancellationRate.toFixed(1)}%
+                <tbody className="divide-y divide-slate-100">
+                  {topAttendees.map((member, index) => (
+                    <tr key={index} className="hover:bg-slate-50 transition-colors max-h-[35px] h-[35px]">
+                      <td className="px-3 py-2 font-semibold text-slate-900 text-xs whitespace-nowrap truncate max-w-[150px]">
+                        {member.memberName}
+                      </td>
+                      <td className="px-3 py-2 text-slate-700 text-xs whitespace-nowrap truncate max-w-[150px]">
+                        {member.email}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-900 font-bold text-xs whitespace-nowrap">
+                        {member.totalCheckIns}
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-700 text-xs whitespace-nowrap">
+                        {member.visitFrequency > 0 ? `${member.visitFrequency.toFixed(0)}d` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <span className={`inline-flex px-2.5 py-1 rounded text-xs font-bold border min-w-[2.5rem] justify-center ${
+                          member.cancellationRate > 20 ? 'border-red-200 text-red-800' : 'border-green-200 text-green-800'
+                        }`}>
+                          {member.cancellationRate.toFixed(0)}%
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-right text-green-600 font-semibold">{behavior.showUpRate.toFixed(1)}%</td>
-                      <td className="py-3 px-4 text-right text-gray-900 font-semibold">₹{behavior.totalRevenue.toLocaleString()}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <span className={`inline-flex px-2.5 py-1 rounded text-xs font-bold border min-w-[2.5rem] justify-center ${
+                          member.showUpRate >= 80 ? 'border-green-200 text-green-800' :
+                          member.showUpRate >= 60 ? 'border-yellow-200 text-yellow-800' :
+                          'border-red-200 text-red-800'
+                        }`}>
+                          {member.showUpRate.toFixed(0)}%
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-900 font-bold text-xs whitespace-nowrap">
+                        {formatCurrency(member.totalRevenue)}
+                      </td>
+                      <td className="px-3 py-2 text-slate-700 text-xs whitespace-nowrap">
+                        {member.preferredDay}
+                      </td>
+                      <td className="px-3 py-2 text-slate-700 text-xs whitespace-nowrap">
+                        {member.preferredTime}
+                      </td>
+                      <td className="px-3 py-2 text-slate-700 text-xs whitespace-nowrap">
+                        {format(parseISO(member.lastVisit), 'MMM dd, yyyy')}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -378,92 +504,158 @@ export const MemberBehaviorAnalytics: React.FC = () => {
             </div>
           </div>
 
-          {/* By Class Type */}
-          <div className="glass-card rounded-2xl p-6">
-            <h3 className="text-xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent mb-4">
-              Booking Behavior by Class
-            </h3>
-            <ResponsiveContainer width="100%" height={400}>
-              <BarChart data={bookingByClass.slice(0, 10)}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="segment" stroke="#6b7280" angle={-45} textAnchor="end" height={100} />
-                <YAxis stroke="#6b7280" />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: 'white',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '12px',
-                    boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                  }}
-                />
-                <Legend />
-                <Bar dataKey="totalMembers" fill="#3b82f6" name="Members" />
-                <Bar dataKey="consistentMembers" fill="#10b981" name="Consistent" />
-                <Bar dataKey="randomMembers" fill="#f59e0b" name="Random" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {/* Churned Members */}
+          {churnedMembers.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+              <div className="p-6 border-b border-slate-200">
+                <div className="flex items-center gap-3">
+                  <div className="bg-gradient-to-br from-red-700 to-red-900 p-2.5 rounded-xl">
+                    <TrendingDown className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900">Churned Members</h3>
+                    <p className="text-xs text-slate-600">Regular visitors who stopped attending</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto max-h-[500px] overflow-y-auto scrollbar-thin">
+                <table className="w-full text-sm">
+                  <thead className="bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white sticky top-0 z-10">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider">Member</th>
+                      <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider">Email</th>
+                      <th className="px-3 py-2 text-right font-bold text-[10px] uppercase tracking-wider">Total Visits</th>
+                      <th className="px-3 py-2 text-right font-bold text-[10px] uppercase tracking-wider">Was Visiting Every</th>
+                      <th className="px-3 py-2 text-right font-bold text-[10px] uppercase tracking-wider">Days Since Last</th>
+                      <th className="px-3 py-2 text-right font-bold text-[10px] uppercase tracking-wider">Revenue Lost</th>
+                      <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider">Last Visit</th>
+                      <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider">Pref. Day</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {churnedMembers.map((member, index) => (
+                      <tr key={index} className="hover:bg-red-50 transition-colors max-h-[35px] h-[35px]">
+                        <td className="px-3 py-2 font-semibold text-slate-900 text-xs whitespace-nowrap truncate max-w-[150px]">
+                          {member.memberName}
+                        </td>
+                        <td className="px-3 py-2 text-slate-700 text-xs whitespace-nowrap truncate max-w-[150px]">
+                          {member.email}
+                        </td>
+                        <td className="px-3 py-2 text-right text-slate-900 font-bold text-xs whitespace-nowrap">
+                          {member.totalCheckIns}
+                        </td>
+                        <td className="px-3 py-2 text-right text-slate-700 text-xs whitespace-nowrap">
+                          ~{member.previousFrequency.toFixed(0)} days
+                        </td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          <span className="inline-flex px-2.5 py-1 rounded text-xs font-bold border border-red-200 text-red-800 min-w-[2.5rem] justify-center">
+                            {member.daysSinceLastClass}d
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right text-red-700 font-bold text-xs whitespace-nowrap">
+                          {formatCurrency(member.totalRevenue)}
+                        </td>
+                        <td className="px-3 py-2 text-slate-700 text-xs whitespace-nowrap">
+                          {format(parseISO(member.lastVisit), 'MMM dd, yyyy')}
+                        </td>
+                        <td className="px-3 py-2 text-slate-700 text-xs whitespace-nowrap">
+                          {member.preferredDay}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Trainer Change Impact */}
+          {trainerChanges.length > 0 && (
+            <div className="space-y-6">
+              {trainerChanges.map((change, idx) => (
+                <div key={idx} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+                  <div className="p-6 border-b border-slate-200 bg-orange-50">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="bg-gradient-to-br from-orange-700 to-orange-900 p-2.5 rounded-xl">
+                        <AlertTriangle className="w-6 h-6 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-bold text-slate-900">Trainer Change Impact: {change.className}</h3>
+                        <p className="text-xs text-slate-600">Attendance dropped {change.dropPercentage}% after trainer change</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-4">
+                      <div className="bg-white rounded-xl p-3 border border-slate-200">
+                        <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Old Trainer</div>
+                        <div className="text-sm font-bold text-slate-900">{change.oldTrainer}</div>
+                      </div>
+                      <div className="bg-white rounded-xl p-3 border border-slate-200">
+                        <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">New Trainer</div>
+                        <div className="text-sm font-bold text-slate-900">{change.newTrainer}</div>
+                      </div>
+                      <div className="bg-white rounded-xl p-3 border border-slate-200">
+                        <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Avg Before</div>
+                        <div className="text-sm font-bold text-green-700">{change.attendanceBeforeChange}</div>
+                      </div>
+                      <div className="bg-white rounded-xl p-3 border border-slate-200">
+                        <div className="text-xs font-semibold text-slate-600 uppercase tracking-wider mb-1">Avg After</div>
+                        <div className="text-sm font-bold text-red-700">{change.attendanceAfterChange}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-6">
+                    <h4 className="text-sm font-bold text-slate-900 mb-3">Members Who Stopped Attending ({change.droppedMembers.length})</h4>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-slate-100 border-b border-slate-200">
+                          <tr>
+                            <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider text-slate-700">Member</th>
+                            <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider text-slate-700">Email</th>
+                            <th className="px-3 py-2 text-right font-bold text-[10px] uppercase tracking-wider text-slate-700">Classes w/ Old Trainer</th>
+                            <th className="px-3 py-2 text-left font-bold text-[10px] uppercase tracking-wider text-slate-700">Last Visit Before Change</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {change.droppedMembers.map((member, mIdx) => (
+                            <tr key={mIdx} className="hover:bg-slate-50 max-h-[35px] h-[35px]">
+                              <td className="px-3 py-2 font-semibold text-slate-900 text-xs whitespace-nowrap truncate max-w-[150px]">
+                                {member.memberName}
+                              </td>
+                              <td className="px-3 py-2 text-slate-700 text-xs whitespace-nowrap truncate max-w-[150px]">
+                                {member.email}
+                              </td>
+                              <td className="px-3 py-2 text-right text-slate-900 font-bold text-xs whitespace-nowrap">
+                                {member.totalVisitsWithOldTrainer}
+                              </td>
+                              <td className="px-3 py-2 text-slate-700 text-xs whitespace-nowrap">
+                                {format(parseISO(member.lastVisitBeforeChange), 'MMM dd, yyyy')}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Cohorts Tab */}
-      {activeTab === 'cohorts' && (
-        <div className="space-y-6">
-          {cohorts.map((cohort, idx) => (
-            <div key={idx} className="glass-card rounded-2xl p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-2xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent capitalize">
-                  {cohort.cohortType} Members
-                </h3>
-                <span className="text-3xl font-bold text-blue-600">{cohort.memberCount}</span>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                <div>
-                  <p className="text-sm text-gray-600 font-medium">Avg Classes</p>
-                  <p className="text-2xl font-bold text-gray-900">{cohort.averageClassesPerMember.toFixed(1)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600 font-medium">Avg Revenue</p>
-                  <p className="text-2xl font-bold text-gray-900">₹{cohort.averageRevenuePerMember.toFixed(0)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600 font-medium">Cancel Rate</p>
-                  <p className="text-2xl font-bold text-orange-600">{cohort.cancellationRate.toFixed(1)}%</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600 font-medium">Retention</p>
-                  <p className="text-2xl font-bold text-green-600">{cohort.retentionRate.toFixed(1)}%</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <h4 className="text-sm font-semibold text-gray-700 mb-2">Payment Mix</h4>
-                  <div className="space-y-2">
-                    {Object.entries(cohort.paymentMix).map(([key, value]) => (
-                      <div key={key} className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700 capitalize">{key}</span>
-                        <span className="text-sm font-semibold text-gray-900">{value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <h4 className="text-sm font-semibold text-gray-700 mb-2">Top Classes</h4>
-                  <div className="space-y-2">
-                    {cohort.preferredClasses.slice(0, 5).map((cls, i) => (
-                      <div key={i} className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700">{cls.className}</span>
-                        <span className="text-sm font-semibold text-gray-900">{cls.count}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
+      {/* Empty State */}
+      {selectedFormats.length === 0 && (
+        <div className="bg-white/80 glass-card rounded-3xl p-16 border border-white/20 shadow-2xl text-center">
+          <div className="bg-slate-100 w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <Users className="w-10 h-10 text-slate-400" />
+          </div>
+          <h3 className="text-2xl font-bold text-slate-700 mb-3">Select Class Formats to Begin</h3>
+          <p className="text-slate-500 max-w-md mx-auto leading-relaxed">
+            Choose one or more class formats to analyze member behavior, identify churned members, and detect trainer change impacts
+          </p>
         </div>
       )}
     </div>

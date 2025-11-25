@@ -23,7 +23,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
   const [sheetsError, setSheetsError] = useState<string | null>(null);
   const { setRawData, setCheckinsData, rawData } = useDashboardStore();
 
-  // Load data from Google Sheets on mount
+  // Load data on mount
   useEffect(() => {
     const loadInitialData = async () => {
       // Only load if no data is present
@@ -48,7 +48,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
           // Update active classes data in store
           if (activeClassesData && Object.keys(activeClassesData).length > 0) {
             useDashboardStore.setState({ activeClassesData });
-            console.log('✅ Loaded active classes from Google Sheets:', {
+            console.log('✅ Loaded active classes:', {
               days: Object.keys(activeClassesData),
               totalClasses: Object.values(activeClassesData).reduce((sum, classes) => sum + classes.length, 0)
             });
@@ -57,7 +57,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
           // Update checkins data in store
           if (checkinsData && checkinsData.length > 0) {
             setCheckinsData(checkinsData);
-            console.log('✅ Loaded checkins from Google Sheets:', {
+            console.log('✅ Loaded checkins:', {
               totalCheckins: checkinsData.length,
               uniqueMembers: new Set(checkinsData.map(c => c.MemberID)).size,
               uniqueSessions: new Set(checkinsData.map(c => c.UniqueID1)).size
@@ -69,8 +69,8 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
           }, 500);
         }
       } catch (error) {
-        console.error('Error loading data from Google Sheets:', error);
-        setSheetsError(error instanceof Error ? error.message : 'Failed to load data from Google Sheets');
+        console.error('Error loading data:', error);
+        setSheetsError(error instanceof Error ? error.message : 'Failed to load data');
       } finally {
         setIsLoadingFromSheets(false);
       }
@@ -213,7 +213,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
     <div className="glass-card rounded-3xl p-8">
       <h2 className="text-2xl font-bold mb-6 text-gray-800">Upload Session Data</h2>
 
-      {/* Loading from Google Sheets indicator */}
+      {/* Loading indicator */}
       {isLoadingFromSheets && (
         <div className="mb-6 p-4 rounded-xl bg-blue-50 border border-blue-200">
           <div className="flex items-center gap-3">
@@ -221,7 +221,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
             <div className="flex items-center gap-2">
               <Cloud className="w-5 h-5 text-blue-600" />
               <p className="text-sm font-medium text-blue-800">
-                Loading data from Google Sheets...
+                Loading data...
               </p>
             </div>
           </div>
@@ -235,7 +235,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
             <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-medium text-amber-800">
-                Could not load data from Google Sheets
+                Could not load data
               </p>
               <p className="text-xs text-amber-700 mt-1">{sheetsError}</p>
               <p className="text-xs text-amber-600 mt-2">
