@@ -156,6 +156,18 @@ export async function loadSessionsFromGoogleSheets(): Promise<SessionData[]> {
           Waitlisted: parseInt(String(row[getColumnIndex('Waitlisted')] || '0')) || 0,
         };
 
+        // Debug: Log sessions with evening times
+        const timeStr = session.Time.toLowerCase();
+        if (timeStr.includes('20:') || timeStr.includes('8') && (timeStr.includes('pm') || timeStr.includes('p.m'))) {
+          console.log('🕐 Evening session found:', {
+            time: session.Time,
+            class: session.Class,
+            day: session.Day,
+            location: session.Location,
+            date: session.Date
+          });
+        }
+
         // Only add valid sessions (with required data)
         if (session.SessionID && session.Date) {
           sessionData.push(session);
