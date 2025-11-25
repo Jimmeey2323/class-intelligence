@@ -56,8 +56,8 @@ function App() {
               className="relative"
             >
               <img 
-                src="/images/Photoroom_20241014_101748.PNG" 
-                alt="Brand Logo" 
+                src="https://physique57india.com/wp-content/themes/p57/assets/images/logo.png" 
+                alt="Physique 57 Logo" 
                 className="w-12 h-12 sm:w-16 sm:h-16 object-contain drop-shadow-lg"
               />
             </motion.div>
