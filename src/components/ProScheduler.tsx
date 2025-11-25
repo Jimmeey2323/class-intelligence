@@ -2943,7 +2943,7 @@ function ProScheduler() {
                                       <div key={format} className="relative">
                                         <div className="flex items-center justify-between text-xs mb-0.5">
                                           <span className="font-medium text-slate-700 truncate">
-                                            {formatLabels[format]}
+                                            {formatLabels[format as keyof typeof formatLabels]}
                                           </span>
                                           <span className="font-bold text-slate-600 ml-1">
                                             {count}
@@ -2954,7 +2954,7 @@ function ProScheduler() {
                                             initial={{ width: 0 }}
                                             animate={{ width: `${percentage}%` }}
                                             transition={{ delay: 0.2, duration: 0.8 }}
-                                            className={`h-full ${formatColors[format]} rounded-full shadow-sm`}
+                                            className={`h-full ${formatColors[format as keyof typeof formatColors]} rounded-full shadow-sm`}
                                           />
                                         </div>
                                       </div>
@@ -2968,14 +2968,13 @@ function ProScheduler() {
                                 <div className="flex flex-wrap gap-1">
                                   {Array.from(new Set(dayClasses.map(cls => cls.time)))
                                     .sort()
-                                    .slice(0, 4)
                                     .map((time) => {
                                       const timeClasses = dayClasses.filter(cls => cls.time === time);
                                       const dominantFormat = getFormatCategory(timeClasses[0].class);
                                       return (
                                         <div
                                           key={time}
-                                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium text-white shadow-sm ${formatColors[dominantFormat]}`}
+                                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium text-white shadow-sm ${formatColors[dominantFormat as keyof typeof formatColors]}`}
                                           title={`${time} - ${timeClasses.length} class${timeClasses.length > 1 ? 'es' : ''}`}
                                         >
                                           {time.slice(0, 5)}
@@ -2987,11 +2986,6 @@ function ProScheduler() {
                                         </div>
                                       );
                                     })}
-                                  {dayClasses.length > 4 && (
-                                    <div className="text-[10px] text-slate-400 px-1 py-0.5">
-                                      +{Array.from(new Set(dayClasses.map(cls => cls.time))).length - 4} more
-                                    </div>
-                                  )}
                                 </div>
                               </div>
                               

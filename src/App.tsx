@@ -4,7 +4,7 @@ import { useDashboardStore } from './store/dashboardStore';
 import FileUpload from './components/FileUpload';
 import FilterSection from './components/FilterSection';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { LayoutDashboard, Target, Users, Sparkles, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, Target, Users, Sparkles, BarChart3, Brain } from 'lucide-react';
 import LoadingSkeletons from './components/LoadingSkeletons';
 
 // Lazy load all heavy components
@@ -14,8 +14,9 @@ const MetricsCardsEnhanced = lazy(() => import('./components/MetricsCardsEnhance
 const ProScheduler = lazy(() => import('./components/ProScheduler'));
 const MemberBehaviorAnalytics = lazy(() => import('./components/MemberBehaviorAnalytics').then(module => ({ default: module.MemberBehaviorAnalytics })));
 const ClassDeepDive = lazy(() => import('./components/ClassDeepDive'));
+const Insights = lazy(() => import('./components/Insights'));
 
-type ViewTab = 'dashboard' | 'pro-scheduler' | 'members' | 'class-dive';
+type ViewTab = 'dashboard' | 'pro-scheduler' | 'members' | 'class-dive' | 'insights';
 
 function App() {
   const { rawData } = useDashboardStore();
@@ -174,6 +175,20 @@ function App() {
             <span className="hidden sm:inline relative z-10">Class Deep Dive</span>
             <span className="sm:hidden relative z-10">Deep Dive</span>
           </motion.button>
+          <motion.button
+            onClick={() => setActiveView('insights')}
+            whileHover={{ scale: activeView !== 'insights' ? 1.02 : 1 }}
+            whileTap={{ scale: 0.98 }}
+            className={`px-4 sm:px-6 py-2.5 sm:py-3 rounded-xl font-bold transition-all duration-300 flex items-center gap-2 touch-manipulation min-h-[44px] whitespace-nowrap relative overflow-hidden ${
+              activeView === 'insights'
+                ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white shadow-xl scale-105 border border-blue-500/30'
+                : 'text-slate-700 hover:bg-white/60 active:scale-95 border border-transparent hover:border-slate-300'
+            }`}
+          >
+            <Brain className="w-4 h-4 sm:w-5 sm:h-5 relative z-10" />
+            <span className="hidden sm:inline relative z-10">Insights</span>
+            <span className="sm:hidden relative z-10">Insights</span>
+          </motion.button>
         </motion.div>
       )}
 
@@ -245,6 +260,22 @@ function App() {
             <ErrorBoundary fallbackTitle="Class Deep Dive Error">
               <Suspense fallback={<LoadingSkeletons />}>
                 <ClassDeepDive />
+              </Suspense>
+            </ErrorBoundary>
+          </motion.div>
+        )}
+
+        {hasData && activeView === 'insights' && (
+          <motion.div
+            key="insights"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: 0.4 }}
+          >
+            <ErrorBoundary fallbackTitle="Strategic Insights Error">
+              <Suspense fallback={<LoadingSkeletons />}>
+                <Insights />
               </Suspense>
             </ErrorBoundary>
           </motion.div>
