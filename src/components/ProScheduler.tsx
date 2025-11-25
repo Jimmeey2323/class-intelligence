@@ -258,7 +258,7 @@ function ProScheduler() {
   const [filters, setFilters] = useState<ProSchedulerFilters>({
     dateFrom: new Date('2025-08-01'), // August 1, 2025
     dateTo: new Date(), // Current date (no future dates)
-    locations: [],
+    locations: ['Kwality House, Kemps Corner', 'Supreme HQ, Bandra'],
     trainers: [],
     classes: [],
     activeOnly: true
@@ -312,6 +312,34 @@ function ProScheduler() {
     
     // All others are intermediate
     return 'intermediate';
+  };
+  
+  // Enhanced format classification for heatmap colors
+  const getFormatCategory = (className: string): string => {
+    const name = className.toLowerCase().trim();
+    
+    // Yoga family
+    if (name.includes('yoga') || name.includes('vinyasa') || name.includes('hatha')) return 'yoga';
+    // Pilates family  
+    if (name.includes('pilates') || name.includes('mat') || name.includes('reformer')) return 'pilates';
+    // High intensity
+    if (name.includes('hiit') || name.includes('amped') || name.includes('intensity')) return 'hiit';
+    // Cycling
+    if (name.includes('spin') || name.includes('cycle') || name.includes('powercycle')) return 'cycle';
+    // Strength
+    if (name.includes('strength') || name.includes('lab') || name.includes('weight')) return 'strength';
+    // Barre
+    if (name.includes('barre')) return 'barre';
+    // Boxing/Combat
+    if (name.includes('box') || name.includes('combat') || name.includes('kickbox')) return 'boxing';
+    // Dance
+    if (name.includes('dance') || name.includes('zumba') || name.includes('rhythm')) return 'dance';
+    // Cardio
+    if (name.includes('cardio') || name.includes('burn') || name.includes('sweat')) return 'cardio';
+    // Functional
+    if (name.includes('functional') || name.includes('movement') || name.includes('mobility')) return 'functional';
+    
+    return 'general';
   };
   
   // ESC key handler for member details modal
@@ -1249,7 +1277,7 @@ function ProScheduler() {
     { key: 'Sunday', short: 'Sun', full: 'Sunday' }
   ];
 
-  const TIME_SLOTS = Array.from({ length: 56 }, (_, i) => {
+  const TIME_SLOTS = Array.from({ length: 60 }, (_, i) => {
     const hour = Math.floor(i / 4) + 6;
     const minute = (i % 4) * 15;
     const time24 = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
@@ -2552,25 +2580,31 @@ function ProScheduler() {
                         
                         return (
                           <div key={day.key} className="flex-1 min-w-[280px] border-r-2 border-gray-300 last:border-r-0">
-                            {/* Day Header */}
-                            <div className="bg-gradient-to-br from-blue-100 to-indigo-100 border-b border-gray-300 p-2 text-center">
-                              <div className="font-bold text-gray-900 text-sm">{day.short}</div>
-                              <div className="text-xs text-gray-600 mt-0.5">{dayClasses.length} classes</div>
+                            {/* Day Header - Minimalistic Design */}
+                            <div className="bg-gradient-to-br from-slate-50 to-blue-50 border-b border-gray-200 p-3 text-center">
+                              <div className="font-bold text-gray-900 text-sm mb-1">{day.short}</div>
+                              <div className="inline-flex items-center justify-center bg-white/70 rounded-full px-2 py-0.5 shadow-sm">
+                                <span className="text-xs font-medium text-gray-700">{dayClasses.length}</span>
+                              </div>
                             </div>
-                            {/* Location Sub-headers */}
+                            {/* Location Sub-headers - Minimalistic */}
                             <div className="flex">
                               {activeLocations.map((location, idx) => {
                                 const locationDayClasses = dayClasses.filter(cls => cls.location === location);
                                 return (
                                   <div 
                                     key={`${day.key}-${location}`} 
-                                    className={`flex-1 min-w-[130px] p-2 text-center bg-white border-r border-gray-200 ${idx === activeLocations.length - 1 ? 'border-r-0' : ''}`}
+                                    className={`flex-1 min-w-[130px] p-2 text-center bg-white/90 border-r border-gray-100 ${idx === activeLocations.length - 1 ? 'border-r-0' : ''}`}
                                   >
-                                    <div className="text-xs font-semibold text-gray-700 truncate flex items-center justify-center gap-1" title={location}>
-                                      <MapPin className="w-2.5 h-2.5 text-blue-500" />
-                                      <span>{location.split(' ')[0]}</span>
+                                    <div className="text-[10px] font-semibold text-gray-600 truncate flex items-center justify-center gap-1" title={location}>
+                                      <MapPin className="w-2 h-2 text-blue-400" />
+                                      <span>{location.split(',')[0]}</span>
                                     </div>
-                                    <div className="text-[10px] text-gray-500">{locationDayClasses.length}</div>
+                                    {locationDayClasses.length > 0 && (
+                                      <div className="inline-flex items-center justify-center bg-blue-100 text-blue-700 rounded-full px-1.5 py-0.5 mt-1">
+                                        <span className="text-[9px] font-bold">{locationDayClasses.length}</span>
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -2625,66 +2659,11 @@ function ProScheduler() {
                                     className={`flex-1 min-w-[130px] p-2 min-h-[90px] relative bg-white hover:bg-gray-50/50 transition-colors border-r border-gray-100 ${idx === activeLocations.length - 1 ? 'border-r-0' : ''} overflow-hidden`}
                                   >
                                     <div className="space-y-1">
-                                      {locationSlotClasses.map((cls) => {
-                                        const fillRate = cls.fillRate;
-                                        const hasConflicts = cls.conflicts.length > 0;
-
-                                        return (
-                                          <motion.div
-                                            key={cls.id}
-                                            initial={{ opacity: 0, scale: 0.95 }}
-                                            animate={{ opacity: 1, scale: 1 }}
-                                            whileHover={{ scale: 1.05, zIndex: 20 }}
-                                            onClick={() => handleClassClick(cls)}
-                                            className={`w-full rounded-lg p-2 cursor-pointer transition-all relative border-l-4 ${
-                                              hasConflicts
-                                                ? 'bg-gradient-to-br from-red-50 to-red-100 border-red-600 ring-2 ring-red-300 shadow-md'
-                                                : cls.status === 'Active'
-                                                  ? 'bg-gradient-to-br from-white via-blue-50 to-indigo-50 border-blue-500 shadow-sm hover:shadow-md'
-                                                  : 'bg-gradient-to-br from-gray-50 to-gray-100 border-gray-400 shadow-sm'
-                                            }`}
-                                          >
-                                            {/* Status Badge */}
-                                            {cls.status === 'Active' && (
-                                              <div className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-sm">
-                                                <span className="text-white text-[10px] font-bold">✓</span>
-                                              </div>
-                                            )}
-
-                                            {/* Conflict indicator */}
-                                            {hasConflicts && (
-                                              <div className="absolute top-0.5 left-0.5 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center shadow-sm" title="Has Conflicts!">
-                                                <AlertTriangle className="w-3 h-3 text-white" />
-                                              </div>
-                                            )}
-
-                                            {/* Class Name */}
-                                            <div className={`text-xs font-bold mb-1 truncate ${hasConflicts ? 'text-red-800' : 'text-gray-900'}`} title={cls.class}>
-                                              {cls.class.replace('Studio ', '')}
-                                            </div>
-
-                                            {/* Trainer */}
-                                            <div className={`text-[10px] mb-1 flex items-center gap-0.5 truncate ${hasConflicts ? 'text-red-700' : 'text-gray-700'}`} title={cls.trainer}>
-                                              <span className="font-medium">👤</span>
-                                              <span className="truncate">{cls.trainer.split(' ')[0]}</span>
-                                            </div>
-
-                                            {/* Stats Row */}
-                                            <div className="flex items-center justify-between gap-1">
-                                              <div className={`flex items-center gap-1 text-[10px] ${hasConflicts ? 'text-red-700' : 'text-gray-700'}`}>
-                                                <span className="font-semibold">{cls.avgCheckIns.toFixed(0)}/{cls.capacity}</span>
-                                              </div>
-                                              <span className={`text-[10px] px-1 py-0.5 rounded ${
-                                                fillRate >= 80 ? 'bg-green-100 text-green-700' :
-                                                fillRate >= 50 ? 'bg-yellow-100 text-yellow-700' :
-                                                'bg-red-100 text-red-700'
-                                              }`}>
-                                                {fillRate.toFixed(0)}%
-                                              </span>
-                                            </div>
-                                          </motion.div>
-                                        );
-                                      })}
+                                      {locationSlotClasses.map(cls => (
+                                        <div key={cls.id} className="transform scale-90 origin-top">
+                                          {renderClassCard(cls)}
+                                        </div>
+                                      ))}
                                     </div>
                                   </div>
                                 );
@@ -2875,46 +2854,201 @@ function ProScheduler() {
             </div>
           )}
 
-          {/* Compact List View */}
+          {/* Compact Heatmap View - Day-based Class Mix */}
           {calendarViewMode === 'compact' && (
-            <div className="space-y-2">
-              {filteredClasses.map((cls, idx) => (
-                <motion.div
-                  key={cls.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: idx * 0.02 }}
-                  onClick={() => handleClassClick(cls)}
-                  className="flex items-center justify-between p-4 border border-slate-200 rounded-xl hover:bg-gradient-to-r hover:from-slate-50 hover:to-blue-50 cursor-pointer transition-all shadow-sm hover:shadow-md"
-                >
-                  <div className="flex items-center gap-4 flex-1">
-                    <div className="text-center bg-blue-50 rounded-lg px-3 py-2 border border-blue-200">
-                      <div className="text-xs text-slate-600 font-medium">{cls.day}</div>
-                      <div className="font-bold text-slate-900">{cls.time}</div>
-                    </div>
-                    <div className="flex-1">
-                      <div className="font-bold text-slate-900">{cls.class}</div>
-                      <div className="text-sm text-slate-600">{cls.trainer} • {cls.location}</div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-center">
-                        <div className="text-xs text-slate-500">Fill Rate</div>
-                        <div className={`font-bold text-lg ${cls.fillRate >= 80 ? 'text-green-600' : cls.fillRate >= 60 ? 'text-amber-600' : 'text-red-600'}`}>
-                          {cls.fillRate}%
+            <div className="bg-white rounded-2xl border border-gray-200 shadow-lg overflow-hidden">
+              <div className="bg-gradient-to-r from-slate-100 to-blue-100 px-6 py-4 border-b border-slate-200">
+                <h3 className="font-bold text-slate-900 flex items-center gap-3">
+                  <Calendar className="w-5 h-5 text-blue-600" />
+                  Weekly Class Format Heatmap
+                  <span className="text-xs bg-blue-500 text-white px-3 py-1 rounded-full font-bold">
+                    {filteredClasses.length} classes
+                  </span>
+                </h3>
+              </div>
+
+              <div className="p-6">
+                <div className="grid grid-cols-7 gap-4">
+                  {DAYS_OF_WEEK.map((day) => {
+                    // Get classes for this day
+                    const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
+                    
+                    // Group classes by format category
+                    const formatCounts = dayClasses.reduce((acc, cls) => {
+                      const category = getFormatCategory(cls.class);
+                      acc[category] = (acc[category] || 0) + 1;
+                      return acc;
+                    }, {} as Record<string, number>);
+                    
+                    // Define format colors
+                    const formatColors = {
+                      yoga: 'bg-purple-500',
+                      pilates: 'bg-pink-500',
+                      hiit: 'bg-red-500',
+                      cycle: 'bg-orange-500',
+                      strength: 'bg-blue-500',
+                      boxing: 'bg-gray-500',
+                      dance: 'bg-fuchsia-500',
+                      barre: 'bg-rose-500',
+                      cardio: 'bg-amber-500',
+                      functional: 'bg-teal-500',
+                      general: 'bg-slate-500'
+                    };
+                    
+                    const formatLabels = {
+                      yoga: 'Yoga',
+                      pilates: 'Pilates',
+                      hiit: 'HIIT',
+                      cycle: 'Cycling',
+                      strength: 'Strength',
+                      boxing: 'Boxing',
+                      dance: 'Dance',
+                      barre: 'Barre',
+                      cardio: 'Cardio',
+                      functional: 'Functional',
+                      general: 'General'
+                    };
+                    
+                    return (
+                      <motion.div
+                        key={day.key}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: DAYS_OF_WEEK.indexOf(day) * 0.1 }}
+                        className="bg-gradient-to-b from-slate-50 to-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all"
+                      >
+                        {/* Day Header */}
+                        <div className="bg-gradient-to-r from-blue-100 to-indigo-100 rounded-t-xl p-3 text-center border-b border-slate-200">
+                          <div className="font-bold text-slate-900 text-sm mb-1">{day.short}</div>
+                          <div className="inline-flex items-center justify-center bg-white/70 rounded-full px-2 py-1 shadow-sm">
+                            <span className="text-xs font-medium text-slate-700">{dayClasses.length}</span>
+                          </div>
                         </div>
+                        
+                        {/* Format Heatmap */}
+                        <div className="p-3 space-y-2 min-h-[200px]">
+                          {dayClasses.length === 0 ? (
+                            <div className="text-center text-slate-400 text-xs py-8">
+                              No classes
+                            </div>
+                          ) : (
+                            <>
+                              {/* Format Distribution */}
+                              <div className="space-y-1">
+                                {Object.entries(formatCounts)
+                                  .sort(([,a], [,b]) => b - a)
+                                  .map(([format, count]) => {
+                                    const percentage = (count / dayClasses.length) * 100;
+                                    return (
+                                      <div key={format} className="relative">
+                                        <div className="flex items-center justify-between text-xs mb-0.5">
+                                          <span className="font-medium text-slate-700 truncate">
+                                            {formatLabels[format]}
+                                          </span>
+                                          <span className="font-bold text-slate-600 ml-1">
+                                            {count}
+                                          </span>
+                                        </div>
+                                        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                                          <motion.div
+                                            initial={{ width: 0 }}
+                                            animate={{ width: `${percentage}%` }}
+                                            transition={{ delay: 0.2, duration: 0.8 }}
+                                            className={`h-full ${formatColors[format]} rounded-full shadow-sm`}
+                                          />
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                              </div>
+                              
+                              {/* Time Slots Preview */}
+                              <div className="pt-2 border-t border-slate-100">
+                                <div className="text-xs text-slate-500 mb-1 font-medium">Time Slots:</div>
+                                <div className="flex flex-wrap gap-1">
+                                  {Array.from(new Set(dayClasses.map(cls => cls.time)))
+                                    .sort()
+                                    .slice(0, 4)
+                                    .map((time) => {
+                                      const timeClasses = dayClasses.filter(cls => cls.time === time);
+                                      const dominantFormat = getFormatCategory(timeClasses[0].class);
+                                      return (
+                                        <div
+                                          key={time}
+                                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium text-white shadow-sm ${formatColors[dominantFormat]}`}
+                                          title={`${time} - ${timeClasses.length} class${timeClasses.length > 1 ? 'es' : ''}`}
+                                        >
+                                          {time.slice(0, 5)}
+                                          {timeClasses.length > 1 && (
+                                            <span className="ml-1 bg-white/20 rounded-full px-1">
+                                              {timeClasses.length}
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  {dayClasses.length > 4 && (
+                                    <div className="text-[10px] text-slate-400 px-1 py-0.5">
+                                      +{Array.from(new Set(dayClasses.map(cls => cls.time))).length - 4} more
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              
+                              {/* Quick Stats */}
+                              <div className="pt-2 border-t border-slate-100">
+                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                  <div className="text-center">
+                                    <div className="text-slate-500">Avg Fill</div>
+                                    <div className={`font-bold ${
+                                      dayClasses.reduce((sum, cls) => sum + cls.fillRate, 0) / dayClasses.length >= 75 
+                                        ? 'text-green-600' 
+                                        : 'text-amber-600'
+                                    }`}>
+                                      {Math.round(dayClasses.reduce((sum, cls) => sum + cls.fillRate, 0) / dayClasses.length)}%
+                                    </div>
+                                  </div>
+                                  <div className="text-center">
+                                    <div className="text-slate-500">Formats</div>
+                                    <div className="font-bold text-blue-600">
+                                      {Object.keys(formatCounts).length}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+                
+                {/* Legend */}
+                <div className="mt-6 bg-slate-50 rounded-xl p-4 border border-slate-200">
+                  <h4 className="font-semibold text-slate-800 text-sm mb-3">Format Legend</h4>
+                  <div className="grid grid-cols-3 md:grid-cols-6 lg:grid-cols-11 gap-2">
+                    {Object.entries({
+                      yoga: { label: 'Yoga', color: 'bg-purple-500' },
+                      pilates: { label: 'Pilates', color: 'bg-pink-500' },
+                      hiit: { label: 'HIIT', color: 'bg-red-500' },
+                      cycle: { label: 'Cycling', color: 'bg-orange-500' },
+                      strength: { label: 'Strength', color: 'bg-blue-500' },
+                      boxing: { label: 'Boxing', color: 'bg-gray-500' },
+                      dance: { label: 'Dance', color: 'bg-fuchsia-500' },
+                      barre: { label: 'Barre', color: 'bg-rose-500' },
+                      cardio: { label: 'Cardio', color: 'bg-amber-500' },
+                      functional: { label: 'Functional', color: 'bg-teal-500' },
+                      general: { label: 'General', color: 'bg-slate-500' }
+                    }).map(([key, { label, color }]) => (
+                      <div key={key} className="flex items-center gap-2">
+                        <div className={`w-3 h-3 rounded-full ${color} shadow-sm`}></div>
+                        <span className="text-xs font-medium text-slate-700">{label}</span>
                       </div>
-                      <div className="text-center">
-                        <div className="text-xs text-slate-500">Avg</div>
-                        <div className="font-bold text-lg text-slate-900">{cls.avgCheckIns}</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-xs text-slate-500">Sessions</div>
-                        <div className="font-bold text-lg text-blue-600">{cls.sessionCount}</div>
-                      </div>
-                    </div>
+                    ))}
                   </div>
-                </motion.div>
-              ))}
+                </div>
+              </div>
             </div>
           )}
 

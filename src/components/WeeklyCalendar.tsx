@@ -197,7 +197,7 @@ const detectTrainerConflicts = (calendarClasses: CalendarClass[], selectedDay: D
 
 // Time configuration constants - defined outside component to ensure stability
 const CALENDAR_START_HOUR = 7;
-const CALENDAR_END_HOUR = 22;
+const CALENDAR_END_HOUR = 22; // Display up to 21:00 (9 PM) - allows slots until 21:30
 const TIME_SLOT_HEIGHT = 100; // px per 30min slot
 
 export default function WeeklyCalendar() {
@@ -324,9 +324,11 @@ export default function WeeklyCalendar() {
     });
   }, [rawData]);
 
-  // Create time slots every 30 minutes (2 slots per hour) - memoized to prevent recalculation
+  // Create time slots every 30 minutes (2 slots per hour) - memoized to prevent recalculation  
   const timeSlots = useMemo(() => {
-    return Array.from({ length: (CALENDAR_END_HOUR - CALENDAR_START_HOUR) * 2 }, (_, i) => {
+    // Calculate total slots needed to reach exactly 21:00 (not 21:30)
+    const totalSlots = (CALENDAR_END_HOUR - CALENDAR_START_HOUR) * 2 - 1; // Subtract 1 to end at 21:00 not 21:30
+    return Array.from({ length: totalSlots }, (_, i) => {
       const hour = Math.floor(i / 2) + CALENDAR_START_HOUR;
       const minute = (i % 2) * 30;
       return { hour, minute, label: `${hour % 12 || 12}:${minute.toString().padStart(2, '0')} ${hour >= 12 ? 'PM' : 'AM'}` };
