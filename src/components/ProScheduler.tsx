@@ -2608,7 +2608,7 @@ function ProScheduler() {
                   {/* Header Row - Days with Location Sub-columns */}
                   <div className="sticky top-0 z-20 bg-gradient-to-r from-gray-100 to-gray-200 shadow-sm border-b-2 border-gray-300">
                     <div className="flex">
-                      <div className="flex-shrink-0 w-24 border-r-2 border-gray-300 p-3 flex items-center justify-center bg-gray-100">
+                      <div className="sticky left-0 z-30 flex-shrink-0 w-24 border-r-2 border-gray-300 p-3 flex items-center justify-center bg-gray-100 shadow-sm">
                         <span className="text-sm font-bold text-gray-700">Time</span>
                       </div>
                       {DAYS_OF_WEEK.map((day) => {
@@ -2665,7 +2665,7 @@ function ProScheduler() {
                   return (
                     <div key={slot.time24} className={`flex min-w-max border-b border-gray-100 ${hasClassesAtThisTime ? 'bg-white' : 'bg-gray-25'}`}>
                       {/* Time Label */}
-                      <div className={`flex-shrink-0 w-24 border-r-2 border-gray-200 p-2 flex items-center justify-center ${hasClassesAtThisTime ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'}`}>
+                      <div className={`sticky left-0 z-20 flex-shrink-0 w-24 border-r-2 border-gray-200 p-2 flex items-center justify-center shadow-sm ${hasClassesAtThisTime ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'}`}>
                         <div className="text-xs font-bold text-gray-700 text-center">
                           {slot.time12}
                           {slotClasses.length > 0 && (
@@ -2910,40 +2910,27 @@ function ProScheduler() {
                     // Get classes for this day
                     const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
                     
-                    // Group classes by format category
+                    // Group classes by actual format names
                     const formatCounts = dayClasses.reduce((acc, cls) => {
-                      const category = getFormatCategory(cls.class);
-                      acc[category] = (acc[category] || 0) + 1;
+                      const formatName = cls.class || 'Unknown';
+                      acc[formatName] = (acc[formatName] || 0) + 1;
                       return acc;
                     }, {} as Record<string, number>);
                     
-                    // Define format colors
-                    const formatColors = {
-                      yoga: 'bg-purple-500',
-                      pilates: 'bg-pink-500',
-                      hiit: 'bg-red-500',
-                      cycle: 'bg-orange-500',
-                      strength: 'bg-blue-500',
-                      boxing: 'bg-gray-500',
-                      dance: 'bg-fuchsia-500',
-                      barre: 'bg-rose-500',
-                      cardio: 'bg-amber-500',
-                      functional: 'bg-teal-500',
-                      general: 'bg-slate-500'
-                    };
-                    
-                    const formatLabels = {
-                      yoga: 'Yoga',
-                      pilates: 'Pilates',
-                      hiit: 'HIIT',
-                      cycle: 'Cycling',
-                      strength: 'Strength',
-                      boxing: 'Boxing',
-                      dance: 'Dance',
-                      barre: 'Barre',
-                      cardio: 'Cardio',
-                      functional: 'Functional',
-                      general: 'General'
+                    // Generate colors dynamically based on format name hash
+                    const getFormatColor = (formatName: string): string => {
+                      const colors = [
+                        'bg-purple-500', 'bg-pink-500', 'bg-red-500', 'bg-orange-500',
+                        'bg-blue-500', 'bg-gray-500', 'bg-fuchsia-500', 'bg-rose-500',
+                        'bg-amber-500', 'bg-teal-500', 'bg-green-500', 'bg-indigo-500',
+                        'bg-cyan-500', 'bg-violet-500', 'bg-emerald-500', 'bg-lime-500'
+                      ];
+                      // Simple hash function to get consistent colors
+                      let hash = 0;
+                      for (let i = 0; i < formatName.length; i++) {
+                        hash = formatName.charCodeAt(i) + ((hash << 5) - hash);
+                      }
+                      return colors[Math.abs(hash) % colors.length];
                     };
                     
                     return (
@@ -2979,8 +2966,8 @@ function ProScheduler() {
                                     return (
                                       <div key={format} className="relative">
                                         <div className="flex items-center justify-between text-xs mb-0.5">
-                                          <span className="font-medium text-slate-700 truncate">
-                                            {formatLabels[format as keyof typeof formatLabels]}
+                                          <span className="font-medium text-slate-700 truncate" title={format}>
+                                            {format}
                                           </span>
                                           <span className="font-bold text-slate-600 ml-1">
                                             {count}
@@ -2991,7 +2978,7 @@ function ProScheduler() {
                                             initial={{ width: 0 }}
                                             animate={{ width: `${percentage}%` }}
                                             transition={{ delay: 0.2, duration: 0.8 }}
-                                            className={`h-full ${formatColors[format as keyof typeof formatColors]} rounded-full shadow-sm`}
+                                            className={`h-full ${getFormatColor(format)} rounded-full shadow-sm`}
                                           />
                                         </div>
                                       </div>
@@ -3007,12 +2994,12 @@ function ProScheduler() {
                                     .sort()
                                     .map((time) => {
                                       const timeClasses = dayClasses.filter(cls => cls.time === time);
-                                      const dominantFormat = getFormatCategory(timeClasses[0].class);
+                                      const dominantFormatName = timeClasses[0].class || 'Unknown';
                                       return (
                                         <div
                                           key={time}
-                                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium text-white shadow-sm ${formatColors[dominantFormat as keyof typeof formatColors]}`}
-                                          title={`${time} - ${timeClasses.length} class${timeClasses.length > 1 ? 'es' : ''}`}
+                                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium text-white shadow-sm ${getFormatColor(dominantFormatName)}`}
+                                          title={`${time} - ${timeClasses.length} class${timeClasses.length > 1 ? 'es' : ''}: ${dominantFormatName}`}
                                         >
                                           {time.slice(0, 5)}
                                           {timeClasses.length > 1 && (
@@ -3055,28 +3042,35 @@ function ProScheduler() {
                   })}
                 </div>
                 
-                {/* Legend */}
+                {/* Legend - Show actual formats */}
                 <div className="mt-6 bg-slate-50 rounded-xl p-4 border border-slate-200">
                   <h4 className="font-semibold text-slate-800 text-sm mb-3">Format Legend</h4>
-                  <div className="grid grid-cols-3 md:grid-cols-6 lg:grid-cols-11 gap-2">
-                    {Object.entries({
-                      yoga: { label: 'Yoga', color: 'bg-purple-500' },
-                      pilates: { label: 'Pilates', color: 'bg-pink-500' },
-                      hiit: { label: 'HIIT', color: 'bg-red-500' },
-                      cycle: { label: 'Cycling', color: 'bg-orange-500' },
-                      strength: { label: 'Strength', color: 'bg-blue-500' },
-                      boxing: { label: 'Boxing', color: 'bg-gray-500' },
-                      dance: { label: 'Dance', color: 'bg-fuchsia-500' },
-                      barre: { label: 'Barre', color: 'bg-rose-500' },
-                      cardio: { label: 'Cardio', color: 'bg-amber-500' },
-                      functional: { label: 'Functional', color: 'bg-teal-500' },
-                      general: { label: 'General', color: 'bg-slate-500' }
-                    }).map(([key, { label, color }]) => (
-                      <div key={key} className="flex items-center gap-2">
-                        <div className={`w-3 h-3 rounded-full ${color} shadow-sm`}></div>
-                        <span className="text-xs font-medium text-slate-700">{label}</span>
-                      </div>
-                    ))}
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                    {Array.from(new Set(filteredClasses.map(cls => cls.class || 'Unknown')))
+                      .sort()
+                      .map((formatName) => {
+                        // Use the same color function
+                        const getFormatColor = (formatName: string): string => {
+                          const colors = [
+                            'bg-purple-500', 'bg-pink-500', 'bg-red-500', 'bg-orange-500',
+                            'bg-blue-500', 'bg-gray-500', 'bg-fuchsia-500', 'bg-rose-500',
+                            'bg-amber-500', 'bg-teal-500', 'bg-green-500', 'bg-indigo-500',
+                            'bg-cyan-500', 'bg-violet-500', 'bg-emerald-500', 'bg-lime-500'
+                          ];
+                          let hash = 0;
+                          for (let i = 0; i < formatName.length; i++) {
+                            hash = formatName.charCodeAt(i) + ((hash << 5) - hash);
+                          }
+                          return colors[Math.abs(hash) % colors.length];
+                        };
+                        
+                        return (
+                          <div key={formatName} className="flex items-center gap-2">
+                            <div className={`w-3 h-3 rounded-full ${getFormatColor(formatName)} shadow-sm`}></div>
+                            <span className="text-xs font-medium text-slate-700 truncate" title={formatName}>{formatName}</span>
+                          </div>
+                        );
+                      })}
                   </div>
                 </div>
               </div>
