@@ -53,17 +53,10 @@ function App() {
               }}
               whileHover={{ scale: 1.1, rotate: 6 }}
               whileTap={{ scale: 0.95 }}
-              className="relative"
+              className="p-3 rounded-2xl bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 shadow-lg relative overflow-hidden"
             >
-              <img 
-                src="/images/Photoroom_20241014_101748.PNG" 
-                alt="Physique 57 Logo" 
-                className="w-12 h-12 sm:w-16 sm:h-16 object-contain drop-shadow-lg"
-                onError={(e) => {
-                  // Fallback to external URL if local fails
-                  e.currentTarget.src = 'https://physique57india.com/wp-content/themes/p57/assets/images/logo.png';
-                }}
-              />
+              <div className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-purple-400/20 animate-pulse" />
+              <LayoutDashboard className="w-8 h-8 sm:w-10 sm:h-10 text-white relative z-10" />
             </motion.div>
             <motion.div
               animate={{ 
