@@ -439,7 +439,6 @@ const getStatusIcon = (status: string) => {
 
 export default function Insights() {
   const [selectedDay, setSelectedDay] = useState<DayKey>('monday');
-  const [hoveredAlert, setHoveredAlert] = useState<number | null>(null);
 
   const currentData = INSIGHTS_DATA[selectedDay];
 
