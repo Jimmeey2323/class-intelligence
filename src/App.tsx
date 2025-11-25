@@ -3,14 +3,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useDashboardStore } from './store/dashboardStore';
 import FileUpload from './components/FileUpload';
 import FilterSection from './components/FilterSection';
-import DataTableEnhanced from './components/DataTableEnhanced';
-import Rankings from './components/Rankings';
-import MetricsCardsEnhanced from './components/MetricsCardsEnhanced';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LayoutDashboard, Target, Users, Sparkles, BarChart3 } from 'lucide-react';
 import LoadingSkeletons from './components/LoadingSkeletons';
 
-// Lazy load heavy components
+// Lazy load all heavy components
+const DataTableEnhanced = lazy(() => import('./components/DataTableEnhanced'));
+const Rankings = lazy(() => import('./components/Rankings'));
+const MetricsCardsEnhanced = lazy(() => import('./components/MetricsCardsEnhanced'));
 const ProScheduler = lazy(() => import('./components/ProScheduler'));
 const MemberBehaviorAnalytics = lazy(() => import('./components/MemberBehaviorAnalytics').then(module => ({ default: module.MemberBehaviorAnalytics })));
 const ClassDeepDive = lazy(() => import('./components/ClassDeepDive'));
@@ -174,11 +174,13 @@ function App() {
             transition={{ duration: 0.4 }}
           >
             <ErrorBoundary fallbackTitle="Dashboard Error">
-              <div className="space-y-8">
-                <MetricsCardsEnhanced />
-                <Rankings />
-                <DataTableEnhanced />
-              </div>
+              <Suspense fallback={<LoadingSkeletons />}>
+                <div className="space-y-8">
+                  <MetricsCardsEnhanced />
+                  <Rankings />
+                  <DataTableEnhanced />
+                </div>
+              </Suspense>
             </ErrorBoundary>
           </motion.div>
         )}

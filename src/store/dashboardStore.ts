@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { DashboardState, SessionData, FilterState, ViewMode, GroupBy, AdditionalView, ColumnWidthSettings, RankingMetric, CheckinData } from '../types';
-import { subMonths, startOfMonth } from 'date-fns';
 import DataProcessorWorker from '../workers/dataProcessor.worker?worker';
 
 // Initialize worker
@@ -30,7 +29,7 @@ const getDefaultFilters = (): FilterState => {
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
 
-  // Default from 01 Aug 2025 to yesterday
+  // Default from 01 Aug 2025 to yesterday (dynamically calculated)
   const fromDate = new Date('2025-08-01');
 
   return {
