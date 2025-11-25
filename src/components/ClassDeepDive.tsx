@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { SessionData } from '../types';
-import { formatCurrency, formatPercentage } from '../utils/calculations';
+import { formatCurrency } from '../utils/calculations';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -13,7 +13,6 @@ import {
   BarChart3,
   ChevronDown,
   Star,
-  Zap,
   X
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
