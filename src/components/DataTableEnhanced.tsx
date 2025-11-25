@@ -251,7 +251,7 @@ export default function DataTableEnhanced() {
           if ('isGroupRow' in data && data.isGroupRow) {
             const rank = data.rank;
             return (
-              <div className="inline-flex items-center justify-center w-20 h-8 rounded-full font-semibold text-xs bg-gradient-to-r from-purple-700 to-indigo-700 text-white shadow-sm select-none">
+              <div className="inline-flex items-center justify-center w-20 h-8 rounded-full font-semibold text-xs bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-800 text-white shadow-sm select-none">
                 <span className="tabular-nums whitespace-nowrap">#{rank}</span>
               </div>
             );

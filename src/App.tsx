@@ -43,14 +43,34 @@ function App() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3 sm:gap-4">
             <motion.div
+              animate={{ 
+                y: [0, -8, 0],
+              }}
+              transition={{
+                duration: 3,
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
               whileHover={{ scale: 1.1, rotate: 6 }}
               whileTap={{ scale: 0.95 }}
-              className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 shadow-lg relative overflow-hidden"
+              className="relative"
             >
-              <div className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-purple-400/20 animate-pulse" />
-              <LayoutDashboard className="w-6 h-6 sm:w-8 sm:h-8 text-white relative z-10" />
+              <img 
+                src="/images/Photoroom_20241014_101748.PNG" 
+                alt="Brand Logo" 
+                className="w-12 h-12 sm:w-16 sm:h-16 object-contain drop-shadow-lg"
+              />
             </motion.div>
-            <div>
+            <motion.div
+              animate={{ 
+                opacity: [0.8, 1, 0.8],
+              }}
+              transition={{
+                duration: 4,
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
+            >
               <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-800 bg-clip-text text-transparent flex items-center gap-2">
                 <span>Class Intelligence Dashboard</span>
                 <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-yellow-500 animate-pulse" />
@@ -58,7 +78,7 @@ function App() {
               <p className="text-slate-700 mt-1 text-sm sm:text-base font-semibold">
                 Comprehensive analytics for your fitness studio operations
               </p>
-            </div>
+            </motion.div>
           </div>
           {hasData && !showUpload && (
             <motion.button
