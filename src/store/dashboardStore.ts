@@ -27,19 +27,17 @@ const saveColumnWidths = (widths: ColumnWidthSettings) => {
 
 const getDefaultFilters = (): FilterState => {
   const today = new Date();
-  const previousMonth = subMonths(today, 1);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
 
-  // Default to the full previous month
-  const firstDayOfPrevMonth = startOfMonth(previousMonth);
-  const lastDayOfPrevMonth = new Date(firstDayOfPrevMonth);
-  lastDayOfPrevMonth.setMonth(lastDayOfPrevMonth.getMonth() + 1);
-  lastDayOfPrevMonth.setDate(0); // last day of previous month
+  // Default from 01 Aug 2025 to yesterday
+  const fromDate = new Date('2025-08-01');
 
   return {
-    dateFrom: firstDayOfPrevMonth,
-    dateTo: lastDayOfPrevMonth,
+    dateFrom: fromDate,
+    dateTo: yesterday,
     trainers: [],
-    locations: ['Kwality House, Kemps Corner'],
+    locations: ['Kwality House, Kemps Corner', 'Supreme HQ, Lower Parel'],
     classTypes: [],
     classes: [],
     minCheckins: 0,
