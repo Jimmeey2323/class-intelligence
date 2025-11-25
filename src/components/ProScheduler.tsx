@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, Fragment, useRef, memo } from 'react';
+import { useState, useMemo, useEffect, useRef, memo, Fragment } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { SessionData, CheckinData } from '../types';
 import { format, parseISO, isWithinInterval } from 'date-fns';
@@ -6,10 +6,10 @@ import {
   Plus, 
   Edit3, 
   AlertTriangle, 
-  TrendingUp, 
+  TrendingUp,
   Users, 
   MapPin, 
-  Clock, 
+  Clock,
   Star,
   Eye,
   X,
@@ -287,6 +287,7 @@ function ProScheduler() {
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
   const [memberStatusFilter, setMemberStatusFilter] = useState<'all' | 'checked-in' | 'cancelled' | 'no-show'>('all');
   const [memberTypeFilter, setMemberTypeFilter] = useState<'all' | 'regulars' | 'new'>('all');
+  const [showHighPerformingOnly, setShowHighPerformingOnly] = useState(false);
   const [expandedDayFormats, setExpandedDayFormats] = useState<Set<string>>(new Set());
   const drilldownModalRef = useRef<HTMLDivElement>(null);
   
@@ -1200,6 +1201,26 @@ function ProScheduler() {
     return analytics;
   }, [scheduleClasses]);
 
+  // Calculate location averages for high-performing filter
+  const locationAverages = useMemo(() => {
+    const locationStats = new Map<string, { totalCheckIns: number; totalClasses: number }>();
+    
+    scheduleClasses.forEach(cls => {
+      const stats = locationStats.get(cls.location) || { totalCheckIns: 0, totalClasses: 0 };
+      stats.totalCheckIns += cls.avgCheckIns;
+      stats.totalClasses += 1;
+      locationStats.set(cls.location, stats);
+    });
+    
+    const averages = new Map<string, number>();
+    locationStats.forEach((stats, location) => {
+      const average = stats.totalClasses > 0 ? stats.totalCheckIns / stats.totalClasses : 0;
+      averages.set(location, average);
+    });
+    
+    return averages;
+  }, [scheduleClasses]);
+
   // Apply Pro Scheduler filters independently (do not use global filters)
   const filteredClasses = useMemo(() => {
     // Combine regular and discontinued classes based on showDiscontinued state
@@ -1216,9 +1237,14 @@ function ProScheduler() {
       if (filters.classes.length > 0 && !filters.classes.includes(cls.class)) return false;
       // Active only filter
       if (filters.activeOnly && cls.status !== 'Active' && !cls.isDiscontinued) return false;
+      // High-performing filter (class avg > location avg)
+      if (showHighPerformingOnly) {
+        const locationAvg = locationAverages.get(cls.location) || 0;
+        if (cls.avgCheckIns <= locationAvg) return false;
+      }
       return true;
     });
-  }, [scheduleClasses, discontinuedClasses, showDiscontinued, filters]);
+  }, [scheduleClasses, discontinuedClasses, showDiscontinued, filters, showHighPerformingOnly, locationAverages]);
 
   // Get unique values for dropdowns
   const uniqueTrainers = useMemo(() => {
@@ -1721,7 +1747,7 @@ function ProScheduler() {
 
       {/* Advanced Control Panel */}
       <div className="glass-card rounded-2xl p-3 border border-white/20 shadow-xl backdrop-blur-xl mb-6">
-        <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-8 gap-2">
           <button
             onClick={() => setViewMode('calendar')}
             className={`p-3 rounded-xl border transition-all duration-300 ${
@@ -1776,6 +1802,17 @@ function ProScheduler() {
           >
             <Star className="w-4 h-4 mx-auto mb-1" />
             <div className="text-xs font-bold">Optimize</div>
+          </button>
+          <button
+            onClick={() => setShowHighPerformingOnly(!showHighPerformingOnly)}
+            className={`p-3 rounded-xl border transition-all duration-300 ${
+              showHighPerformingOnly
+                ? 'bg-gradient-to-br from-green-600 via-emerald-600 to-green-700 text-white border-green-500/30 shadow-lg scale-105'
+                : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-green-300 hover:bg-white/90 text-slate-700'
+            }`}
+          >
+            <Award className="w-4 h-4 mx-auto mb-1" />
+            <div className="text-xs font-bold">Top Classes</div>
           </button>
           <button
             onClick={() => setShowDiscontinued(!showDiscontinued)}

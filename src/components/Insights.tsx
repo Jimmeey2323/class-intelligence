@@ -296,28 +296,117 @@ const INSIGHTS_DATA: Record<DayKey, any> = {
     alerts: [
       {
         id: 1,
-        title: 'Saturday Schedule Coming Soon',
-        type: 'info',
-        observation: 'Detailed Saturday analysis is being prepared.',
-        recommendation: 'Check back soon for comprehensive Saturday insights.'
+        title: 'CRITICAL Travel Risk - Rohan Dahima',
+        type: 'critical',
+        observation: 'Rohan teaches at KH 8:00 AM then must travel to SHQ for 9:30 AM PowerCycle. Saturday morning traffic poses severe delay risk.',
+        risk: 'Cross-location scheduling creates critical operational vulnerability. Travel delays could impact peak 9:30 AM PowerCycle class at Supreme HQ.',
+        problem: 'Kemps Corner to Bandra travel time on Saturday morning is unpredictable and creates cascade failure risk for subsequent classes.',
+        recommendation: 'MANDATORY: Reassign Rohan\'s 8:00 AM KH slot immediately. Have Rohan teach exclusively at SHQ (9:30 AM, 11:00 AM).'
+      },
+      {
+        id: 2,
+        title: 'Operational Peak Risk - Triple Simultaneous Classes',
+        type: 'critical',
+        observation: 'KH runs 3 simultaneous classes at 10:15 AM & 11:30 AM. Requires perfect operational execution across all studios.',
+        risk: 'Triple overlap creates check-in bottlenecks, parking limitations, noise interference, and staff resource strain during peak revenue hours.',
+        problem: 'High operational complexity reduces client experience quality and increases failure points during maximum capacity periods.',
+        recommendation: 'Move one class from 10:15/11:30 AM triple-overlap slots to newly created 2:00 PM midday bridge slot.'
+      },
+      {
+        id: 3,
+        title: 'Trainer Consecutive Load Risk',
+        type: 'warning',
+        observation: 'Reshma: FIT→Barre→Strength (9:00-11:30 AM). Atulan: Barre→FIT→Barre (9:00-11:30 AM). High consecutive energy demand.',
+        risk: 'Progressive intensity stacking (cardio→toning→strength) creates sustainability concerns for trainer quality and client experience.',
+        problem: 'Saturday premium pricing demands peak trainer performance. Consecutive high-energy classes compromise delivery quality.',
+        recommendation: 'Monitor trainer wellness closely. Consider 15-minute buffer extensions between Reshma\'s consecutive strength transitions.'
       }
     ],
-    schedule: [],
-    optimization: null
+    schedule: [
+      { time: '08:00', location: 'Kwality House', class: 'PowerCycle → REASSIGN', trainer: 'Rohan (TRAVEL RISK)', status: 'revise', statusColor: 'bg-red-500', recommendation: 'CRITICAL: Reassign to eliminate cross-location travel risk. Use local KH trainer.' },
+      { time: '09:00', location: 'Kwality House', class: 'Studio FIT', trainer: 'Reshma Sharma', status: 'monitor', statusColor: 'bg-yellow-500', recommendation: 'First of three consecutive classes. Monitor energy sustainability through peak period.' },
+      { time: '09:00', location: 'Supreme HQ', class: 'Studio Barre 57', trainer: 'Atulan Purohit', status: 'monitor', statusColor: 'bg-yellow-500', recommendation: 'First of three consecutive classes. Excellent stagger timing with KH.' },
+      { time: '09:30', location: 'Supreme HQ', class: 'PowerCycle', trainer: 'Rohan Dahima', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Critical peak slot. Maintain if travel risk eliminated from 8:00 AM conflict.' },
+      { time: '10:15', location: 'Kwality House', class: '3 Simultaneous Classes', trainer: 'Multiple', status: 'revise', statusColor: 'bg-red-500', recommendation: 'CRITICAL: Reduce to 2 classes max. Move Mat 57 or Cardio Barre to 2:00 PM slot.' },
+      { time: '10:15', location: 'Supreme HQ', class: 'Studio FIT', trainer: 'Atulan (2nd class)', status: 'monitor', statusColor: 'bg-yellow-500', recommendation: 'Good stagger from KH triple overlap. Monitor trainer load sustainability.' },
+      { time: '10:30', location: 'Supreme HQ', class: 'PowerCycle', trainer: 'Rohan (2nd class)', status: 'monitor', statusColor: 'bg-yellow-500', recommendation: 'Second consecutive class. 30-min recovery adequate for PowerCycle format.' },
+      { time: '11:00', location: 'Supreme HQ', class: 'PowerCycle Express', trainer: 'Rohan (3rd class)', status: 'revise', statusColor: 'bg-orange-500', recommendation: 'Third consecutive class. Consider Express format or trainer rotation.' },
+      { time: '11:30', location: 'Kwality House', class: '3 Simultaneous Classes', trainer: 'Multiple', status: 'revise', statusColor: 'bg-red-500', recommendation: 'CRITICAL: Second triple overlap. Move lowest-yield class to afternoon slot.' },
+      { time: '11:30', location: 'Supreme HQ', class: 'Studio Barre 57', trainer: 'Atulan (3rd class)', status: 'revise', statusColor: 'bg-orange-500', recommendation: 'Third consecutive class. Consider extending break or trainer swap.' },
+      { time: '12:30', location: 'Both Locations', class: 'Recovery Classes', trainer: 'Pranjali & Karan', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Perfect post-intensity positioning. Essential cool-down after peak morning blocks.' },
+      { time: '14:00', location: 'Both Locations', class: 'Saturday Skills Workshop (NEW)', trainer: 'TBD', status: 'revise', statusColor: 'bg-orange-500', recommendation: 'Bridge 4.5-hour midday void. Target beginner Mat 57 or skills development.' },
+      { time: '17:00', location: 'Kwality House', class: 'PowerCycle', trainer: 'Mrigakshi', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Strong weekend evening anchor. Captures pre-Saturday night fitness crowd.' },
+      { time: '17:00', location: 'Supreme HQ', class: 'PowerCycle', trainer: 'Richard', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Excellent dual-location evening coverage. Maintain current assignment.' },
+      { time: '18:15', location: 'Both Locations', class: 'Cardio Barre Classes', trainer: 'Multiple', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Perfect post-PowerCycle toning option. Great sequential workout opportunity.' }
+    ],
+    optimization: {
+      title: 'Saturday Peak Operations & Risk Mitigation',
+      current: 'Triple Overlaps + Cross-Location Risk + 4.5hr Midday Void',
+      proposed: [
+        'Eliminate Cross-Location Travel - Rohan exclusively at SHQ for operational reliability',
+        'Reduce Triple Overlaps - Move 1 class from each peak slot to 2:00 PM bridge',
+        'Saturday Skills Workshops - Beginner classes to capture midday market',
+        'Enhanced Recovery Promotion - Market 12:30 PM classes as essential add-ons'
+      ],
+      benefit: 'This optimization eliminates critical operational risks, reduces peak-hour congestion, bridges the midday revenue gap, and positions recovery classes as premium wellness add-ons, increasing both operational reliability and revenue potential.'
+    }
   },
   sunday: {
     title: '📊 Sunday',
     alerts: [
       {
         id: 1,
-        title: 'Sunday Schedule Coming Soon',
-        type: 'info',
-        observation: 'Detailed Sunday analysis is being prepared.',
-        recommendation: 'Check back soon for comprehensive Sunday insights.'
+        title: 'Morning Saturation Crisis (10:00-10:15 AM)',
+        type: 'critical',
+        observation: 'Simultaneous PowerCycle at both locations + Strength Lab at KH creates choice overload and format cannibalization.',
+        risk: 'Three high-intensity formats within 15 minutes fragments audience and reduces individual class capacity. Strength Lab suffers most from PowerCycle competition.',
+        problem: 'Choice paralysis reduces booking conversion. Clients defer decisions or choose based on convenience rather than preference, reducing overall utilization.',
+        recommendation: 'Anchor formats by location: KH = Strength Lab solo, SHQ = PowerCycle solo. Move KH PowerCycle to 10:15 AM for clean 15-minute stagger.'
+      },
+      {
+        id: 2,
+        title: 'Quadruple Contention Disaster (11:30 AM)',
+        type: 'critical',
+        observation: 'Most inefficient block of the week: PowerCycle + Barre 57 (KH) simultaneous with Cardio Barre + PowerCycle (SHQ). Four competing classes.',
+        risk: 'Massive format fragmentation ensures no class reaches optimal capacity. PowerCycle repetition by same instructor suggests earlier class underperformance.',
+        problem: 'Sunday premium slots wasted through over-scheduling. Peak revenue hours become revenue-negative through operational inefficiency.',
+        recommendation: 'CRITICAL: Stagger to create 3 distinct waves: 11:00 AM, 11:30 AM, 12:00 PM. Eliminate duplicate PowerCycle instructor assignments.'
+      },
+      {
+        id: 3,
+        title: 'Evening Mat Over-Indexing (5:00-5:15 PM)',
+        type: 'warning',
+        observation: 'Mat 57 offered nearly simultaneously at both locations (5:00 PM SHQ, 5:15 PM KH) in premium Sunday evening slots.',
+        risk: 'Low-yield Mat classes occupy high-value 5:00 PM slots when clients seek final high-impact weekend workouts before Monday.',
+        problem: 'Strategic opportunity cost. Prime evening slots should maximize revenue through high-intensity, high-yield formats.',
+        recommendation: 'Replace both Mat slots: KH 5:00 PM → PowerCycle, SHQ 5:00 PM → Back Body Blaze for complementary high-yield evening anchors.'
       }
     ],
-    schedule: [],
-    optimization: null
+    schedule: [
+      { time: '10:00', location: 'Kwality House', class: 'Strength Lab (Solo Anchor)', trainer: 'Mrigakshi', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Perfect sole strength offering. Remove competing PowerCycle to eliminate choice overload.' },
+      { time: '10:00', location: 'Supreme HQ', class: 'PowerCycle (Solo Anchor)', trainer: 'Cauveri Vikrant', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Ideal cardio anchor for Bandra. Maintain as location-specific strength.' },
+      { time: '10:15', location: 'Kwality House', class: 'PowerCycle → NEW SLOT', trainer: 'Raunak', status: 'revise', statusColor: 'bg-orange-500', recommendation: 'Move KH PowerCycle here from 10:00 AM for clean stagger with SHQ.' },
+      { time: '10:15', location: 'Supreme HQ', class: 'Studio Barre 57', trainer: 'Atulan', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Excellent counter-programming to KH PowerCycle. Maintain signature sculpt positioning.' },
+      { time: '11:00', location: 'Supreme HQ', class: 'Cardio Barre (MOVED)', trainer: 'Anisha', status: 'revise', statusColor: 'bg-orange-500', recommendation: 'Move from 11:30 AM to create first wave of staggered flow.' },
+      { time: '11:30', location: 'Kwality House', class: 'Studio Barre 57', trainer: 'Reshma', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Perfect follow-up to morning strength focus. Clean format transition.' },
+      { time: '11:30', location: 'Supreme HQ', class: 'PowerCycle → ELIMINATE', trainer: 'Cauveri (DUPLICATE)', status: 'revise', statusColor: 'bg-red-500', recommendation: 'CRITICAL: Remove duplicate instructor assignment. Creates cannibalization of 10:00 AM class.' },
+      { time: '12:15', location: 'Supreme HQ', class: 'PowerCycle (MOVED)', trainer: 'Cauveri', status: 'revise', statusColor: 'bg-orange-500', recommendation: 'Move 11:30 AM PowerCycle here for late-morning brunch crowd capture.' },
+      { time: '16:00', location: 'Kwality House', class: 'Studio Barre 57', trainer: 'Pranjali', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Good afternoon re-entry point. Gentle lead-in to evening intensity.' },
+      { time: '17:00', location: 'Kwality House', class: 'PowerCycle → NEW FORMAT', trainer: 'Vivaran', status: 'revise', statusColor: 'bg-orange-500', recommendation: 'Replace Mat 57 with PowerCycle for high-yield evening anchor.' },
+      { time: '17:00', location: 'Supreme HQ', class: 'Back Body Blaze → NEW', trainer: 'Karan', status: 'revise', statusColor: 'bg-orange-500', recommendation: 'Replace Mat 57 with body-sculpting focus. Complements KH cardio offering.' },
+      { time: '18:30', location: 'Supreme HQ', class: 'PowerCycle', trainer: 'Richard', status: 'keep', statusColor: 'bg-green-500', recommendation: 'Strong Sunday closer. Final high-impact option before work week.' }
+    ],
+    optimization: {
+      title: 'Sunday Cannibalization Elimination & Flow Creation',
+      current: 'Simultaneous Format Wars + Quadruple Overlap + Low-Yield Evening Slots',
+      proposed: [
+        'Anchor Strategy - Solo formats by location (10:00 AM): KH=Strength, SHQ=Cardio',
+        'Staggered Flow Creation - 3 distinct waves (11:00, 11:30, 12:15) eliminate overlap chaos',
+        'Evening Yield Maximization - Replace Mat with PowerCycle/Back Body Blaze for premium revenue',
+        'Location Specialization - Clear value propositions reduce decision paralysis'
+      ],
+      benefit: 'This optimization eliminates the most severe format cannibalization of the week, creates logical client flow patterns with 3 distinct booking waves, and maximizes evening revenue potential through high-yield format placement, increasing Sunday capacity utilization by 40-50%.'
+    }
   }
 };
 
@@ -350,11 +439,12 @@ const getStatusIcon = (status: string) => {
 
 export default function Insights() {
   const [selectedDay, setSelectedDay] = useState<DayKey>('monday');
+  const [hoveredAlert, setHoveredAlert] = useState<number | null>(null);
 
-  const currentInsights = INSIGHTS_DATA[selectedDay];
+  const currentData = INSIGHTS_DATA[selectedDay];
 
   return (
-    <div className="space-y-8 relative">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 space-y-8 relative p-6">
       {/* Floating background elements for extra visual appeal */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden -z-10">
         <motion.div
@@ -390,24 +480,22 @@ export default function Insights() {
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: "easeOut" }}
-        className="glass-card rounded-3xl border border-white/20 shadow-2xl backdrop-blur-xl overflow-hidden relative"
+        className="bg-white rounded-3xl border border-blue-200 shadow-2xl overflow-hidden relative"
       >
-        {/* Animated background gradient */}
-        <div className="absolute inset-0 bg-gradient-to-r from-blue-400/10 via-purple-400/10 to-indigo-400/10 animate-pulse" />
-        
-        <div className="relative bg-gradient-to-r from-slate-100/80 via-white/70 to-blue-100/80 px-8 py-6 border-b border-white/30">
+        {/* Header */}
+        <div className="relative bg-white px-8 py-6 border-b border-blue-200">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <motion.div 
                 whileHover={{ scale: 1.1, rotate: 5 }}
                 transition={{ type: "spring", stiffness: 400, damping: 10 }}
-                className="p-3 rounded-2xl bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 shadow-xl relative overflow-hidden"
+                className="p-3 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-xl relative overflow-hidden"
               >
                 <div className="absolute inset-0 bg-gradient-to-r from-white/20 to-transparent opacity-50" />
                 <Target className="w-6 h-6 text-white relative z-10" />
               </motion.div>
               <div>
-                <h2 className="text-2xl font-bold bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-800 bg-clip-text text-transparent">
+                <h2 className="text-2xl font-bold text-slate-800">
                   Strategic Class Intelligence
                 </h2>
                 <p className="text-slate-600 text-sm mt-1 font-medium">
@@ -421,10 +509,10 @@ export default function Insights() {
               transition={{ delay: 0.3, type: "spring", stiffness: 300 }}
               className="flex items-center gap-3"
             >
-              <span className="text-xs bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 rounded-full font-bold shadow-lg border border-white/20">
+              <span className="text-xs bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-4 py-2 rounded-full font-bold shadow-lg border border-blue-300">
                 🤖 AI-Powered
               </span>
-              <span className="text-xs bg-gradient-to-r from-emerald-600 to-green-600 text-white px-4 py-2 rounded-full font-bold shadow-lg border border-white/20">
+              <span className="text-xs bg-gradient-to-r from-emerald-600 to-green-600 text-white px-4 py-2 rounded-full font-bold shadow-lg border border-green-300">
                 ✨ Live Analytics
               </span>
             </motion.div>
@@ -437,7 +525,7 @@ export default function Insights() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1, duration: 0.6 }}
-        className="glass-card rounded-3xl border border-white/20 shadow-2xl backdrop-blur-xl p-8 relative overflow-hidden"
+        className="bg-white rounded-3xl border border-blue-200 shadow-2xl p-8 relative overflow-hidden"
       >
         {/* Floating background elements */}
         <div className="absolute top-4 right-4 w-20 h-20 bg-gradient-to-br from-blue-400/10 to-purple-400/10 rounded-full blur-xl" />
@@ -453,11 +541,11 @@ export default function Insights() {
               >
                 <Calendar className="w-5 h-5 text-white" />
               </motion.div>
-              <h3 className="text-xl font-bold bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent">
+              <h3 className="text-xl font-bold text-slate-800">
                 Select Day for Strategic Analysis
               </h3>
             </div>
-            <div className="text-xs text-slate-500 bg-white/50 px-3 py-1 rounded-full border border-white/40">
+            <div className="text-xs text-slate-600 bg-blue-50 px-3 py-1 rounded-full border border-blue-200">
               7 Days Available
             </div>
           </div>
@@ -475,17 +563,17 @@ export default function Insights() {
                   y: -2
                 }}
                 whileTap={{ scale: 0.95 }}
-                className={`p-4 rounded-2xl font-medium transition-all duration-300 relative overflow-hidden shadow-lg backdrop-blur-sm border-2 group ${
+                className={`p-4 rounded-2xl font-medium transition-all duration-300 relative overflow-hidden shadow-lg border-2 group ${
                   selectedDay === day.key
-                    ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white shadow-2xl border-blue-400/50 scale-105'
-                    : 'bg-white/70 text-slate-700 hover:bg-white/90 border-white/60 hover:shadow-xl hover:border-blue-300/50'
+                    ? 'bg-gradient-to-br from-blue-600 via-blue-700 to-blue-800 text-white shadow-2xl border-blue-400 scale-105'
+                    : 'bg-white text-slate-700 hover:bg-blue-50 border-blue-200 hover:shadow-xl hover:border-blue-300'
                 }`}
               >
                 {selectedDay === day.key && (
                   <>
                     <motion.div
                       layoutId="selectedDay"
-                      className="absolute inset-0 bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 rounded-2xl"
+                      className="absolute inset-0 bg-gradient-to-br from-blue-600 via-blue-700 to-blue-800 rounded-2xl"
                       transition={{ type: "spring", stiffness: 300, damping: 30 }}
                     />
                     <motion.div
@@ -518,11 +606,10 @@ export default function Insights() {
         className="space-y-6"
       >
         {/* Title & Content */}
-        <div className="glass-card rounded-3xl border border-white/20 shadow-2xl backdrop-blur-xl overflow-hidden relative">
+        <div className="bg-white rounded-3xl border border-blue-200 shadow-2xl overflow-hidden relative">
           {/* Animated background patterns */}
           <div className="absolute inset-0">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-indigo-500" />
-            <div className="absolute inset-0 bg-gradient-to-br from-white/50 via-transparent to-blue-50/30" />
           </div>
           
           <div className="relative p-8">
@@ -531,8 +618,8 @@ export default function Insights() {
               animate={{ opacity: 1, y: 0 }}
               className="mb-8"
             >
-              <h2 className="text-4xl font-bold bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-800 bg-clip-text text-transparent mb-3 flex items-center gap-3">
-                {currentInsights.title}
+              <h2 className="text-4xl font-bold text-slate-800 mb-3 flex items-center gap-3">
+                {currentData.title}
                 <motion.span
                   animate={{ rotate: [0, 10, 0] }}
                   transition={{ repeat: Infinity, duration: 2 }}
@@ -545,7 +632,7 @@ export default function Insights() {
             </motion.div>
           
             {/* Critical Strategic Alerts Section */}
-            {currentInsights.alerts.length > 0 && (
+            {currentData.alerts.length > 0 && (
               <div className="mb-8">
                 <motion.div
                   initial={{ opacity: 0, x: -20 }}
@@ -565,7 +652,7 @@ export default function Insights() {
                   <div className="flex-1 h-px bg-gradient-to-r from-red-300 to-transparent" />
                 </motion.div>
                 <div className="grid gap-6">
-                  {currentInsights.alerts.map((alert: any) => (
+                  {currentData.alerts.map((alert: any) => (
                     <motion.div
                       key={alert.id}
                       initial={{ opacity: 0, y: 20, scale: 0.95 }}
@@ -623,7 +710,7 @@ export default function Insights() {
         </div>
 
         {/* Schedule Action Plan */}
-        {currentInsights.schedule.length > 0 && (
+        {currentData.schedule.length > 0 && (
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -631,8 +718,7 @@ export default function Insights() {
             className="glass-card rounded-3xl border border-white/20 shadow-2xl backdrop-blur-xl overflow-hidden relative"
           >
             {/* Header section */}
-            <div className="bg-gradient-to-r from-white/80 via-green-50/70 to-white/80 p-8 border-b border-white/30 relative">
-              <div className="absolute inset-0 bg-gradient-to-r from-green-400/5 via-emerald-400/5 to-green-400/5" />
+            <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-blue-800 p-8 border-b border-blue-300 relative">
               <div className="relative flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <motion.span
@@ -643,27 +729,27 @@ export default function Insights() {
                     ✅
                   </motion.span>
                   <div>
-                    <h3 className="text-2xl font-bold bg-gradient-to-r from-green-600 via-emerald-600 to-green-700 bg-clip-text text-transparent">
+                    <h3 className="text-2xl font-bold text-white">
                       Proposed Action Plan
                     </h3>
-                    <p className="text-slate-600 font-medium mt-1">Keep • Monitor • Revise strategy framework</p>
+                    <p className="text-blue-100 font-medium mt-1">Keep • Monitor • Revise strategy framework</p>
                   </div>
                 </div>
-                <div className="text-sm bg-white/60 px-4 py-2 rounded-full border border-white/40 text-slate-600">
-                  {currentInsights.schedule.length} Classes Analyzed
+                <div className="text-sm bg-blue-500 px-4 py-2 rounded-full border border-blue-400 text-white">
+                  {currentData.schedule.length} Classes Analyzed
                 </div>
               </div>
-              <p className="text-slate-600 mt-4 font-medium bg-white/40 p-4 rounded-2xl border border-white/30">
+              <p className="text-white mt-4 font-medium bg-blue-600 p-4 rounded-2xl border border-blue-400">
                 📊 Based on general format performance and schedule logic
               </p>
             </div>
             
             {/* Enhanced table */}
             <div className="p-8">
-              <div className="overflow-x-auto rounded-3xl border-2 border-white/40 shadow-2xl backdrop-blur-sm bg-gradient-to-br from-white/60 to-white/40">
+              <div className="overflow-x-auto rounded-3xl border-2 border-blue-200 shadow-2xl bg-white">
                 <table className="w-full border-collapse">
                   <thead>
-                    <tr className="border-b-2 border-white/50 bg-gradient-to-r from-slate-100/80 via-white/70 to-blue-100/80">
+                    <tr className="border-b-2 border-blue-200 bg-blue-50">
                       <th className="text-left py-6 px-6 font-bold text-slate-800 text-sm uppercase tracking-wide">⏰ Time</th>
                       <th className="text-left py-6 px-6 font-bold text-slate-800 text-sm uppercase tracking-wide">📍 Location</th>
                       <th className="text-left py-6 px-6 font-bold text-slate-800 text-sm uppercase tracking-wide">🏃‍♀️ Class</th>
@@ -673,7 +759,7 @@ export default function Insights() {
                     </tr>
                   </thead>
                 <tbody>
-                  {currentInsights.schedule.map((item: any, index: number) => (
+                  {currentData.schedule.map((item: any, index: number) => (
                     <motion.tr
                       key={index}
                       initial={{ opacity: 0, y: 10 }}
@@ -684,7 +770,7 @@ export default function Insights() {
                         scale: 1.01,
                         transition: { duration: 0.2 }
                       }}
-                      className="border-b border-white/30 hover:shadow-lg transition-all duration-300 backdrop-blur-sm group"
+                      className="border-b border-blue-100 hover:bg-blue-50 hover:shadow-lg transition-all duration-300 group"
                     >
                       <td className="py-5 px-6">
                         <div className="font-bold text-slate-800 text-lg bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
@@ -692,7 +778,7 @@ export default function Insights() {
                         </div>
                       </td>
                       <td className="py-5 px-6">
-                        <div className="font-medium text-slate-700 bg-slate-100/60 px-3 py-1 rounded-full text-sm border border-white/40">
+                        <div className="font-medium text-slate-700 bg-blue-50 px-3 py-1 rounded-full text-sm border border-blue-200">
                           {item.location}
                         </div>
                       </td>
@@ -712,14 +798,14 @@ export default function Insights() {
                           </motion.div>
                           <motion.span 
                             whileHover={{ scale: 1.05 }}
-                            className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-bold text-white shadow-lg border border-white/30 ${item.statusColor}`}
+                            className={`inline-flex items-center px-4 py-2 rounded-full text-sm font-bold text-white shadow-lg border border-blue-300 ${item.statusColor}`}
                           >
                             {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
                           </motion.span>
                         </div>
                       </td>
                       <td className="py-5 px-6">
-                        <div className="text-sm text-slate-600 font-medium bg-white/50 p-3 rounded-xl border border-white/30 group-hover:bg-white/70 transition-colors">
+                        <div className="text-sm text-slate-600 font-medium bg-blue-50 p-3 rounded-xl border border-blue-200 group-hover:bg-blue-100 transition-colors">
                           {item.recommendation}
                         </div>
                       </td>
@@ -733,19 +819,15 @@ export default function Insights() {
         )}
 
         {/* Optimization Section */}
-        {currentInsights.optimization && (
+        {currentData.optimization && (
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4 }}
-            className="glass-card rounded-3xl border border-white/20 shadow-2xl backdrop-blur-xl overflow-hidden relative"
+            className="bg-white rounded-3xl border border-blue-200 shadow-2xl overflow-hidden relative"
           >
-            {/* Animated background */}
-            <div className="absolute inset-0 bg-gradient-to-br from-amber-400/5 via-orange-400/5 to-yellow-400/5" />
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-500" />
-            
             {/* Header */}
-            <div className="relative bg-gradient-to-r from-white/80 via-amber-50/70 to-white/80 p-8 border-b border-white/30">
+            <div className="relative bg-blue-600 p-8 border-b border-blue-300">
               <div className="flex items-center gap-4">
                 <motion.span
                   animate={{ 
@@ -758,10 +840,10 @@ export default function Insights() {
                   💡
                 </motion.span>
                 <div>
-                  <h3 className="text-2xl font-bold bg-gradient-to-r from-amber-600 via-orange-600 to-yellow-600 bg-clip-text text-transparent">
-                    {currentInsights.optimization.title}
+                  <h3 className="text-2xl font-bold text-white">
+                    {currentData.optimization.title}
                   </h3>
-                  <p className="text-slate-600 mt-1 font-medium">Strategic flow optimization recommendations</p>
+                  <p className="text-blue-100 mt-1 font-medium">Strategic flow optimization recommendations</p>
                 </div>
               </div>
             </div>
@@ -778,12 +860,12 @@ export default function Insights() {
                 >
                   <div className="flex items-center gap-3 mb-4">
                     <div className="w-3 h-3 bg-gradient-to-r from-red-500 to-orange-500 rounded-full shadow-lg" />
-                    <h4 className="text-lg font-bold text-slate-800">Current Bandra Flow</h4>
+                    <h4 className="text-lg font-bold text-slate-800">Current Flow Analysis</h4>
                   </div>
                   <div className="relative">
-                    <div className="absolute inset-0 bg-gradient-to-br from-red-100/60 to-orange-100/60 rounded-3xl blur-sm" />
-                    <p className="relative text-slate-600 text-lg font-mono bg-white/70 backdrop-blur-sm rounded-3xl p-6 border-2 border-white/50 shadow-xl font-bold">
-                      {currentInsights.optimization.current}
+                    <div className="absolute inset-0 bg-gradient-to-br from-red-500/20 to-orange-500/20 rounded-3xl blur-sm" />
+                    <p className="relative text-slate-700 text-lg font-mono bg-white rounded-3xl p-6 border-2 border-blue-200 shadow-xl font-bold">
+                      {currentData.optimization.current}
                     </p>
                   </div>
                 </motion.div>
@@ -799,19 +881,19 @@ export default function Insights() {
                     <h4 className="text-lg font-bold text-slate-800">Proposed Optimized Flow</h4>
                   </div>
                   <div className="space-y-3">
-                    {currentInsights.optimization.proposed.map((step: string, index: number) => (
+                    {currentData.optimization.proposed.map((step: string, index: number) => (
                       <motion.div
                         key={index}
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.7 + index * 0.1 }}
                         whileHover={{ scale: 1.02, x: 5 }}
-                        className="flex items-center gap-4 p-4 rounded-3xl bg-gradient-to-r from-white/80 via-green-50/60 to-white/80 backdrop-blur-sm border-2 border-white/50 shadow-lg hover:shadow-xl transition-all duration-300 group"
+                        className="flex items-center gap-4 p-4 rounded-3xl bg-white border-2 border-blue-200 shadow-lg hover:shadow-xl hover:bg-blue-50 transition-all duration-300 group"
                       >
                         <motion.span 
                           whileHover={{ scale: 1.2, rotate: 360 }}
                           transition={{ duration: 0.5 }}
-                          className="flex-shrink-0 w-10 h-10 bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-600 text-white rounded-full flex items-center justify-center text-sm font-bold shadow-xl border-2 border-white/30"
+                          className="flex-shrink-0 w-10 h-10 bg-gradient-to-br from-blue-600 via-indigo-600 to-purple-600 text-white rounded-full flex items-center justify-center text-sm font-bold shadow-xl border-2 border-blue-300"
                         >
                           {index + 1}
                         </motion.span>
@@ -827,7 +909,7 @@ export default function Insights() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.8 }}
-                className="mt-8 p-8 bg-gradient-to-r from-white/80 via-blue-50/60 to-white/80 backdrop-blur-sm rounded-3xl border-2 border-white/50 shadow-xl relative overflow-hidden"
+                className="mt-8 p-8 bg-white rounded-3xl border-2 border-blue-200 shadow-xl relative overflow-hidden"
               >
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-green-500 via-blue-500 to-purple-500" />
                 <div className="flex items-start gap-4">
@@ -841,7 +923,7 @@ export default function Insights() {
                   <div>
                     <h5 className="font-bold text-slate-800 text-lg mb-2">Strategic Benefit Analysis</h5>
                     <p className="text-slate-700 font-medium text-base leading-relaxed">
-                      {currentInsights.optimization.benefit}
+                      {currentData.optimization.benefit}
                     </p>
                   </div>
                 </div>
