@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, memo, useCallback } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import {
   useReactTable,

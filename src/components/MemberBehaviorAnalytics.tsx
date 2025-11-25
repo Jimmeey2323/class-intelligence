@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { format, parseISO, differenceInDays } from 'date-fns';
-import { Users, TrendingDown, UserX, AlertTriangle, Calendar, X, Award, Activity, UserCheck, Clock } from 'lucide-react';
+import { Users, TrendingDown, AlertTriangle, X, Award, Activity } from 'lucide-react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { formatCurrency } from '../utils/calculations';
 

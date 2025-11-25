@@ -14,10 +14,6 @@ import {
   ChevronDown,
   Star,
   Zap,
-  Target,
-  Activity,
-  AlertCircle,
-  DollarSign,
   X
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
@@ -150,17 +146,9 @@ export default function ClassDeepDive() {
     const times = [...new Set(classSessions.map(s => s.Time?.substring(0, 5) || ''))].filter(Boolean);
     const trainers = [...new Set(classSessions.map(s => s.Trainer))];
     
-    // Calculate unique members
+    // Calculate unique members from CheckedIn count
     const uniqueMembers = new Set<string>();
-    classSessions.forEach(session => {
-      if (session.Members && Array.isArray(session.Members)) {
-        session.Members.forEach((member: any) => {
-          if (member?.name || member?.id) {
-            uniqueMembers.add(member.name || member.id);
-          }
-        });
-      }
-    });
+    // Note: SessionData doesn't track individual members, only aggregates
 
     const dates = classSessions.map(s => parseISO(s.Date)).sort((a, b) => a.getTime() - b.getTime());
 
@@ -257,7 +245,7 @@ export default function ClassDeepDive() {
   }, [classMetrics, trainerRankingMetric]);
 
   // Calculate time slot metrics
-  const timeSlotMetrics = useMemo((): { top: TimeSlotMetrics[], bottom: TimeSlotMetrics[] } => {
+  useMemo((): { top: TimeSlotMetrics[], bottom: TimeSlotMetrics[] } => {
     if (!classMetrics) return { top: [], bottom: [] };
 
     const slotMap = new Map<string, SessionData[]>();
@@ -1035,7 +1023,7 @@ export default function ClassDeepDive() {
                                 </span>
                               </td>
                               <td className="px-3 py-2 text-right font-semibold text-slate-700 text-xs">{session.Booked || 0}</td>
-                              <td className="px-3 py-2 text-right font-semibold text-slate-700 text-xs">{session.Waitlist || 0}</td>
+                              <td className="px-3 py-2 text-right font-semibold text-slate-700 text-xs">{session.Waitlisted || 0}</td>
                               <td className="px-3 py-2 text-right font-semibold text-slate-700 text-xs">{session.Capacity}</td>
                               <td className="px-3 py-2 text-right">
                                 <span className="inline-flex items-center justify-center min-w-[3rem] px-2 py-1 rounded-md text-xs font-bold border border-slate-200 text-slate-800">
@@ -1047,7 +1035,7 @@ export default function ClassDeepDive() {
                                   {bookingRate.toFixed(1)}%
                                 </span>
                               </td>
-                              <td className="px-3 py-2 text-right font-semibold text-slate-700 text-xs">{session.NoShows || 0}</td>
+                              <td className="px-3 py-2 text-right font-semibold text-slate-700 text-xs">{session.NoShow || 0}</td>
                               <td className="px-3 py-2 text-right font-semibold text-slate-700 text-xs">{session.LateCancelled || 0}</td>
                               <td className="px-3 py-2 text-right">
                                 <span className="inline-flex items-center justify-center min-w-[3rem] px-2 py-1 rounded-md text-xs font-bold border border-slate-200 text-slate-800">
@@ -1162,7 +1150,7 @@ export default function ClassDeepDive() {
                                 </span>
                               </td>
                               <td className="px-3 py-2 text-right font-semibold text-slate-700 text-xs">{session.Booked || 0}</td>
-                              <td className="px-3 py-2 text-right font-semibold text-slate-700 text-xs">{session.NoShows || 0}</td>
+                              <td className="px-3 py-2 text-right font-semibold text-slate-700 text-xs">{session.NoShow || 0}</td>
                               <td className="px-3 py-2 text-right font-bold text-slate-900 text-xs whitespace-nowrap">
                                 {formatCurrency(session.Revenue, true)}
                               </td>
