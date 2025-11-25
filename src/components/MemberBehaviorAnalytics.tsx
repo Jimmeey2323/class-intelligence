@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { format, parseISO, differenceInDays } from 'date-fns';
 import { Users, TrendingDown, AlertTriangle, X, Award, Activity } from 'lucide-react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { formatCurrency } from '../utils/calculations';
+import { loadCheckinsFromGoogleSheets } from '../services/googleSheetsService';
 
 interface MemberStats {
   memberID: string;
@@ -48,8 +49,25 @@ interface TrainerChange {
 }
 
 export const MemberBehaviorAnalytics: React.FC = () => {
-  const { filteredData, checkinsData } = useDashboardStore();
+  const { filteredData, checkinsData, setCheckinsData } = useDashboardStore();
   const [selectedFormats, setSelectedFormats] = useState<string[]>([]);
+  const [isLoadingCheckins, setIsLoadingCheckins] = useState(false);
+
+  // Load checkins data when component mounts (lazy load)
+  useEffect(() => {
+    if (checkinsData.length === 0 && !isLoadingCheckins) {
+      setIsLoadingCheckins(true);
+      loadCheckinsFromGoogleSheets()
+        .then(data => {
+          if (data && data.length > 0) {
+            setCheckinsData(data);
+            console.log('✅ Loaded checkins for Member Analytics');
+          }
+        })
+        .catch(err => console.error('Failed to load checkins:', err))
+        .finally(() => setIsLoadingCheckins(false));
+    }
+  }, []);
 
   const normalizeClassName = (name: string): string => {
     return name.replace(/\s*express\s*/gi, '').trim();

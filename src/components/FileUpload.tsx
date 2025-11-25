@@ -59,10 +59,9 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
       setSheetsError(null);
 
       try {
-        const [sessionsData, activeClassesData, checkinsData] = await Promise.all([
+        const [sessionsData, activeClassesData] = await Promise.all([
           loadEnhancedSessionsFromGoogleSheets(),
-          loadActiveClassesFromGoogleSheets(),
-          loadCheckinsFromGoogleSheets()
+          loadActiveClassesFromGoogleSheets()
         ]);
         
         if (sessionsData.length > 0) {
@@ -73,10 +72,13 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
             console.log('✅ Loaded active classes');
           }
           
-          if (checkinsData && checkinsData.length > 0) {
-            setCheckinsData(checkinsData);
-            console.log('✅ Loaded checkins');
-          }
+          // Load checkins in background (not blocking initial render)
+          loadCheckinsFromGoogleSheets().then(checkinsData => {
+            if (checkinsData && checkinsData.length > 0) {
+              setCheckinsData(checkinsData);
+              console.log('✅ Loaded checkins (background)');
+            }
+          }).catch(err => console.warn('Checkins load failed:', err));
           
           setTimeout(() => {
             onUploadComplete?.();
