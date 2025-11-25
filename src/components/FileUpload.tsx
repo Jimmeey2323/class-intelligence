@@ -48,7 +48,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
 
   const backgroundImage = useMotionTemplate`radial-gradient(125% 125% at 50% 0%, #020617 50%, ${color})`;
 
-  // Load data from Google Sheets on mount
+  // Load data on mount
   useEffect(() => {
     const loadInitialData = async () => {
       if (rawData.length > 0) {
@@ -70,12 +70,12 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
           
           if (activeClassesData && Object.keys(activeClassesData).length > 0) {
             useDashboardStore.setState({ activeClassesData });
-            console.log('✅ Loaded active classes from Google Sheets');
+            console.log('✅ Loaded active classes');
           }
           
           if (checkinsData && checkinsData.length > 0) {
             setCheckinsData(checkinsData);
-            console.log('✅ Loaded checkins from Google Sheets');
+            console.log('✅ Loaded checkins');
           }
           
           setTimeout(() => {
@@ -83,8 +83,8 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
           }, 500);
         }
       } catch (error) {
-        console.error('Error loading data from Google Sheets:', error);
-        setSheetsError(error instanceof Error ? error.message : 'Failed to load data from Google Sheets');
+        console.error('Error loading data:', error);
+        setSheetsError(error instanceof Error ? error.message : 'Failed to load data');
       } finally {
         setIsLoadingFromSheets(false);
       }
@@ -309,7 +309,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
                 <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
                 <Cloud className="w-6 h-6 text-blue-400" />
                 <p className="text-base font-medium text-blue-200">
-                  Loading data from Google Sheets...
+                  Loading data...
                 </p>
               </div>
             </motion.div>
@@ -326,7 +326,7 @@ export default function FileUpload({ onUploadComplete }: FileUploadProps) {
                 <AlertCircle className="w-6 h-6 text-amber-400 flex-shrink-0" />
                 <div className="text-left">
                   <p className="text-base font-medium text-amber-200">
-                    Could not load data from Google Sheets
+                    Could not load data
                   </p>
                   <p className="text-sm text-amber-300/80 mt-2">{sheetsError}</p>
                   <p className="text-sm text-amber-400 mt-2">
