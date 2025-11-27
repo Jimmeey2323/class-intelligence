@@ -1,4 +1,4 @@
-import { useState, Suspense, lazy } from 'react';
+import { useState, Suspense, lazy, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDashboardStore } from './store/dashboardStore';
 import FileUpload from './components/FileUpload';
@@ -21,7 +21,24 @@ type ViewTab = 'dashboard' | 'pro-scheduler' | 'members' | 'class-dive' | 'insig
 function App() {
   const { rawData } = useDashboardStore();
   const [showUpload, setShowUpload] = useState(false);
-  const [activeView, setActiveView] = useState<ViewTab>('dashboard');
+  const [activeView, setActiveView] = useState<ViewTab>(() => {
+    // Load last active view from localStorage
+    try {
+      const saved = localStorage.getItem('activeView');
+      return (saved as ViewTab) || 'dashboard';
+    } catch {
+      return 'dashboard';
+    }
+  });
+  
+  // Save active view to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem('activeView', activeView);
+    } catch (error) {
+      console.error('Failed to save active view:', error);
+    }
+  }, [activeView]);
 
   const hasData = rawData.length > 0;
 

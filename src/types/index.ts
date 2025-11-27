@@ -342,6 +342,7 @@ export interface DashboardState {
   setScheduleData: (scheduleData: { [day: string]: any[] }) => void;
   applyFilters: () => void;
   exportData: (format: 'csv' | 'xlsx') => void;
+  updateClassSchedule?: (classId: string, newDay: string, newTime: string) => void;
 }
 
 // Rankings

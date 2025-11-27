@@ -268,5 +268,65 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       const { processedData } = get();
       console.log(`Exporting ${processedData.length} rows as ${format}`);
     },
+    
+    updateClassSchedule: (classId: string, newDay: string, newTime: string) => {
+      set((state) => {
+        // Update in activeClassesData - it's structured as { [day]: classes[] }
+        const updatedActiveClasses = { ...state.activeClassesData };
+        let updatedClass: any = null;
+        
+        // Find and update the class across all days
+        Object.keys(updatedActiveClasses).forEach(day => {
+          const dayClasses = updatedActiveClasses[day];
+          if (Array.isArray(dayClasses)) {
+            const classIndex = dayClasses.findIndex((cls: any) => cls.id === classId);
+            if (classIndex !== -1) {
+              // Found the class - update it and potentially move to different day
+              const cls = { ...dayClasses[classIndex], day: newDay, time: newTime };
+              updatedClass = cls;
+              
+              // Remove from current day
+              updatedActiveClasses[day] = dayClasses.filter((c: any) => c.id !== classId);
+              
+              // Add to new day
+              if (!updatedActiveClasses[newDay]) {
+                updatedActiveClasses[newDay] = [];
+              }
+              updatedActiveClasses[newDay] = [...updatedActiveClasses[newDay], cls];
+            }
+          }
+        });
+        
+        // Also update in rawData if the class exists there
+        const updatedRawData = state.rawData.map(session => {
+          if (updatedClass && 
+              session.Class === updatedClass.class &&
+              session.Location === updatedClass.location &&
+              session.Trainer === updatedClass.trainer &&
+              session.Day === updatedClass.day &&
+              session.Time === updatedClass.time) {
+            return {
+              ...session,
+              Day: newDay,
+              Time: newTime
+            };
+          }
+          return session;
+        });
+        
+        return {
+          activeClassesData: updatedActiveClasses,
+          rawData: updatedRawData
+        };
+      });
+      
+      // Invalidate ProScheduler cache to force refresh
+      if (typeof window !== 'undefined') {
+        (window as any).__proSchedulerCacheInvalidate = Date.now();
+      }
+      
+      // Reapply filters to update the view
+      get().applyFilters();
+    },
   };
 });

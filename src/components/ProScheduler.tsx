@@ -250,6 +250,7 @@ type CalendarViewMode = 'standard' | 'multi-location' | 'horizontal' | 'analytic
 let cachedScheduleClasses: ScheduleClass[] | null = null;
 let cacheTimestamp = 0;
 const CACHE_DURATION = 60000; // 1 minute
+let lastInvalidateTimestamp = 0;
 
 function ProScheduler() {
   const { rawData = [], activeClassesData = {}, checkinsData = [] } = useDashboardStore();
@@ -283,6 +284,8 @@ function ProScheduler() {
   const [createdClasses, setCreatedClasses] = useState<Set<string>>(new Set());
   const [showDiscontinued, setShowDiscontinued] = useState(false);
   const [selectedSessionForMembers, setSelectedSessionForMembers] = useState<SessionData | null>(null);
+  const [draggedClass, setDraggedClass] = useState<ScheduleClass | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ day: string; time: string } | null>(null);
   const [showMemberDetailsModal, setShowMemberDetailsModal] = useState(false);
   const [memberSearchQuery, setMemberSearchQuery] = useState('');
   const [memberStatusFilter, setMemberStatusFilter] = useState<'all' | 'checked-in' | 'cancelled' | 'no-show'>('all');
@@ -313,34 +316,6 @@ function ProScheduler() {
     
     // All others are intermediate
     return 'intermediate';
-  };
-  
-  // Enhanced format classification for heatmap colors
-  const getFormatCategory = (className: string): string => {
-    const name = className.toLowerCase().trim();
-    
-    // Yoga family
-    if (name.includes('yoga') || name.includes('vinyasa') || name.includes('hatha')) return 'yoga';
-    // Pilates family  
-    if (name.includes('pilates') || name.includes('mat') || name.includes('reformer')) return 'pilates';
-    // High intensity
-    if (name.includes('hiit') || name.includes('amped') || name.includes('intensity')) return 'hiit';
-    // Cycling
-    if (name.includes('spin') || name.includes('cycle') || name.includes('powercycle')) return 'cycle';
-    // Strength
-    if (name.includes('strength') || name.includes('lab') || name.includes('weight')) return 'strength';
-    // Barre
-    if (name.includes('barre')) return 'barre';
-    // Boxing/Combat
-    if (name.includes('box') || name.includes('combat') || name.includes('kickbox')) return 'boxing';
-    // Dance
-    if (name.includes('dance') || name.includes('zumba') || name.includes('rhythm')) return 'dance';
-    // Cardio
-    if (name.includes('cardio') || name.includes('burn') || name.includes('sweat')) return 'cardio';
-    // Functional
-    if (name.includes('functional') || name.includes('movement') || name.includes('mobility')) return 'functional';
-    
-    return 'general';
   };
   
   // ESC key handler for member details modal
@@ -546,6 +521,14 @@ function ProScheduler() {
   // Process active classes data into schedule format with caching
   const scheduleClasses = useMemo(() => {
     const now = Date.now();
+    
+    // Check if cache was invalidated by drag-drop update
+    const invalidateTimestamp = (typeof window !== 'undefined') ? (window as any).__proSchedulerCacheInvalidate || 0 : 0;
+    if (invalidateTimestamp > lastInvalidateTimestamp) {
+      cachedScheduleClasses = null;
+      lastInvalidateTimestamp = invalidateTimestamp;
+      console.log('🔄 Cache invalidated, refreshing schedule classes');
+    }
     
     // Return cached data if still valid
     if (cachedScheduleClasses && (now - cacheTimestamp) < CACHE_DURATION) {
@@ -1400,20 +1383,72 @@ function ProScheduler() {
     const isEdited = editedClasses.has(cls.id);
     const isNewlyCreated = createdClasses.has(cls.id);
     const isDiscontinued = cls.isDiscontinued || false;
+    
+    // Native drag handlers
+    const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
+      if (isDiscontinued) {
+        e.preventDefault();
+        return;
+      }
+      
+      console.log('🎯 Drag started:', cls.class, cls.id);
+      
+      // Prevent text selection during drag
+      e.currentTarget.style.userSelect = 'none';
+      
+      setDraggedClass(cls);
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', cls.id);
+      
+      // Create a better drag image
+      try {
+        const dragImage = e.currentTarget.cloneNode(true) as HTMLElement;
+        dragImage.style.position = 'absolute';
+        dragImage.style.top = '-1000px';
+        dragImage.style.opacity = '0.8';
+        dragImage.style.transform = 'rotate(2deg)';
+        dragImage.style.pointerEvents = 'none';
+        document.body.appendChild(dragImage);
+        e.dataTransfer.setDragImage(dragImage, e.nativeEvent.offsetX, e.nativeEvent.offsetY);
+        setTimeout(() => {
+          if (document.body.contains(dragImage)) {
+            document.body.removeChild(dragImage);
+          }
+        }, 0);
+      } catch (err) {
+        console.log('Drag image creation failed, using default');
+      }
+    };
+    
+    const handleDragEnd = () => {
+      console.log('🏁 Drag ended');
+      setDraggedClass(null);
+      setDropTarget(null);
+    };
+    
+    const handleCardClick = (e: React.MouseEvent) => {
+      // Don't trigger click if we just finished dragging
+      if (draggedClass) {
+        e.preventDefault();
+        return;
+      }
+      handleClassClick(cls);
+    };
 
     return (
-      <motion.div
+      <div
         key={cls.id}
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        whileHover={{ scale: 1.02, y: -2 }}
-        onClick={() => handleClassClick(cls)}
+        draggable={!isDiscontinued}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onClick={handleCardClick}
         onMouseEnter={() => setHoveredClassId(cls.id)}
         onMouseLeave={() => setHoveredClassId(null)}
-        className={`bg-gradient-to-br ${isDiscontinued ? 'from-gray-200 to-gray-300 border-gray-400 opacity-70' : cardColor} backdrop-blur-sm border rounded-xl shadow-sm hover:shadow-lg cursor-pointer transition-all duration-300 overflow-hidden group relative ${isDiscontinued ? 'grayscale' : ''}`}
+        style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+        className={`bg-gradient-to-br ${isDiscontinued ? 'from-gray-200 to-gray-300 border-gray-400 opacity-70' : cardColor} backdrop-blur-sm border rounded-xl shadow-sm hover:shadow-lg cursor-${isDiscontinued ? 'not-allowed' : 'move'} transition-all duration-300 overflow-hidden group relative ${isDiscontinued ? 'grayscale' : ''} ${draggedClass?.id === cls.id ? 'opacity-30' : ''}`}
       >
         {/* Status Indicators - Top Right */}
-        <div className="absolute top-1.5 right-1.5 flex gap-1 z-10">
+        <div className="absolute top-1.5 right-1.5 flex gap-1 z-10 pointer-events-auto">
           {isEdited && !isDiscontinued && (
             <>
               <button
@@ -1423,6 +1458,8 @@ function ProScheduler() {
                     handleRevertClass(cls.id);
                   }
                 }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onDragStart={(e) => e.stopPropagation()}
                 className="bg-yellow-500 hover:bg-yellow-600 text-white rounded-full p-1 shadow-md transition-colors" 
                 title="Revert to Original"
               >
@@ -1441,7 +1478,7 @@ function ProScheduler() {
         </div>
 
         {/* Collapsed View - Beautiful & Clean with Key Metrics */}
-        <div className="p-2.5">
+        <div className="p-2.5 pointer-events-none">
           {/* Header with Class Name and Icons */}
           <div className="flex items-center justify-between mb-1.5">
             <div className="font-bold text-sm text-slate-900 truncate flex-1 mr-2">
@@ -1535,7 +1572,7 @@ function ProScheduler() {
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
               transition={{ duration: 0.2 }}
-              className="border-t border-white/50 bg-white/80 backdrop-blur-sm"
+              className="border-t border-white/50 bg-white/80 backdrop-blur-sm pointer-events-none"
             >
               <div className="p-3 space-y-2">
                 {/* Trainer & Location */}
@@ -1671,7 +1708,8 @@ function ProScheduler() {
                     e.stopPropagation();
                     setShowSimilarClasses(cls.id);
                   }}
-                  className="w-full bg-blue-500 hover:bg-blue-600 text-white text-[9px] font-medium py-1.5 px-2 rounded-md transition-all duration-200 flex items-center justify-center gap-1 shadow-sm hover:shadow-md"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="w-full bg-blue-500 hover:bg-blue-600 text-white text-[9px] font-medium py-1.5 px-2 rounded-md transition-all duration-200 flex items-center justify-center gap-1 shadow-sm hover:shadow-md pointer-events-auto"
                 >
                   <Repeat className="w-2.5 h-2.5" />
                   Show Similar
@@ -1688,7 +1726,7 @@ function ProScheduler() {
             </motion.div>
           )}
         </AnimatePresence>
-      </motion.div>
+      </div>
     );
   };
 
@@ -1743,7 +1781,23 @@ function ProScheduler() {
         </div>
       </div>
 
-
+      {/* Drag-and-Drop Info Banner */}
+      {viewMode === 'calendar' && (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 flex items-center gap-3">
+          <div className="bg-blue-500 text-white rounded-full p-2">
+            <ArrowRightLeft className="w-5 h-5" />
+          </div>
+          <div className="flex-1">
+            <div className="font-semibold text-blue-900 text-sm">Drag & Drop Enabled</div>
+            <div className="text-blue-700 text-xs">Drag class cards to different time slots or days to reschedule. Changes are saved automatically.</div>
+          </div>
+          {draggedClass && (
+            <div className="bg-blue-500 text-white px-3 py-1.5 rounded-full text-xs font-bold animate-pulse">
+              Moving: {draggedClass.class}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Advanced Control Panel */}
       <div className="glass-card rounded-2xl p-3 border border-white/20 shadow-xl backdrop-blur-xl mb-6">
@@ -2558,7 +2612,46 @@ function ProScheduler() {
                   
                   {/* Classes for each day */}
                   {DAYS_OF_WEEK.map(day => (
-                    <div key={`${day.key}-${slot.time24}`} className="min-h-[80px] relative">
+                    <div 
+                      key={`${day.key}-${slot.time24}`} 
+                      className={`min-h-[80px] relative rounded-lg transition-all ${
+                        dropTarget?.day === day.key && dropTarget?.time === slot.time24 
+                          ? 'ring-4 ring-blue-400 bg-blue-50' 
+                          : ''
+                      }`}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        setDropTarget({ day: day.key, time: slot.time24 });
+                      }}
+                      onDragLeave={() => {
+                        setDropTarget(null);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        console.log('📍 Drop event:', { 
+                          draggedClass: draggedClass?.class, 
+                          targetDay: day.key, 
+                          targetTime: slot.time24,
+                          currentDay: draggedClass?.day,
+                          currentTime: draggedClass?.time
+                        });
+                        if (draggedClass && (draggedClass.day !== day.key || draggedClass.time !== slot.time24)) {
+                          const store = useDashboardStore.getState();
+                          if (store.updateClassSchedule) {
+                            console.log('✨ Updating class schedule...');
+                            store.updateClassSchedule(draggedClass.id, day.key, slot.time24);
+                            console.log(`✓ Moved ${draggedClass.class} to ${day.full} at ${slot.time12}`);
+                          } else {
+                            console.error('❌ updateClassSchedule not available in store');
+                          }
+                        } else {
+                          console.log('⚠️ No move needed - same position');
+                        }
+                        setDraggedClass(null);
+                        setDropTarget(null);
+                      }}
+                    >
                       {scheduleGrid[day.key]?.[slot.time24]?.map(cls => renderClassCard(cls))}
                       
                       {/* Empty slot - add class button */}
@@ -2614,15 +2707,127 @@ function ProScheduler() {
                       {DAYS_OF_WEEK.map((day) => {
                         const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
                         const activeLocations = filters.locations.length > 0 ? filters.locations : uniqueLocations;
+                        const isExpanded = expandedDayFormats.has(day.key);
+                        
+                        // Calculate format mix for this day
+                        const formatCounts = dayClasses.reduce((acc, cls) => {
+                          const format = cls.class || 'Unknown';
+                          acc[format] = (acc[format] || 0) + 1;
+                          return acc;
+                        }, {} as Record<string, number>);
+                        
+                        // Group formats by difficulty
+                        const groupedFormats = {
+                          beginner: [] as Array<[string, number]>,
+                          intermediate: [] as Array<[string, number]>,
+                          advanced: [] as Array<[string, number]>
+                        };
+                        
+                        Object.entries(formatCounts).forEach(([format, count]) => {
+                          const difficulty = getFormatDifficulty(format);
+                          groupedFormats[difficulty].push([format, count]);
+                        });
+                        
+                        // Sort each group by count
+                        groupedFormats.beginner.sort((a, b) => b[1] - a[1]);
+                        groupedFormats.intermediate.sort((a, b) => b[1] - a[1]);
+                        groupedFormats.advanced.sort((a, b) => b[1] - a[1]);
+                        
+                        const totalFormats = Object.keys(formatCounts).length;
                         
                         return (
                           <div key={day.key} className="flex-1 min-w-[280px] border-r-2 border-gray-300 last:border-r-0">
-                            {/* Day Header - Minimalistic Design */}
-                            <div className="bg-gradient-to-br from-slate-50 to-blue-50 border-b border-gray-200 p-3 text-center">
-                              <div className="font-bold text-gray-900 text-sm mb-1">{day.short}</div>
-                              <div className="inline-flex items-center justify-center bg-white/70 rounded-full px-2 py-0.5 shadow-sm">
-                                <span className="text-xs font-medium text-gray-700">{dayClasses.length}</span>
+                            {/* Day Header - With Format Mix */}
+                            <div className="bg-gradient-to-br from-slate-50 to-blue-50 border-b border-gray-200 overflow-hidden">
+                              <div 
+                                className="p-3 text-center cursor-pointer hover:bg-blue-50 transition-colors"
+                                onClick={() => {
+                                  setExpandedDayFormats(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(day.key)) {
+                                      next.delete(day.key);
+                                    } else {
+                                      next.add(day.key);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                              >
+                                <div className="flex items-center justify-center gap-1">
+                                  <span className="font-bold text-gray-900 text-sm">{day.short}</span>
+                                  <ChevronDown className={`w-3 h-3 text-blue-600 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                                </div>
+                                <div className="inline-flex items-center justify-center bg-white/70 rounded-full px-2 py-0.5 shadow-sm mt-1">
+                                  <span className="text-xs font-medium text-gray-700">{dayClasses.length}</span>
+                                </div>
                               </div>
+                              
+                              {/* Collapsible Format Mix */}
+                              <AnimatePresence>
+                                {isExpanded && totalFormats > 0 && (
+                                  <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: 'auto', opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="border-t border-slate-200 bg-white"
+                                  >
+                                    <div className="p-2 max-h-[200px] overflow-y-auto">
+                                      <div className="text-[9px] uppercase tracking-wider text-slate-500 font-bold mb-1.5">Format Mix ({totalFormats})</div>
+                                      <div className="space-y-2">
+                                        {groupedFormats.beginner.length > 0 && (
+                                          <div>
+                                            <div className="text-[8px] uppercase tracking-wider text-green-600 font-bold mb-1 flex items-center gap-1">
+                                              <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                              Beginner ({groupedFormats.beginner.length})
+                                            </div>
+                                            <div className="space-y-0.5 ml-3">
+                                              {groupedFormats.beginner.map(([format, count]) => (
+                                                <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-green-50 px-1 py-0.5 rounded">
+                                                  <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                                  <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {groupedFormats.intermediate.length > 0 && (
+                                          <div>
+                                            <div className="text-[8px] uppercase tracking-wider text-blue-600 font-bold mb-1 flex items-center gap-1">
+                                              <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                              Intermediate ({groupedFormats.intermediate.length})
+                                            </div>
+                                            <div className="space-y-0.5 ml-3">
+                                              {groupedFormats.intermediate.map(([format, count]) => (
+                                                <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-blue-50 px-1 py-0.5 rounded">
+                                                  <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                                  <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                        {groupedFormats.advanced.length > 0 && (
+                                          <div>
+                                            <div className="text-[8px] uppercase tracking-wider text-red-600 font-bold mb-1 flex items-center gap-1">
+                                              <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                                              Advanced ({groupedFormats.advanced.length})
+                                            </div>
+                                            <div className="space-y-0.5 ml-3">
+                                              {groupedFormats.advanced.map(([format, count]) => (
+                                                <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-red-50 px-1 py-0.5 rounded">
+                                                  <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                                  <span className="bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
                             </div>
                             {/* Location Sub-headers - Minimalistic */}
                             <div className="flex">
@@ -2693,7 +2898,31 @@ function ProScheduler() {
                                 return (
                                   <div 
                                     key={`${day.key}-${location}-${slot.time24}`} 
-                                    className={`flex-1 min-w-[130px] p-2 min-h-[90px] relative bg-white hover:bg-gray-50/50 transition-colors border-r border-gray-100 ${idx === activeLocations.length - 1 ? 'border-r-0' : ''} overflow-hidden`}
+                                    className={`flex-1 min-w-[130px] p-2 min-h-[90px] relative bg-white hover:bg-gray-50/50 transition-colors border-r border-gray-100 ${idx === activeLocations.length - 1 ? 'border-r-0' : ''} overflow-hidden ${
+                                      dropTarget?.day === day.key && dropTarget?.time === slot.time24 
+                                        ? 'ring-4 ring-blue-400 bg-blue-50' 
+                                        : ''
+                                    }`}
+                                    onDragOver={(e) => {
+                                      e.preventDefault();
+                                      e.dataTransfer.dropEffect = 'move';
+                                      setDropTarget({ day: day.key, time: slot.time24 });
+                                    }}
+                                    onDragLeave={() => {
+                                      setDropTarget(null);
+                                    }}
+                                    onDrop={(e) => {
+                                      e.preventDefault();
+                                      if (draggedClass && (draggedClass.day !== day.key || draggedClass.time !== slot.time24)) {
+                                        const store = useDashboardStore.getState();
+                                        if (store.updateClassSchedule) {
+                                          store.updateClassSchedule(draggedClass.id, day.key, slot.time24);
+                                          console.log(`Moved ${draggedClass.class} to ${day.full} at ${slot.time12}`);
+                                        }
+                                      }
+                                      setDraggedClass(null);
+                                      setDropTarget(null);
+                                    }}
                                   >
                                     <div className="space-y-1">
                                       {locationSlotClasses.map(cls => (
@@ -2782,13 +3011,41 @@ function ProScheduler() {
                                 return (
                                   <div key={day.key}>
                                     <div className="text-[10px] font-semibold text-slate-600 mb-1">{day.short}</div>
-                                    {daySlotClass ? (
-                                      renderClassCard(daySlotClass)
-                                    ) : (
-                                      <div className="border border-dashed border-slate-200 rounded-lg p-2 text-center text-[10px] text-slate-400">
-                                        No class
-                                      </div>
-                                    )}
+                                    <div
+                                      className={`min-h-[80px] ${
+                                        dropTarget?.day === day.key && dropTarget?.time === slot.time24 
+                                          ? 'ring-2 ring-blue-400 rounded-lg' 
+                                          : ''
+                                      }`}
+                                      onDragOver={(e) => {
+                                        e.preventDefault();
+                                        e.dataTransfer.dropEffect = 'move';
+                                        setDropTarget({ day: day.key, time: slot.time24 });
+                                      }}
+                                      onDragLeave={() => {
+                                        setDropTarget(null);
+                                      }}
+                                      onDrop={(e) => {
+                                        e.preventDefault();
+                                        if (draggedClass && (draggedClass.day !== day.key || draggedClass.time !== slot.time24)) {
+                                          const store = useDashboardStore.getState();
+                                          if (store.updateClassSchedule) {
+                                            store.updateClassSchedule(draggedClass.id, day.key, slot.time24);
+                                            console.log(`Moved ${draggedClass.class} to ${day.full} at ${slot.time12}`);
+                                          }
+                                        }
+                                        setDraggedClass(null);
+                                        setDropTarget(null);
+                                      }}
+                                    >
+                                      {daySlotClass ? (
+                                        renderClassCard(daySlotClass)
+                                      ) : (
+                                        <div className="border border-dashed border-slate-200 rounded-lg p-2 text-center text-[10px] text-slate-400">
+                                          No class
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
                                 );
                               })}
@@ -2817,31 +3074,146 @@ function ProScheduler() {
                 </h3>
               </div>
 
-              {/* Sticky Header Row */}
-              <div className="sticky top-0 z-20 flex bg-gradient-to-r from-gray-100 to-gray-200 shadow-sm border-b border-gray-300">
-                <div className="flex-shrink-0 w-24 border-r border-gray-200 p-3 flex items-center justify-center">
-                  <span className="text-sm font-bold text-gray-700">Time</span>
-                </div>
+              {/* Scrollable Container */}
+              <div className="overflow-x-auto overflow-y-auto max-h-[70vh]">
+                <div className="min-w-max">
+                  {/* Sticky Header Row */}
+                  <div className="sticky top-0 z-20 flex bg-gradient-to-r from-gray-100 to-gray-200 shadow-sm border-b border-gray-300">
+                    <div className="sticky left-0 z-30 flex-shrink-0 w-24 border-r border-gray-200 p-3 flex items-center justify-center bg-gray-100 shadow-sm">
+                      <span className="text-sm font-bold text-gray-700">Time</span>
+                    </div>
                 {DAYS_OF_WEEK.map((day) => {
                   const dayClasses = filteredClasses.filter(cls => cls.day === day.key);
+                  const isExpanded = expandedDayFormats.has(day.key);
                   const avgFillRate = dayClasses.length > 0 
                     ? Math.round(dayClasses.reduce((sum, cls) => sum + cls.fillRate, 0) / dayClasses.length)
                     : 0;
                   const totalRevenue = dayClasses.reduce((sum, cls) => sum + cls.revenue, 0);
                   
+                  // Calculate format mix for this day
+                  const formatCounts = dayClasses.reduce((acc, cls) => {
+                    const format = cls.class || 'Unknown';
+                    acc[format] = (acc[format] || 0) + 1;
+                    return acc;
+                  }, {} as Record<string, number>);
+                  
+                  // Group formats by difficulty
+                  const groupedFormats = {
+                    beginner: [] as Array<[string, number]>,
+                    intermediate: [] as Array<[string, number]>,
+                    advanced: [] as Array<[string, number]>
+                  };
+                  
+                  Object.entries(formatCounts).forEach(([format, count]) => {
+                    const difficulty = getFormatDifficulty(format);
+                    groupedFormats[difficulty].push([format, count]);
+                  });
+                  
+                  // Sort each group by count
+                  groupedFormats.beginner.sort((a, b) => b[1] - a[1]);
+                  groupedFormats.intermediate.sort((a, b) => b[1] - a[1]);
+                  groupedFormats.advanced.sort((a, b) => b[1] - a[1]);
+                  
+                  const totalFormats = Object.keys(formatCounts).length;
+                  
                   return (
-                    <div key={day.key} className="flex-1 min-w-[140px] border-r border-gray-200 last:border-r-0 p-3 text-center">
-                      <div className="font-bold text-gray-800 text-sm">{day.short}</div>
-                      <div className="text-xs text-gray-600 mt-1">{dayClasses.length} classes</div>
-                      <div className="text-xs text-blue-600 font-bold mt-1">{avgFillRate}% fill</div>
-                      <div className="text-xs text-emerald-600 font-semibold mt-1">{formatRevenue(totalRevenue)}</div>
+                    <div key={day.key} className="flex-1 min-w-[140px] border-r border-gray-200 last:border-r-0 overflow-hidden">
+                      <div 
+                        className="p-3 text-center cursor-pointer hover:bg-gray-50 transition-colors"
+                        onClick={() => {
+                          setExpandedDayFormats(prev => {
+                            const next = new Set(prev);
+                            if (next.has(day.key)) {
+                              next.delete(day.key);
+                            } else {
+                              next.add(day.key);
+                            }
+                            return next;
+                          });
+                        }}
+                      >
+                        <div className="flex items-center justify-center gap-1">
+                          <span className="font-bold text-gray-800 text-sm">{day.short}</span>
+                          <ChevronDown className={`w-3 h-3 text-blue-600 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                        </div>
+                        <div className="text-xs text-gray-600 mt-1">{dayClasses.length} classes</div>
+                        <div className="text-xs text-blue-600 font-bold mt-1">{avgFillRate}% fill</div>
+                        <div className="text-xs text-emerald-600 font-semibold mt-1">{formatRevenue(totalRevenue)}</div>
+                      </div>
+                      
+                      {/* Collapsible Format Mix */}
+                      <AnimatePresence>
+                        {isExpanded && totalFormats > 0 && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2 }}
+                            className="border-t border-gray-200 bg-white"
+                          >
+                            <div className="p-2 max-h-[200px] overflow-y-auto">
+                              <div className="text-[9px] uppercase tracking-wider text-slate-500 font-bold mb-1.5">Format Mix ({totalFormats})</div>
+                              <div className="space-y-2">
+                                {groupedFormats.beginner.length > 0 && (
+                                  <div>
+                                    <div className="text-[8px] uppercase tracking-wider text-green-600 font-bold mb-1 flex items-center gap-1">
+                                      <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                      Beginner ({groupedFormats.beginner.length})
+                                    </div>
+                                    <div className="space-y-0.5 ml-3">
+                                      {groupedFormats.beginner.map(([format, count]) => (
+                                        <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-green-50 px-1 py-0.5 rounded">
+                                          <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                          <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {groupedFormats.intermediate.length > 0 && (
+                                  <div>
+                                    <div className="text-[8px] uppercase tracking-wider text-blue-600 font-bold mb-1 flex items-center gap-1">
+                                      <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                      Intermediate ({groupedFormats.intermediate.length})
+                                    </div>
+                                    <div className="space-y-0.5 ml-3">
+                                      {groupedFormats.intermediate.map(([format, count]) => (
+                                        <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-blue-50 px-1 py-0.5 rounded">
+                                          <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                          <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {groupedFormats.advanced.length > 0 && (
+                                  <div>
+                                    <div className="text-[8px] uppercase tracking-wider text-red-600 font-bold mb-1 flex items-center gap-1">
+                                      <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                                      Advanced ({groupedFormats.advanced.length})
+                                    </div>
+                                    <div className="space-y-0.5 ml-3">
+                                      {groupedFormats.advanced.map(([format, count]) => (
+                                        <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-red-50 px-1 py-0.5 rounded">
+                                          <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                          <span className="bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
                   );
                 })}
               </div>
 
-              {/* Scrollable Time Slots Container */}
-              <div className="overflow-y-auto max-h-[70vh] bg-white">
+              {/* Time Slots Body */}
+              <div className="bg-white">
                 {TIME_SLOTS.map((slot) => {
                   const slotHour = parseInt(slot.time24.split(':')[0]);
                   const isNonFunctional = slotHour < 7 || slotHour > 20;
@@ -2853,7 +3225,7 @@ function ProScheduler() {
                   return (
                     <div key={slot.time24} className={`flex border-b border-gray-100 ${hasClassesAtThisTime ? 'bg-white' : 'bg-gray-25'}`}>
                       {/* Time Label */}
-                      <div className={`flex-shrink-0 w-24 border-r-2 border-gray-200 p-2 flex items-center justify-center ${hasClassesAtThisTime ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'}`}>
+                      <div className={`sticky left-0 z-20 flex-shrink-0 w-24 border-r-2 border-gray-200 p-2 flex items-center justify-center shadow-sm ${hasClassesAtThisTime ? 'bg-gradient-to-r from-blue-50 to-blue-100' : 'bg-gray-50'}`}>
                         <div className="text-xs font-bold text-gray-700 text-center">
                           {slot.time12}
                           {slotClasses.length > 0 && (
@@ -2888,6 +3260,8 @@ function ProScheduler() {
                   );
                 })}
                 </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -3641,6 +4015,7 @@ function ProScheduler() {
                       
                       const trainerName = selectedClass.trainer.toLowerCase();
                       
+                      // Get sessions from rawData (cleaned sheet)
                       const trainerSessions = rawData.filter((session: SessionData) => {
                         const sessionDate = parseISO(session.Date);
                         if (sessionDate >= today) return false; // Only past sessions
@@ -3657,7 +4032,22 @@ function ProScheduler() {
                                trainerName.includes(sessionTrainer);
                       });
 
-                      // Calculate class frequency from ALL trainer sessions
+                      // Also get sessions from checkinsData (sessions sheet) - more comprehensive
+                      const trainerCheckins = checkinsData.filter((checkin: CheckinData) => {
+                        const sessionDate = parseISO(checkin.Date);
+                        if (sessionDate >= today) return false; // Only past sessions
+                        const inDateRange = isWithinInterval(sessionDate, { start: filters.dateFrom, end: filters.dateTo });
+                        if (!inDateRange) return false;
+                        
+                        // Match by trainer name
+                        const checkinTrainer = checkin.TeacherName?.toLowerCase() || '';
+                        
+                        return checkinTrainer === trainerName || 
+                               checkinTrainer.includes(trainerName) ||
+                               trainerName.includes(checkinTrainer);
+                      });
+
+                      // Calculate class frequency from rawData
                       const classCount = trainerSessions.reduce((acc, session) => {
                         if (session.Class) {
                           acc[session.Class] = (acc[session.Class] || 0) + 1;
@@ -3665,23 +4055,73 @@ function ProScheduler() {
                         return acc;
                       }, {} as Record<string, number>);
                       
-                      // Sort by frequency and get top 3
-                      const topClasses = Object.entries(classCount)
-                        .sort(([,a], [,b]) => b - a)
-                        .slice(0, 3)
-                        .map(([className, count]) => ({ name: className, count }));
+                      // Add class frequency from checkinsData (use CleanedClass for class name)
+                      // Group by unique session to avoid counting duplicates
+                      const uniqueSessions = new Set<string>();
+                      trainerCheckins.forEach((checkin: CheckinData) => {
+                        const sessionKey = `${checkin.SessionID}-${checkin.CleanedClass}`;
+                        if (!uniqueSessions.has(sessionKey)) {
+                          uniqueSessions.add(sessionKey);
+                          if (checkin.CleanedClass) {
+                            classCount[checkin.CleanedClass] = (classCount[checkin.CleanedClass] || 0) + 1;
+                          }
+                        }
+                      });
+                      
+                      // Calculate metrics for each class
+                      const classMetrics = Object.keys(classCount).map(className => {
+                        // Get all sessions for this class from rawData
+                        const classSessions = trainerSessions.filter(s => s.Class === className);
+                        
+                        // Calculate average check-ins (class average)
+                        const totalCheckIns = classSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0);
+                        const totalCapacity = classSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0);
+                        const classAverage = classSessions.length > 0 ? totalCheckIns / classSessions.length : 0;
+                        const fillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
+                        
+                        return {
+                          name: className,
+                          count: classCount[className],
+                          classAverage: Math.round(classAverage * 10) / 10,
+                          fillRate: Math.round(fillRate)
+                        };
+                      });
+                      
+                      // Calculate location average for comparison
+                      const location = selectedClass.location;
+                      const locationSessions = rawData.filter((session: SessionData) => {
+                        const sessionDate = parseISO(session.Date);
+                        if (sessionDate >= today) return false;
+                        const inDateRange = isWithinInterval(sessionDate, { start: filters.dateFrom, end: filters.dateTo });
+                        return inDateRange && session.Location === location;
+                      });
+                      
+                      const locationTotalCheckIns = locationSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0);
+                      const locationAverage = locationSessions.length > 0 
+                        ? locationTotalCheckIns / locationSessions.length 
+                        : 0;
+                      
+                      // Filter classes: classAverage > locationAverage OR fillRate > 60%
+                      const topClasses = classMetrics
+                        .filter(cls => cls.classAverage > locationAverage || cls.fillRate > 60)
+                        .sort((a, b) => {
+                          // Sort by class average first, then by frequency
+                          if (Math.abs(a.classAverage - b.classAverage) > 1) {
+                            return b.classAverage - a.classAverage;
+                          }
+                          return b.count - a.count;
+                        });
 
-                      // If we still only have 1 or 0 classes, show a debug message
-                      if (topClasses.length <= 1) {
-                        console.log('Debug trainer sessions:', {
+                      // Debug logging if needed
+                      if (topClasses.length === 0) {
+                        console.log('Debug trainer class metrics:', {
                           selectedTrainer: selectedClass.trainer,
-                          foundSessions: trainerSessions.length,
-                          sampleSessions: trainerSessions.slice(0, 3).map(s => ({ 
-                            Trainer: s.Trainer, 
-                            Class: s.Class, 
-                            FirstName: s.FirstName, 
-                            LastName: s.LastName 
-                          })),
+                          location: location,
+                          locationAverage: Math.round(locationAverage * 10) / 10,
+                          foundInRawData: trainerSessions.length,
+                          foundInCheckinsData: trainerCheckins.length,
+                          uniqueSessionsFromCheckins: uniqueSessions.size,
+                          allClassMetrics: classMetrics,
                           classCount
                         });
                       }
@@ -3689,9 +4129,17 @@ function ProScheduler() {
                       return topClasses.map((classInfo, i) => (
                         <div key={i} className="px-3 py-1.5 bg-blue-500/30 rounded-full text-xs font-medium flex items-center gap-2">
                           <span>{classInfo.name}</span>
-                          <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded-full font-semibold">
-                            {classInfo.count}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded-full font-semibold" title="Sessions taught">
+                              {classInfo.count}
+                            </span>
+                            <span className="text-[10px] bg-green-500/30 px-1.5 py-0.5 rounded-full font-semibold" title="Class average">
+                              {classInfo.classAverage}
+                            </span>
+                            <span className="text-[10px] bg-blue-500/30 px-1.5 py-0.5 rounded-full font-semibold" title="Fill rate">
+                              {classInfo.fillRate}%
+                            </span>
+                          </div>
                         </div>
                       ));
                     })()}
