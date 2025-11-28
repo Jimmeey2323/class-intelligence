@@ -1,5 +1,4 @@
-import { useMemo, useState, useEffect, useCallback } from 'react';
-import * as XLSX from 'xlsx';
+import { useMemo, useState, useEffect, useCallback, memo } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -32,27 +31,46 @@ import EmptyState from './EmptyState';
 
 // (Sparkline removed per design requirements)
 
-export default function DataTableEnhanced() {
-  const {
-    processedData,
-    viewMode,
-    setViewMode,
-    groupBy,
-    setGroupBy,
-    expandedGroups,
-    toggleGroup,
-    excludeHostedClasses,
-    setExcludeHostedClasses,
-    tableView,
-    setTableView,
-    columnWidths: storedColumnWidths,
-    setColumnWidth,
-    sortColumn,
-    sortDirection,
-    setSorting,
-    rankingMetric,
-    setRankingMetric,
-  } = useDashboardStore();
+// PERFORMANCE: Granular selectors for store access
+const useProcessedData = () => useDashboardStore(state => state.processedData);
+const useViewMode = () => useDashboardStore(state => state.viewMode);
+const useSetViewMode = () => useDashboardStore(state => state.setViewMode);
+const useGroupBy = () => useDashboardStore(state => state.groupBy);
+const useSetGroupBy = () => useDashboardStore(state => state.setGroupBy);
+const useExpandedGroups = () => useDashboardStore(state => state.expandedGroups);
+const useToggleGroup = () => useDashboardStore(state => state.toggleGroup);
+const useExcludeHostedClasses = () => useDashboardStore(state => state.excludeHostedClasses);
+const useSetExcludeHostedClasses = () => useDashboardStore(state => state.setExcludeHostedClasses);
+const useTableView = () => useDashboardStore(state => state.tableView);
+const useSetTableView = () => useDashboardStore(state => state.setTableView);
+const useColumnWidths = () => useDashboardStore(state => state.columnWidths);
+const useSetColumnWidth = () => useDashboardStore(state => state.setColumnWidth);
+const useSortColumn = () => useDashboardStore(state => state.sortColumn);
+const useSortDirection = () => useDashboardStore(state => state.sortDirection);
+const useSetSorting = () => useDashboardStore(state => state.setSorting);
+const useRankingMetric = () => useDashboardStore(state => state.rankingMetric);
+const useSetRankingMetric = () => useDashboardStore(state => state.setRankingMetric);
+
+function DataTableEnhanced() {
+  // PERFORMANCE: Use granular selectors
+  const processedData = useProcessedData();
+  const viewMode = useViewMode();
+  const setViewMode = useSetViewMode();
+  const groupBy = useGroupBy();
+  const setGroupBy = useSetGroupBy();
+  const expandedGroups = useExpandedGroups();
+  const toggleGroup = useToggleGroup();
+  const excludeHostedClasses = useExcludeHostedClasses();
+  const setExcludeHostedClasses = useSetExcludeHostedClasses();
+  const tableView = useTableView();
+  const setTableView = useSetTableView();
+  const storedColumnWidths = useColumnWidths();
+  const setColumnWidth = useSetColumnWidth();
+  const sortColumn = useSortColumn();
+  const sortDirection = useSortDirection();
+  const setSorting = useSetSorting();
+  const rankingMetric = useRankingMetric();
+  const setRankingMetric = useSetRankingMetric();
 
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 25 });
   const [showColumnSettings, setShowColumnSettings] = useState(false);
@@ -646,8 +664,12 @@ export default function DataTableEnhanced() {
   const tdPaddingClass = density === 'compact' ? 'px-3 py-2' : 'px-4 py-3.5';
   const thPaddingClass = density === 'compact' ? 'px-3 py-2' : 'px-4 py-4';
 
-  const handleExport = () => {
+  // PERFORMANCE: Dynamically import XLSX only when exporting (saves ~2MB from initial bundle)
+  const handleExport = async () => {
     try {
+      // Dynamic import - only loaded when user clicks export
+      const XLSX = await import('xlsx');
+      
       const visibleCols = table
         .getVisibleLeafColumns()
         .filter((c) => {
@@ -1267,3 +1289,6 @@ export default function DataTableEnhanced() {
     </div>
   );
 }
+
+// PERFORMANCE: Export memoized component
+export default memo(DataTableEnhanced);

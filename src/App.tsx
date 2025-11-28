@@ -1,4 +1,4 @@
-import { useState, Suspense, lazy, useEffect } from 'react';
+import { useState, Suspense, lazy, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDashboardStore } from './store/dashboardStore';
 import FileUpload from './components/FileUpload';
@@ -18,8 +18,11 @@ const Insights = lazy(() => import('./components/Insights'));
 
 type ViewTab = 'dashboard' | 'pro-scheduler' | 'members' | 'class-dive' | 'insights';
 
+// PERFORMANCE: Use granular selector to prevent re-renders
+const useRawData = () => useDashboardStore(state => state.rawData);
+
 function App() {
-  const { rawData } = useDashboardStore();
+  const rawData = useRawData();
   const [showUpload, setShowUpload] = useState(false);
   const [activeView, setActiveView] = useState<ViewTab>(() => {
     // Load last active view from localStorage
@@ -40,60 +43,35 @@ function App() {
     }
   }, [activeView]);
 
-  const hasData = rawData.length > 0;
+  // Memoize hasData to prevent object reference changes
+  const hasData = useMemo(() => rawData.length > 0, [rawData.length]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50 px-4 sm:px-8 md:px-16 lg:px-24 py-6 sm:py-8 md:py-12 transition-all duration-300 relative overflow-hidden">
-      {/* Animated Background Elements */}
-      <div className="fixed inset-0 -z-10">
-        <div className="absolute top-20 left-10 w-72 h-72 bg-blue-300 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob" />
-        <div className="absolute top-40 right-10 w-72 h-72 bg-purple-300 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-2000" />
-        <div className="absolute -bottom-20 left-1/2 w-72 h-72 bg-pink-300 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-4000" />
+      {/* PERFORMANCE: Static background with CSS animations instead of JS-animated blobs */}
+      <div className="fixed inset-0 -z-10 will-change-transform">
+        <div className="absolute top-20 left-10 w-72 h-72 bg-blue-300/20 rounded-full filter blur-3xl animate-blob-slow" />
+        <div className="absolute top-40 right-10 w-72 h-72 bg-purple-300/20 rounded-full filter blur-3xl animate-blob-slow animation-delay-2000" />
+        <div className="absolute -bottom-20 left-1/2 w-72 h-72 bg-pink-300/20 rounded-full filter blur-3xl animate-blob-slow animation-delay-4000" />
       </div>
 
-      {/* Header */}
-      <motion.header
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6 }}
-        className="mb-8 sm:mb-10 glass-card rounded-3xl p-6 border border-white/20 shadow-2xl backdrop-blur-xl"
-      >
+      {/* Header - Simplified animations */}
+      <header className="mb-8 sm:mb-10 glass-card rounded-3xl p-6 border border-white/20 shadow-2xl backdrop-blur-xl animate-fade-in">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3 sm:gap-4">
-            <motion.div
-              animate={{ 
-                y: [0, -8, 0],
-              }}
-              transition={{
-                duration: 3,
-                repeat: Infinity,
-                ease: "easeInOut"
-              }}
-              whileHover={{ scale: 1.1, rotate: 6 }}
-              whileTap={{ scale: 0.95 }}
-              className="p-3 rounded-2xl bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 shadow-lg relative overflow-hidden"
-            >
-              <div className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-purple-400/20 animate-pulse" />
+            <div className="p-3 rounded-2xl bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 shadow-lg relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-purple-400/20" />
               <LayoutDashboard className="w-8 h-8 sm:w-10 sm:h-10 text-white relative z-10" />
-            </motion.div>
-            <motion.div
-              animate={{ 
-                opacity: [0.8, 1, 0.8],
-              }}
-              transition={{
-                duration: 4,
-                repeat: Infinity,
-                ease: "easeInOut"
-              }}
-            >
+            </div>
+            <div>
               <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-800 bg-clip-text text-transparent flex items-center gap-2">
                 <span>Class Intelligence Dashboard</span>
-                <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-yellow-500 animate-pulse" />
+                <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-yellow-500" />
               </h1>
               <p className="text-slate-700 mt-1 text-sm sm:text-base font-semibold">
                 Comprehensive analytics for your fitness studio operations
               </p>
-            </motion.div>
+            </div>
           </div>
           {hasData && !showUpload && (
             <motion.button
@@ -107,7 +85,7 @@ function App() {
             </motion.button>
           )}
         </div>
-      </motion.header>
+      </header>
 
       {/* Upload Section */}
       {(showUpload || !hasData) && (

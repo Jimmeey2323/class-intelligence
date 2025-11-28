@@ -1,18 +1,46 @@
+import { useMemo, memo } from 'react';
 import { ChevronDown, ChevronUp, Calendar, Users, MapPin, Layers, Activity } from 'lucide-react';
-import { useDashboardStore } from '../store/dashboardStore';
+import { useDashboardStore, getDataIndices } from '../store/dashboardStore';
 import { getUniqueValues } from '../utils/calculations';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import FuzzySearch from './FuzzySearch';
 import { SessionData } from '../types';
 
-export default function FilterSection() {
-  const { filters, setFilters, isFilterCollapsed, toggleFilterCollapse, rawData } = useDashboardStore();
+// Use granular selectors for performance
+const useFilters = () => useDashboardStore(state => state.filters);
+const useSetFilters = () => useDashboardStore(state => state.setFilters);
+const useIsFilterCollapsed = () => useDashboardStore(state => state.isFilterCollapsed);
+const useToggleFilterCollapse = () => useDashboardStore(state => state.toggleFilterCollapse);
+const useRawData = () => useDashboardStore(state => state.rawData);
 
-  const trainers = getUniqueValues(rawData, 'Trainer');
-  const locations = getUniqueValues(rawData, 'Location');
-  const classTypes = getUniqueValues(rawData, 'Type');
-  const classes = getUniqueValues(rawData, 'Class');
+function FilterSection() {
+  const filters = useFilters();
+  const setFilters = useSetFilters();
+  const isFilterCollapsed = useIsFilterCollapsed();
+  const toggleFilterCollapse = useToggleFilterCollapse();
+  const rawData = useRawData();
+
+  // PERFORMANCE: Use pre-computed indices if available, fallback to memoized calculation
+  const { trainers, locations, classTypes, classes } = useMemo(() => {
+    const indices = getDataIndices();
+    if (indices) {
+      // O(1) - use cached indices
+      return {
+        trainers: indices.uniqueTrainers,
+        locations: indices.uniqueLocations,
+        classTypes: indices.uniqueClassTypes,
+        classes: indices.uniqueClasses,
+      };
+    }
+    // Fallback: compute once per rawData change
+    return {
+      trainers: getUniqueValues(rawData, 'Trainer'),
+      locations: getUniqueValues(rawData, 'Location'),
+      classTypes: getUniqueValues(rawData, 'Type'),
+      classes: getUniqueValues(rawData, 'Class'),
+    };
+  }, [rawData]);
 
   const handleSearchResults = (results: SessionData[]) => {
     // Store search results in filters as searchResults
@@ -352,3 +380,6 @@ export default function FilterSection() {
     </div>
   );
 }
+
+// Export memoized component to prevent re-renders when parent updates
+export default memo(FilterSection);

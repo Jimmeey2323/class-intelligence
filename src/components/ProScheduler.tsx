@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, memo, Fragment } from 'react';
-import { useDashboardStore } from '../store/dashboardStore';
+import { useDashboardStore, getDataIndices } from '../store/dashboardStore';
 import { SessionData, CheckinData } from '../types';
 import { format, parseISO, isWithinInterval } from 'date-fns';
 import { 
@@ -18,7 +18,17 @@ import {
   Undo2,
   ArrowRightLeft,
   Award,
-  ChevronDown
+  ChevronDown,
+  Zap,
+  ArrowUpRight,
+  RefreshCw,
+  Settings,
+  Building,
+  Layers,
+  Activity,
+  UserPlus,
+  UserMinus,
+  Ban
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -243,6 +253,169 @@ interface ProSchedulerFilters {
   activeOnly: boolean;
 }
 
+// ========== OPTIMIZATION SETTINGS TYPES ==========
+interface TrainerPriority {
+  name: string;
+  targetHours: number;
+  allowedFormats?: string[]; // If empty, can teach all formats
+  isNewTrainer?: boolean;
+}
+
+interface LocationConstraints {
+  maxParallelClasses: number;
+  requiredFormats: string[]; // Formats that MUST be included when at max capacity
+  optionalFormats: string[]; // Other formats that can fill remaining slots
+  priorityTrainers: string[]; // Trainers to maximize hours for at this location
+}
+
+interface FormatPriority {
+  format: string;
+  priorityTrainers: string[]; // Trainers who should teach this format
+}
+
+// Trainer leave/unavailability
+interface TrainerLeave {
+  trainerName: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string;   // YYYY-MM-DD
+  reason?: string;
+}
+
+// Format adjustment rules
+interface FormatAdjustment {
+  format: string;
+  adjustmentType: 'increase' | 'decrease' | 'set';
+  value: number; // Hours or class count depending on type
+  location?: string; // Optional - apply to specific location
+}
+
+// Trainer adjustment rules
+interface TrainerAdjustment {
+  trainerName: string;
+  adjustmentType: 'increase' | 'decrease' | 'set';
+  value: number; // Hours
+  location?: string;
+}
+
+// Day adjustment rules
+interface DayAdjustment {
+  day: string;
+  adjustmentType: 'increase' | 'decrease' | 'set';
+  value: number; // Class count
+  location?: string;
+}
+
+// Optimization reason types (exported for use in other components)
+export type OptimizationReason = 
+  | 'replaced_low_performer'
+  | 'optimize_trainer_hours'
+  | 'optimize_studio_hours'
+  | 'optimize_horizontal_mix'
+  | 'optimize_vertical_mix'
+  | 'high_demand_slot'
+  | 'strategic_scheduling';
+
+interface OptimizationSettings {
+  enabled: boolean;
+  targetTrainerHours: number; // Default 15
+  maxTrainerHours: number; // Maximum hours per trainer (default 16)
+  minDaysOff: number; // Minimum days off per trainer (default 2)
+  minimizeTrainersPerSlot: boolean;
+  avoidMultiLocationDays: boolean; // Try to avoid trainers at multiple locations same day
+  locationConstraints: Record<string, LocationConstraints>;
+  formatPriorities: FormatPriority[];
+  newTrainers: TrainerPriority[];
+  priorityTrainers: TrainerPriority[];
+  blockedTrainers: string[]; // Trainers who should NEVER be assigned
+  excludedFormats: string[]; // Formats to exclude from optimization
+  minClassesPerLocation: Record<string, number>; // Minimum classes per location
+  trainerLeaves: TrainerLeave[]; // Trainers on leave
+  formatAdjustments: FormatAdjustment[]; // Adjust specific formats
+  trainerAdjustments: TrainerAdjustment[]; // Adjust specific trainers
+  dayAdjustments: DayAdjustment[]; // Adjust specific days
+  // Time restrictions
+  noClassesBefore: string; // e.g., "07:00"
+  noClassesAfter: string; // e.g., "20:00"
+  noClassesBetweenStart: string; // e.g., "12:30"
+  noClassesBetweenEnd: string; // e.g., "15:30"
+  // Format-specific rules
+  advancedFormatsMaxPerWeek: number; // Max HIIT/Amped classes per week
+  advancedFormatsLocation: string; // Location for advanced formats
+  // Randomization seed for variety
+  randomizationSeed: number;
+}
+
+// Default optimization settings based on user requirements
+const DEFAULT_OPTIMIZATION_SETTINGS: OptimizationSettings = {
+  enabled: true,
+  targetTrainerHours: 15,
+  maxTrainerHours: 16,
+  minDaysOff: 2, // Each trainer gets at least 2 days off
+  minimizeTrainersPerSlot: true,
+  avoidMultiLocationDays: true, // Avoid trainers at multiple locations same day
+  blockedTrainers: ['kabir', 'saniya', 'upasana', 'kunal', 'janhavi', 'sovena', 'debanshi'],
+  excludedFormats: ['hosted', 'host', 'guest'],
+  minClassesPerLocation: {
+    'Kwality House, Kemps Corner': 95,
+    'Supreme HQ, Bandra': 75
+  },
+  trainerLeaves: [], // No leaves by default
+  formatAdjustments: [],
+  trainerAdjustments: [],
+  dayAdjustments: [],
+  // Time restrictions
+  noClassesBefore: '07:00',
+  noClassesAfter: '20:00',
+  noClassesBetweenStart: '12:30',
+  noClassesBetweenEnd: '15:30',
+  // Advanced formats
+  advancedFormatsMaxPerWeek: 2,
+  advancedFormatsLocation: 'Kwality House, Kemps Corner',
+  // Randomization for variety
+  randomizationSeed: Date.now(),
+  locationConstraints: {
+    'Kwality House, Kemps Corner': {
+      maxParallelClasses: 4,
+      requiredFormats: ['cycle', 'strength'], // 1 cycle + 1 strength mandatory
+      optionalFormats: ['barre', 'yoga', 'pilates', 'hiit', 'mat', 'recovery', 'boxing'],
+      priorityTrainers: ['anisha', 'pranjali', 'vivaran', 'rohan', 'reshma', 'atulan', 'mrigakshi']
+    },
+    'Supreme HQ, Bandra': {
+      maxParallelClasses: 3,
+      requiredFormats: ['cycle'], // 1 cycle mandatory
+      optionalFormats: ['barre', 'yoga', 'pilates', 'hiit', 'mat', 'recovery', 'strength', 'boxing'],
+      priorityTrainers: ['cauveri', 'vivaran', 'anisha', 'mrigakshi', 'rohan', 'reshma', 'richard', 'karan']
+    }
+  },
+  formatPriorities: [
+    { format: 'powercycle', priorityTrainers: ['anmol', 'cauveri', 'vivaran', 'bret', 'rohan'] },
+    { format: 'cycle', priorityTrainers: ['anmol', 'cauveri', 'vivaran', 'bret', 'rohan'] },
+    { format: 'fit', priorityTrainers: ['mrigakshi', 'atulan', 'anisha', 'richard'] },
+    { format: 'hiit', priorityTrainers: ['mrigakshi', 'atulan', 'anisha', 'richard'] },
+    { format: 'mat', priorityTrainers: ['reshma', 'pranjali', 'atulan', 'rohan', 'anisha'] },
+    { format: 'pilates', priorityTrainers: ['reshma', 'pranjali', 'atulan', 'rohan', 'anisha'] }
+  ],
+  newTrainers: [
+    { name: 'simonelle', targetHours: 15, allowedFormats: ['powercycle', 'cycle', 'barre', 'recovery'], isNewTrainer: true },
+    { name: 'bret', targetHours: 15, allowedFormats: ['powercycle', 'cycle', 'barre', 'recovery'], isNewTrainer: true },
+    { name: 'anmol', targetHours: 15, allowedFormats: ['powercycle', 'cycle', 'barre', 'recovery'], isNewTrainer: true },
+    { name: 'simran', targetHours: 15, allowedFormats: ['powercycle', 'cycle', 'barre', 'recovery'], isNewTrainer: true },
+    { name: 'raunak', targetHours: 15, allowedFormats: ['powercycle', 'cycle', 'barre', 'recovery'], isNewTrainer: true }
+  ],
+  priorityTrainers: [
+    { name: 'anisha', targetHours: 15 },
+    { name: 'pranjali', targetHours: 15 },
+    { name: 'vivaran', targetHours: 15 },
+    { name: 'rohan', targetHours: 15 },
+    { name: 'reshma', targetHours: 15 },
+    { name: 'atulan', targetHours: 15 },
+    { name: 'mrigakshi', targetHours: 15 },
+    { name: 'cauveri', targetHours: 15 },
+    { name: 'richard', targetHours: 15 },
+    { name: 'karan', targetHours: 15 }
+  ]
+};
+
 type ViewMode = 'calendar' | 'analytics' | 'optimization' | 'conflicts';
 type CalendarViewMode = 'standard' | 'multi-location' | 'horizontal' | 'analytical' | 'compact' | 'timeline';
 
@@ -252,12 +425,20 @@ let cacheTimestamp = 0;
 const CACHE_DURATION = 60000; // 1 minute
 let lastInvalidateTimestamp = 0;
 
+// PERFORMANCE: Granular Zustand selectors to prevent unnecessary re-renders
+const useRawData = () => useDashboardStore(state => state.rawData);
+const useActiveClassesData = () => useDashboardStore(state => state.activeClassesData);
+const useCheckinsData = () => useDashboardStore(state => state.checkinsData);
+
 function ProScheduler() {
-  const { rawData = [], activeClassesData = {}, checkinsData = [] } = useDashboardStore();
+  // PERFORMANCE: Use granular selectors instead of destructuring entire store
+  const rawData = useRawData() || [];
+  const activeClassesData = useActiveClassesData() || {};
+  const checkinsData = useCheckinsData() || [];
   
   // State management
   const [filters, setFilters] = useState<ProSchedulerFilters>({
-    dateFrom: new Date('2025-08-01'), // August 1, 2025
+    dateFrom: new Date(2025, 7, 1), // August 1, 2025 (month is 0-indexed)
     dateTo: new Date(), // Current date (no future dates)
     locations: ['Kwality House, Kemps Corner', 'Supreme HQ, Bandra'],
     trainers: [],
@@ -293,6 +474,48 @@ function ProScheduler() {
   const [showHighPerformingOnly, setShowHighPerformingOnly] = useState(false);
   const [expandedDayFormats, setExpandedDayFormats] = useState<Set<string>>(new Set());
   const drilldownModalRef = useRef<HTMLDivElement>(null);
+  
+  // Optimization Settings State - merge saved with defaults to ensure all properties exist
+  const [optimizationSettings, setOptimizationSettings] = useState<OptimizationSettings>(() => {
+    // Load from localStorage if available
+    try {
+      const saved = localStorage.getItem('proSchedulerOptimizationSettings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Merge with defaults to ensure all properties exist (handles old saved settings)
+        return {
+          ...DEFAULT_OPTIMIZATION_SETTINGS,
+          ...parsed,
+          // Ensure arrays are never undefined
+          blockedTrainers: parsed.blockedTrainers || DEFAULT_OPTIMIZATION_SETTINGS.blockedTrainers,
+          excludedFormats: parsed.excludedFormats || DEFAULT_OPTIMIZATION_SETTINGS.excludedFormats,
+          trainerLeaves: parsed.trainerLeaves || DEFAULT_OPTIMIZATION_SETTINGS.trainerLeaves,
+          formatAdjustments: parsed.formatAdjustments || DEFAULT_OPTIMIZATION_SETTINGS.formatAdjustments,
+          trainerAdjustments: parsed.trainerAdjustments || DEFAULT_OPTIMIZATION_SETTINGS.trainerAdjustments,
+          dayAdjustments: parsed.dayAdjustments || DEFAULT_OPTIMIZATION_SETTINGS.dayAdjustments,
+          newTrainers: parsed.newTrainers || DEFAULT_OPTIMIZATION_SETTINGS.newTrainers,
+          priorityTrainers: parsed.priorityTrainers || DEFAULT_OPTIMIZATION_SETTINGS.priorityTrainers,
+          formatPriorities: parsed.formatPriorities || DEFAULT_OPTIMIZATION_SETTINGS.formatPriorities,
+          locationConstraints: parsed.locationConstraints || DEFAULT_OPTIMIZATION_SETTINGS.locationConstraints,
+          minClassesPerLocation: parsed.minClassesPerLocation || DEFAULT_OPTIMIZATION_SETTINGS.minClassesPerLocation,
+        };
+      }
+    } catch (e) {
+      console.error('Failed to load optimization settings:', e);
+    }
+    return DEFAULT_OPTIMIZATION_SETTINGS;
+  });
+  const [showOptimizationSettings, setShowOptimizationSettings] = useState(false);
+  const [showAllReplacements, setShowAllReplacements] = useState(false);
+  
+  // Save optimization settings to localStorage when changed
+  useEffect(() => {
+    try {
+      localStorage.setItem('proSchedulerOptimizationSettings', JSON.stringify(optimizationSettings));
+    } catch (e) {
+      console.error('Failed to save optimization settings:', e);
+    }
+  }, [optimizationSettings]);
   
   // Format difficulty categorization
   const getFormatDifficulty = (format: string): 'beginner' | 'intermediate' | 'advanced' => {
@@ -1204,43 +1427,832 @@ function ProScheduler() {
     return averages;
   }, [scheduleClasses]);
 
+  // ========== SMART SCHEDULE OPTIMIZATION ==========
+  // When Top Classes mode is ON, replace underperforming classes with optimal alternatives
+  // Respects location constraints, trainer priorities, format rules, and parallel class limits
+  const optimizedSchedule = useMemo(() => {
+    if (!showHighPerformingOnly) return null;
+    
+    const settings = optimizationSettings;
+    const TRAINER_TARGET_HOURS = settings.targetTrainerHours;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Helper: Check if trainer is a priority trainer for a location
+    const isPriorityTrainerForLocation = (trainerName: string, location: string): boolean => {
+      const constraints = settings.locationConstraints?.[location];
+      if (!constraints || !constraints.priorityTrainers) return false;
+      return constraints.priorityTrainers.some(t => t.toLowerCase() === trainerName.toLowerCase());
+    };
+    
+    // Helper: Check if trainer is a priority for a specific format
+    const isPriorityTrainerForFormat = (trainerName: string, formatName: string): boolean => {
+      const formatPriority = settings.formatPriorities?.find(fp => 
+        formatName.toLowerCase().includes(fp.format.toLowerCase())
+      );
+      if (!formatPriority || !formatPriority.priorityTrainers) return false;
+      return formatPriority.priorityTrainers.some(t => t.toLowerCase() === trainerName.toLowerCase());
+    };
+    
+    // Helper: Check if trainer is a new trainer with format restrictions
+    const getNewTrainerRestrictions = (trainerName: string): string[] | null => {
+      const newTrainer = settings.newTrainers?.find(t => 
+        t.name.toLowerCase() === trainerName.toLowerCase()
+      );
+      return newTrainer?.allowedFormats || null;
+    };
+    
+    // Helper: Check if format can be taught by trainer at location
+    const canTrainerTeachFormat = (trainerName: string, formatName: string, location: string): boolean => {
+      // Check if new trainer with restrictions
+      const restrictions = getNewTrainerRestrictions(trainerName);
+      if (restrictions) {
+        const canTeach = restrictions.some(f => formatName.toLowerCase().includes(f.toLowerCase()));
+        if (!canTeach) return false;
+      }
+      
+      // Check if trainer teaches at this location (from historical data)
+      const trainerLocationSessions = rawData.filter((s: SessionData) => 
+        s.Trainer?.toLowerCase().trim() === trainerName.toLowerCase() &&
+        s.Location === location
+      );
+      
+      // If trainer has no history at this location, only allow if they're a priority trainer there
+      if (trainerLocationSessions.length === 0) {
+        return isPriorityTrainerForLocation(trainerName, location);
+      }
+      
+      return true;
+    };
+    
+    // Helper: Get format category (cycle, strength, etc.)
+    const getFormatCategory = (formatName: string): string => {
+      const lower = formatName.toLowerCase();
+      if (lower.includes('cycle') || lower.includes('powercycle')) return 'cycle';
+      if (lower.includes('strength') || lower.includes('fit') || lower.includes('hiit')) return 'strength';
+      if (lower.includes('barre')) return 'barre';
+      if (lower.includes('yoga')) return 'yoga';
+      if (lower.includes('pilates') || lower.includes('mat')) return 'mat';
+      if (lower.includes('recovery')) return 'recovery';
+      if (lower.includes('boxing')) return 'boxing';
+      return 'other';
+    };
+    
+    // Helper: Check if class is a hosted class (should be excluded from optimization)
+    const isHostedClass = (className: string): boolean => {
+      const lower = className.toLowerCase();
+      return lower.includes('hosted') || lower.includes('host') || lower.includes('guest');
+    };
+    
+    // Step 1: Filter classes by location filter AND exclude hosted classes
+    const locationFilteredClasses = scheduleClasses.filter(cls => {
+      if (filters.locations.length > 0 && !filters.locations.includes(cls.location)) return false;
+      // NEVER include hosted classes in optimization
+      if (isHostedClass(cls.class)) return false;
+      return true;
+    });
+    
+    // Step 2: Calculate trainer performance metrics from historical data (filtered by location)
+    const trainerMetrics = new Map<string, {
+      name: string;
+      location: string;
+      totalSessions: number;
+      totalCheckIns: number;
+      avgCheckIns: number;
+      fillRate: number;
+      currentWeeklyHours: number;
+      hoursToTarget: number;
+      isPriority: boolean;
+      isNewTrainer: boolean;
+      topClasses: Array<{ class: string; avgCheckIns: number; fillRate: number; sessions: number; location: string }>;
+      bestTimeSlots: Array<{ day: string; time: string; avgCheckIns: number }>;
+    }>();
+    
+    // Analyze historical sessions for trainer performance (per location)
+    const trainerSessionsByLocation = new Map<string, SessionData[]>();
+    rawData.forEach((session: SessionData) => {
+      const sessionDate = parseISO(session.Date);
+      if (sessionDate >= today) return;
+      if (!isWithinInterval(sessionDate, { start: filters.dateFrom, end: filters.dateTo })) return;
+      
+      // RESPECT LOCATION FILTER
+      if (filters.locations.length > 0 && !filters.locations.includes(session.Location)) return;
+      
+      const trainer = session.Trainer?.toLowerCase().trim();
+      const location = session.Location;
+      if (!trainer || !location) return;
+      
+      const key = `${trainer}|${location}`;
+      if (!trainerSessionsByLocation.has(key)) {
+        trainerSessionsByLocation.set(key, []);
+      }
+      trainerSessionsByLocation.get(key)!.push(session);
+    });
+    
+    // Calculate metrics for each trainer-location combo
+    trainerSessionsByLocation.forEach((sessions, key) => {
+      const [trainerName, location] = key.split('|');
+      
+      const totalCheckIns = sessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0);
+      const totalCapacity = sessions.reduce((sum, s) => sum + (s.Capacity || 0), 0);
+      const avgCheckIns = sessions.length > 0 ? totalCheckIns / sessions.length : 0;
+      const fillRate = totalCapacity > 0 ? (totalCheckIns / totalCapacity) * 100 : 0;
+      
+      // Calculate current weekly hours from active schedule (at this location)
+      const currentWeeklyHours = locationFilteredClasses
+        .filter(cls => cls.trainer.toLowerCase().trim() === trainerName && cls.location === location)
+        .reduce((sum) => sum + 1, 0);
+      
+      // Check priority status
+      const isPriority = isPriorityTrainerForLocation(trainerName, location);
+      const isNewTrainer = settings.newTrainers?.some(t => t.name.toLowerCase() === trainerName.toLowerCase()) || false;
+      
+      // Find top classes for this trainer at this location
+      const classPerformance = new Map<string, { checkIns: number; capacity: number; count: number }>();
+      sessions.forEach(s => {
+        const cls = s.Class;
+        if (!cls) return;
+        const perf = classPerformance.get(cls) || { checkIns: 0, capacity: 0, count: 0 };
+        perf.checkIns += s.CheckedIn || 0;
+        perf.capacity += s.Capacity || 0;
+        perf.count += 1;
+        classPerformance.set(cls, perf);
+      });
+      
+      const topClasses = Array.from(classPerformance.entries())
+        .map(([className, perf]) => ({
+          class: className,
+          avgCheckIns: perf.count > 0 ? perf.checkIns / perf.count : 0,
+          fillRate: perf.capacity > 0 ? (perf.checkIns / perf.capacity) * 100 : 0,
+          sessions: perf.count,
+          location
+        }))
+        .filter(c => c.sessions >= 2)
+        .sort((a, b) => b.avgCheckIns - a.avgCheckIns)
+        .slice(0, 8);
+      
+      // Find best time slots
+      const slotPerformance = new Map<string, { checkIns: number; count: number }>();
+      sessions.forEach(s => {
+        const key = `${s.Day}-${s.Time}`;
+        const perf = slotPerformance.get(key) || { checkIns: 0, count: 0 };
+        perf.checkIns += s.CheckedIn || 0;
+        perf.count += 1;
+        slotPerformance.set(key, perf);
+      });
+      
+      const bestTimeSlots = Array.from(slotPerformance.entries())
+        .map(([k, perf]) => {
+          const [day, time] = k.split('-');
+          return { day, time, avgCheckIns: perf.count > 0 ? perf.checkIns / perf.count : 0 };
+        })
+        .sort((a, b) => b.avgCheckIns - a.avgCheckIns)
+        .slice(0, 5);
+      
+      trainerMetrics.set(key, {
+        name: trainerName,
+        location,
+        totalSessions: sessions.length,
+        totalCheckIns,
+        avgCheckIns,
+        fillRate,
+        currentWeeklyHours,
+        hoursToTarget: TRAINER_TARGET_HOURS - currentWeeklyHours,
+        isPriority,
+        isNewTrainer,
+        topClasses,
+        bestTimeSlots
+      });
+    });
+    
+    // Step 2b: Calculate TOTAL trainer hours across ALL locations (not per-location)
+    const trainerTotalHoursAcrossLocations = new Map<string, number>();
+    scheduleClasses.forEach(cls => {
+      if (isHostedClass(cls.class)) return; // Don't count hosted classes
+      const trainerName = cls.trainer.toLowerCase().trim();
+      trainerTotalHoursAcrossLocations.set(
+        trainerName,
+        (trainerTotalHoursAcrossLocations.get(trainerName) || 0) + 1
+      );
+    });
+    
+    // TRAINER HOUR LIMIT: Use settings value (default 16 hours per week across ALL locations)
+    const MAX_TRAINER_HOURS = settings.maxTrainerHours || 16;
+    
+    // Step 3: Identify underperforming classes (respecting filters, excluding hosted)
+    const underperformingClasses: ScheduleClass[] = [];
+    const highPerformingClasses: ScheduleClass[] = [];
+    
+    locationFilteredClasses.forEach(cls => {
+      // Skip hosted classes - never consider them underperforming
+      if (isHostedClass(cls.class)) {
+        highPerformingClasses.push(cls); // Keep hosted classes as-is
+        return;
+      }
+      
+      const locationAvg = locationAverages.get(cls.location) || 0;
+      const isUnderperforming = cls.avgCheckIns < locationAvg && cls.fillRate < 60;
+      
+      if (isUnderperforming) {
+        underperformingClasses.push(cls);
+      } else {
+        highPerformingClasses.push(cls);
+      }
+    });
+    
+    // Step 4: Get format mix per day per location
+    const dayLocationFormatMix = new Map<string, Set<string>>();
+    const dayLocationTimeslotCount = new Map<string, Map<string, number>>();
+    
+    locationFilteredClasses.forEach(cls => {
+      const dayLocKey = `${cls.day}|${cls.location}`;
+      if (!dayLocationFormatMix.has(dayLocKey)) {
+        dayLocationFormatMix.set(dayLocKey, new Set());
+      }
+      dayLocationFormatMix.get(dayLocKey)!.add(cls.class.toLowerCase());
+      
+      // Count classes per time slot per day/location
+      if (!dayLocationTimeslotCount.has(dayLocKey)) {
+        dayLocationTimeslotCount.set(dayLocKey, new Map());
+      }
+      const slotCounts = dayLocationTimeslotCount.get(dayLocKey)!;
+      slotCounts.set(cls.time, (slotCounts.get(cls.time) || 0) + 1);
+    });
+    
+    // Step 5: Generate replacement suggestions respecting all constraints
+    const replacements: Array<{
+      original: ScheduleClass;
+      replacement: {
+        trainer: string;
+        trainerDisplay: string;
+        class: string;
+        reason: string;
+        fullReason: string;
+        expectedCheckIns: number;
+        expectedFillRate: number;
+        trainerHoursAfter: number;
+        trainerMaxHours: number;
+        score: number;
+        isPriority: boolean;
+        isNewTrainer: boolean;
+        originalClass: string;
+        originalTrainer: string;
+        originalCheckIns: number;
+        originalFillRate: number;
+      };
+    }> = [];
+    
+    // Track trainer hours during optimization (GLOBAL hours, not per-location)
+    const trainerHoursTracker = new Map<string, number>();
+    // Initialize with actual total hours across ALL locations
+    trainerTotalHoursAcrossLocations.forEach((hours, trainerName) => {
+      trainerHoursTracker.set(trainerName, hours);
+    });
+    
+    // Track trainer work days for ensuring days off
+    const trainerWorkDays = new Map<string, Set<string>>();
+    // Track trainer locations per day for multi-location avoidance
+    const trainerDayLocations = new Map<string, Map<string, Set<string>>>();
+    
+    // Initialize from current schedule
+    locationFilteredClasses.forEach(cls => {
+      const trainerName = cls.trainer.toLowerCase().trim();
+      
+      // Track work days
+      if (!trainerWorkDays.has(trainerName)) {
+        trainerWorkDays.set(trainerName, new Set());
+      }
+      trainerWorkDays.get(trainerName)!.add(cls.day);
+      
+      // Track locations per day
+      if (!trainerDayLocations.has(trainerName)) {
+        trainerDayLocations.set(trainerName, new Map());
+      }
+      if (!trainerDayLocations.get(trainerName)!.has(cls.day)) {
+        trainerDayLocations.get(trainerName)!.set(cls.day, new Set());
+      }
+      trainerDayLocations.get(trainerName)!.get(cls.day)!.add(cls.location);
+    });
+    
+    // Helper: Check if adding a class would violate days off requirement
+    const wouldViolateDaysOff = (trainerName: string, day: string): boolean => {
+      const minDaysOff = settings.minDaysOff || 2;
+      const workDays = trainerWorkDays.get(trainerName) || new Set();
+      
+      // If trainer already works this day, no new violation
+      if (workDays.has(day)) return false;
+      
+      // If adding this day would leave less than minDaysOff
+      const newWorkDays = new Set(workDays);
+      newWorkDays.add(day);
+      const daysOff = 7 - newWorkDays.size;
+      return daysOff < minDaysOff;
+    };
+    
+    // Helper: Check if adding would create multi-location day
+    const wouldCreateMultiLocationDay = (trainerName: string, day: string, location: string): boolean => {
+      if (!settings.avoidMultiLocationDays) return false;
+      
+      const dayLocs = trainerDayLocations.get(trainerName)?.get(day);
+      if (!dayLocs) return false;
+      if (dayLocs.has(location)) return false; // Same location is fine
+      return dayLocs.size > 0; // Has other locations = would create multi-location
+    };
+    
+    // Location class count tracking for minimum requirements (from settings)
+    const locationClassCounts = new Map<string, number>();
+    const MINIMUM_CLASSES: Record<string, number> = settings.minClassesPerLocation || {
+      'Kwality House, Kemps Corner': 95,
+      'Supreme HQ, Bandra': 75
+    };
+    
+    // Count current optimized classes per location
+    locationFilteredClasses.forEach(cls => {
+      if (!isHostedClass(cls.class)) {
+        locationClassCounts.set(cls.location, (locationClassCounts.get(cls.location) || 0) + 1);
+      }
+    });
+    
+    underperformingClasses.forEach(underperformer => {
+      const location = underperformer.location;
+      const locationAvg = locationAverages.get(location) || 0;
+      const dayLocKey = `${underperformer.day}|${location}`;
+      const dayFormats = dayLocationFormatMix.get(dayLocKey) || new Set();
+      const constraints = settings.locationConstraints[location];
+      
+      if (!constraints) return; // No constraints defined for this location
+      
+      // Find best replacement candidates
+      const candidates: Array<{
+        trainer: string;
+        trainerDisplay: string;
+        class: string;
+        expectedCheckIns: number;
+        expectedFillRate: number;
+        score: number;
+        reason: string;
+        fullReason: string;
+        hoursToTarget: number;
+        currentHours: number;
+        isNewTrainer: boolean;
+        isPriority: boolean;
+      }> = [];
+      
+      // Helper: Check if time is within restricted hours
+      const isTimeRestricted = (time: string): boolean => {
+        const [hours, minutes] = time.split(':').map(Number);
+        const timeMinutes = hours * 60 + minutes;
+        
+        // No classes before noClassesBefore
+        const [beforeH, beforeM] = (settings.noClassesBefore || '07:00').split(':').map(Number);
+        if (timeMinutes < beforeH * 60 + beforeM) return true;
+        
+        // No classes after noClassesAfter  
+        const [afterH, afterM] = (settings.noClassesAfter || '20:00').split(':').map(Number);
+        if (timeMinutes > afterH * 60 + afterM) return true;
+        
+        // No classes between noClassesBetweenStart and noClassesBetweenEnd
+        const [startH, startM] = (settings.noClassesBetweenStart || '12:30').split(':').map(Number);
+        const [endH, endM] = (settings.noClassesBetweenEnd || '15:30').split(':').map(Number);
+        const breakStart = startH * 60 + startM;
+        const breakEnd = endH * 60 + endM;
+        if (timeMinutes >= breakStart && timeMinutes <= breakEnd) return true;
+        
+        return false;
+      };
+      
+      // Helper: Check if trainer is on leave
+      const isTrainerOnLeave = (trainerName: string): boolean => {
+        if (!settings.trainerLeaves || settings.trainerLeaves.length === 0) return false;
+        const today = new Date();
+        return settings.trainerLeaves.some((leave: TrainerLeave) => {
+          if (!leave.trainerName.toLowerCase().includes(trainerName.toLowerCase())) return false;
+          const start = new Date(leave.startDate);
+          const end = new Date(leave.endDate);
+          return today >= start && today <= end;
+        });
+      };
+      
+      // Skip if time slot is restricted
+      if (isTimeRestricted(underperformer.time)) {
+        return; // Don't replace classes in restricted time slots
+      }
+      
+      trainerMetrics.forEach((metrics) => {
+        // ONLY consider trainers from the SAME location
+        if (metrics.location !== location) return;
+        
+        // Skip if trainer has no top classes
+        if (metrics.topClasses.length === 0) return;
+        
+        // CRITICAL: Skip blocked trainers - NEVER assign classes to them
+        const trainerNameLower = metrics.name.toLowerCase();
+        if (settings.blockedTrainers?.some(blocked => trainerNameLower.includes(blocked.toLowerCase()))) {
+          return; // This trainer is blocked from optimization
+        }
+        
+        // Skip trainers on leave
+        if (isTrainerOnLeave(metrics.name)) {
+          return; // Trainer is on leave
+        }
+        
+        metrics.topClasses.forEach(topClass => {
+          // Must be from same location
+          if (topClass.location !== location) return;
+          
+          // Check if new trainer can teach this format
+          if (!canTrainerTeachFormat(metrics.name, topClass.class, location)) return;
+          
+          // CRITICAL: Check if trainer would exceed 16 hours across ALL locations
+          const currentTrainerTotalHours = trainerHoursTracker.get(metrics.name) || 0;
+          if (currentTrainerTotalHours >= MAX_TRAINER_HOURS) {
+            return; // Skip - trainer already at max hours
+          }
+          
+          // Skip hosted classes - never schedule them as replacements
+          if (isHostedClass(topClass.class)) return;
+          
+          // Skip excluded format types
+          if (settings.excludedFormats?.some(fmt => topClass.class.toLowerCase().includes(fmt.toLowerCase()))) {
+            return; // This format type is excluded
+          }
+          
+          // Skip if this exact format already exists on this day at this location
+          const formatCategory = getFormatCategory(topClass.class);
+          
+          // Skip if same trainer and class
+          if (metrics.name === underperformer.trainer.toLowerCase() && 
+              topClass.class.toLowerCase() === underperformer.class.toLowerCase()) return;
+          
+          // Calculate score with location-specific priorities
+          let score = 0;
+          const reasons: string[] = [];
+          
+          // Factor 1: Priority trainer bonus (HUGE boost)
+          if (metrics.isPriority) {
+            score += 50;
+            reasons.push('Priority trainer for location');
+          }
+          
+          // Factor 2: Format priority trainer match
+          if (isPriorityTrainerForFormat(metrics.name, topClass.class)) {
+            score += 40;
+            reasons.push(`Specialized in ${formatCategory}`);
+          }
+          
+          // Factor 3: Trainer needs more hours (prioritize those below 15, but respect 16hr max)
+          const currentTotalHours = trainerHoursTracker.get(metrics.name) || 0;
+          const hoursToTarget = Math.min(TRAINER_TARGET_HOURS - currentTotalHours, MAX_TRAINER_HOURS - currentTotalHours);
+          if (hoursToTarget > 0 && metrics.isPriority) {
+            score += hoursToTarget * 8; // Higher weight for priority trainers
+            reasons.push(`Needs +${hoursToTarget.toFixed(0)}hrs (${currentTotalHours.toFixed(0)}/${MAX_TRAINER_HOURS} total)`);
+          }
+          
+          // Penalty for trainers near or at max hours
+          if (currentTotalHours >= MAX_TRAINER_HOURS - 2) {
+            score -= 30; // Strong penalty - close to max
+            reasons.push(`Near max hours (${currentTotalHours.toFixed(0)}/${MAX_TRAINER_HOURS})`);
+          }
+          
+          // Factor 4: Class performance improvement
+          const checkInsImprovement = topClass.avgCheckIns - underperformer.avgCheckIns;
+          if (checkInsImprovement > 0) {
+            score += checkInsImprovement * 5;
+            reasons.push(`+${checkInsImprovement.toFixed(1)} attendance`);
+          }
+          
+          // Factor 5: Required format bonus (cycle/strength for Kwality)
+          if (constraints.requiredFormats.includes(formatCategory)) {
+            score += 30;
+            reasons.push(`Required format: ${formatCategory}`);
+          }
+          
+          // Factor 6: Format mix diversity
+          const existingCategories = Array.from(dayFormats).map(f => getFormatCategory(f));
+          if (!existingCategories.includes(formatCategory)) {
+            score += 20;
+            reasons.push(`Adds ${formatCategory} variety`);
+          }
+          
+          // Factor 7: Minimize trainers per slot (if trainer already teaches at this time)
+          const trainerAlreadyTeachesAtTime = locationFilteredClasses.some(
+            cls => cls.trainer.toLowerCase() === metrics.name && 
+                   cls.day === underperformer.day && 
+                   cls.time === underperformer.time &&
+                   cls.location === location
+          );
+          if (settings.minimizeTrainersPerSlot && !trainerAlreadyTeachesAtTime) {
+            // Small penalty for adding a new trainer to the slot
+            score -= 5;
+          } else if (trainerAlreadyTeachesAtTime) {
+            // Bonus for reusing same trainer
+            score += 15;
+            reasons.push('Trainer already at this time');
+          }
+          
+          // Factor 8: New trainer appropriate assignment
+          if (metrics.isNewTrainer) {
+            const restrictions = getNewTrainerRestrictions(metrics.name);
+            if (restrictions?.some(f => topClass.class.toLowerCase().includes(f))) {
+              score += 10;
+              reasons.push('Good fit for new trainer');
+            }
+          }
+          
+          // Factor 9: Days off check - penalize if would violate minimum days off
+          if (wouldViolateDaysOff(metrics.name, underperformer.day)) {
+            score -= 40; // Strong penalty
+            reasons.push('Would reduce days off below minimum');
+          }
+          
+          // Factor 10: Multi-location day check - penalize if would create multi-location day
+          if (wouldCreateMultiLocationDay(metrics.name, underperformer.day, location)) {
+            score -= 25; // Moderate penalty
+            reasons.push('Would create multi-location day');
+          }
+          
+          // Factor 11: Historical performance bonus - best trainer for best class
+          if (metrics.isPriority && topClass.avgCheckIns > locationAvg * 1.2) {
+            score += 25;
+            reasons.push('Top performer for high-demand class');
+          }
+          
+          // Only consider candidates with positive score and above average performance
+          if (score > 0 && topClass.avgCheckIns >= locationAvg * 0.9) {
+            const trainerDisplay = metrics.name.split(' ')
+              .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+              .join(' ');
+            
+            candidates.push({
+              trainer: metrics.name,
+              trainerDisplay,
+              class: topClass.class,
+              expectedCheckIns: topClass.avgCheckIns,
+              expectedFillRate: topClass.fillRate,
+              score,
+              reason: reasons.slice(0, 2).join(', '),
+              fullReason: reasons.join(' • '), // Full scheduling reason
+              hoursToTarget,
+              currentHours: trainerHoursTracker.get(metrics.name) || 0,
+              isNewTrainer: metrics.isNewTrainer,
+              isPriority: metrics.isPriority
+            });
+          }
+        });
+      });
+      
+      // Sort candidates by score
+      candidates.sort((a, b) => b.score - a.score);
+      
+      if (candidates.length > 0) {
+        const best = candidates[0];
+        
+        // CRITICAL: Final check - ensure trainer won't exceed 16 hours
+        const currentTotalHours = trainerHoursTracker.get(best.trainer) || 0;
+        if (currentTotalHours >= MAX_TRAINER_HOURS) {
+          return; // Skip this replacement - trainer at max
+        }
+        
+        // Update GLOBAL hours tracker (by trainer name, not location key)
+        trainerHoursTracker.set(best.trainer, currentTotalHours + 1);
+        
+        replacements.push({
+          original: underperformer,
+          replacement: {
+            trainer: best.trainer,
+            trainerDisplay: best.trainerDisplay,
+            class: best.class,
+            reason: best.reason,
+            fullReason: best.fullReason,
+            expectedCheckIns: best.expectedCheckIns,
+            expectedFillRate: best.expectedFillRate,
+            trainerHoursAfter: currentTotalHours + 1,
+            trainerMaxHours: MAX_TRAINER_HOURS,
+            score: best.score,
+            isPriority: best.isPriority,
+            isNewTrainer: best.isNewTrainer,
+            originalClass: underperformer.class,
+            originalTrainer: underperformer.trainer,
+            originalCheckIns: underperformer.avgCheckIns,
+            originalFillRate: underperformer.fillRate
+          }
+        });
+        
+        // Update format mix
+        dayFormats.add(best.class.toLowerCase());
+        
+        // Update trainer work days tracker
+        if (!trainerWorkDays.has(best.trainer)) {
+          trainerWorkDays.set(best.trainer, new Set());
+        }
+        trainerWorkDays.get(best.trainer)!.add(underperformer.day);
+        
+        // Update trainer day locations tracker
+        if (!trainerDayLocations.has(best.trainer)) {
+          trainerDayLocations.set(best.trainer, new Map());
+        }
+        if (!trainerDayLocations.get(best.trainer)!.has(underperformer.day)) {
+          trainerDayLocations.get(best.trainer)!.set(underperformer.day, new Set());
+        }
+        trainerDayLocations.get(best.trainer)!.get(underperformer.day)!.add(location);
+      }
+    });
+    
+    // Sort replacements by score
+    replacements.sort((a, b) => b.replacement.score - a.replacement.score);
+    
+    // Calculate location class counts AFTER replacements
+    const locationCounts: Record<string, number> = {};
+    const locationShortfalls: Record<string, { needed: number; reasons: string[] }> = {};
+    
+    Object.keys(MINIMUM_CLASSES).forEach(loc => {
+      const currentCount = locationFilteredClasses.filter(cls => cls.location === loc).length;
+      const minimum = MINIMUM_CLASSES[loc];
+      locationCounts[loc] = currentCount;
+      
+      if (currentCount < minimum) {
+        const shortfall = minimum - currentCount;
+        const reasons: string[] = [];
+        
+        // Analyze why we couldn't meet minimums
+        const availableTrainers = Array.from(trainerMetrics.values())
+          .filter(t => t.location === loc && !(settings.blockedTrainers || []).some(b => t.name.includes(b)));
+        
+        const trainersAtMax = availableTrainers.filter(t => 
+          (trainerHoursTracker.get(t.name) || 0) >= MAX_TRAINER_HOURS
+        );
+        
+        const trainersNearMax = availableTrainers.filter(t => {
+          const hours = trainerHoursTracker.get(t.name) || 0;
+          return hours >= MAX_TRAINER_HOURS - 2 && hours < MAX_TRAINER_HOURS;
+        });
+        
+        if (trainersAtMax.length > 0) {
+          reasons.push(`${trainersAtMax.length} trainers at max ${MAX_TRAINER_HOURS}hrs: ${trainersAtMax.map(t => t.name).slice(0, 3).join(', ')}${trainersAtMax.length > 3 ? '...' : ''}`);
+        }
+        
+        if (trainersNearMax.length > 0) {
+          reasons.push(`${trainersNearMax.length} trainers near max hours`);
+        }
+        
+        if ((settings.blockedTrainers || []).length > 0) {
+          reasons.push(`${(settings.blockedTrainers || []).length} trainers blocked from optimization`);
+        }
+        
+        if (settings.trainerLeaves && settings.trainerLeaves.length > 0) {
+          reasons.push(`${settings.trainerLeaves.length} trainers on leave`);
+        }
+        
+        // Check if we have enough underperforming classes to replace
+        const underperformingAtLoc = underperformingClasses.filter(c => c.location === loc).length;
+        if (underperformingAtLoc < shortfall) {
+          reasons.push(`Only ${underperformingAtLoc} underperforming classes available to optimize`);
+        }
+        
+        // Check time restrictions impact
+        reasons.push(`Time restrictions: No classes before ${settings.noClassesBefore || '07:00'}, after ${settings.noClassesAfter || '20:00'}, or ${settings.noClassesBetweenStart || '12:30'}-${settings.noClassesBetweenEnd || '15:30'}`);
+        
+        locationShortfalls[loc] = { needed: shortfall, reasons };
+      }
+    });
+    
+    return {
+      highPerformingClasses,
+      underperformingClasses,
+      replacements,
+      trainerMetrics,
+      trainerHoursTracker,
+      trainerWorkDays,
+      locationCounts,
+      locationShortfalls,
+      minimumClasses: MINIMUM_CLASSES,
+      maxTrainerHours: MAX_TRAINER_HOURS,
+      summary: {
+        totalClasses: locationFilteredClasses.length,
+        highPerforming: highPerformingClasses.length,
+        underperforming: underperformingClasses.length,
+        replacementsFound: replacements.length,
+        minimumsNotMet: Object.keys(locationShortfalls).length > 0
+      }
+    };
+  }, [showHighPerformingOnly, scheduleClasses, rawData, filters.dateFrom, filters.dateTo, filters.locations, locationAverages, getFormatDifficulty, optimizationSettings]);
+
   // Apply Pro Scheduler filters independently (do not use global filters)
+  // When Top Classes mode is ON, include optimized replacements
   const filteredClasses = useMemo(() => {
     // Combine regular and discontinued classes based on showDiscontinued state
-    const classesToFilter = showDiscontinued 
+    let classesToFilter = showDiscontinued 
       ? [...scheduleClasses, ...discontinuedClasses]
       : scheduleClasses;
+    
+    // When Top Classes mode is ON, replace underperforming with optimized alternatives
+    if (showHighPerformingOnly && optimizedSchedule) {
+      const replacementMap = new Map<string, typeof optimizedSchedule.replacements[0]>();
+      optimizedSchedule.replacements.forEach(r => {
+        replacementMap.set(r.original.id, r);
+      });
+      
+      classesToFilter = classesToFilter.map(cls => {
+        const replacement = replacementMap.get(cls.id);
+        if (replacement) {
+          // Return a modified class with replacement info
+          return {
+            ...cls,
+            // Keep original slot info
+            day: cls.day,
+            time: cls.time,
+            location: cls.location,
+            // Replace class and trainer
+            class: replacement.replacement.class,
+            trainer: replacement.replacement.trainerDisplay,
+            // Update expected metrics
+            avgCheckIns: replacement.replacement.expectedCheckIns,
+            fillRate: replacement.replacement.expectedFillRate,
+            // Mark as optimized replacement
+            isOptimizedReplacement: true,
+            originalClass: replacement.replacement.originalClass,
+            originalTrainer: replacement.replacement.originalTrainer,
+            originalCheckIns: replacement.replacement.originalCheckIns,
+            originalFillRate: replacement.replacement.originalFillRate,
+            optimizationReason: replacement.replacement.reason,
+            optimizationFullReason: replacement.replacement.fullReason,
+            optimizationScore: replacement.replacement.score,
+            trainerHoursAfter: replacement.replacement.trainerHoursAfter,
+            trainerMaxHours: replacement.replacement.trainerMaxHours,
+            isPriorityTrainer: replacement.replacement.isPriority,
+            isNewTrainer: replacement.replacement.isNewTrainer
+          } as ScheduleClass & { 
+            isOptimizedReplacement: boolean; 
+            originalClass: string; 
+            originalTrainer: string;
+            originalCheckIns: number;
+            originalFillRate: number;
+            optimizationReason: string;
+            optimizationFullReason: string;
+            optimizationScore: number;
+            trainerHoursAfter: number;
+            trainerMaxHours: number;
+            isPriorityTrainer: boolean;
+            isNewTrainer: boolean;
+          };
+        }
+        return cls;
+      });
+    }
     
     return classesToFilter.filter(cls => {
       // Location filter
       if (filters.locations.length > 0 && !filters.locations.includes(cls.location)) return false;
-      // Trainer filter
-      if (filters.trainers.length > 0 && !filters.trainers.includes(cls.trainer)) return false;
-      // Class filter
-      if (filters.classes.length > 0 && !filters.classes.includes(cls.class)) return false;
+      // Trainer filter - match against both original and replacement trainer
+      if (filters.trainers.length > 0) {
+        const isOptimized = (cls as any).isOptimizedReplacement;
+        const originalTrainer = (cls as any).originalTrainer;
+        if (!filters.trainers.includes(cls.trainer) && 
+            !(isOptimized && originalTrainer && filters.trainers.includes(originalTrainer))) {
+          return false;
+        }
+      }
+      // Class filter - match against both original and replacement class
+      if (filters.classes.length > 0) {
+        const isOptimized = (cls as any).isOptimizedReplacement;
+        const originalClass = (cls as any).originalClass;
+        if (!filters.classes.includes(cls.class) && 
+            !(isOptimized && originalClass && filters.classes.includes(originalClass))) {
+          return false;
+        }
+      }
       // Active only filter
       if (filters.activeOnly && cls.status !== 'Active' && !cls.isDiscontinued) return false;
-      // High-performing filter (class avg > location avg)
+      // When Top Classes mode is ON, we've already optimized - don't filter out replacements
       if (showHighPerformingOnly) {
-        const locationAvg = locationAverages.get(cls.location) || 0;
-        if (cls.avgCheckIns <= locationAvg) return false;
+        // Keep all classes (both high-performing and optimized replacements)
+        return true;
       }
       return true;
     });
-  }, [scheduleClasses, discontinuedClasses, showDiscontinued, filters, showHighPerformingOnly, locationAverages]);
+  }, [scheduleClasses, discontinuedClasses, showDiscontinued, filters, showHighPerformingOnly, locationAverages, optimizedSchedule]);
 
-  // Get unique values for dropdowns
+  // PERFORMANCE: Get unique values from pre-computed indices (O(1) instead of O(n))
   const uniqueTrainers = useMemo(() => {
+    const indices = getDataIndices();
+    if (indices) return indices.uniqueTrainers;
+    // Fallback if indices not ready
     const trainers = rawData.map(session => session.Trainer).filter(Boolean);
     return Array.from(new Set(trainers)).sort();
   }, [rawData]);
 
   const uniqueLocations = useMemo(() => {
+    const indices = getDataIndices();
+    if (indices) return indices.uniqueLocations;
+    // Fallback
     const locations = rawData.map(session => session.Location).filter(Boolean);
     return Array.from(new Set(locations)).sort();
   }, [rawData]);
 
   const uniqueClasses = useMemo(() => {
+    const indices = getDataIndices();
+    if (indices) return indices.uniqueClasses;
+    // Fallback
     const classes = rawData.map(session => session.Class).filter(Boolean);
     return Array.from(new Set(classes)).sort();
   }, [rawData]);
@@ -1320,13 +2332,113 @@ function ProScheduler() {
     };
   }, [showDrilldown]);
 
+  // Helper: Format number with max 1 decimal
+  const formatMetric = (value: number | undefined | null, suffix: string = ''): string => {
+    if (value === undefined || value === null || isNaN(value)) return '-';
+    if (value === 0) return '0' + suffix;
+    const formatted = Number(value.toFixed(1));
+    return formatted + suffix;
+  };
+
+  // Calculate projected metrics for classes without historical data
+  // Based on performance of other classes at same timeslot + location
+  const getProjectedMetrics = (cls: ScheduleClass): { 
+    avgCheckIns: number; 
+    fillRate: number; 
+    confidence: 'high' | 'medium' | 'low';
+    basedOn: string;
+    sampleSize: number;
+  } => {
+    // Try to find similar classes at same timeslot & location
+    const similarSessions = rawData.filter((session: SessionData) => {
+      const matchesDay = session.Day === cls.day;
+      const matchesTime = session.Time?.startsWith(cls.time);
+      const matchesLocation = session.Location?.toLowerCase() === cls.location.toLowerCase();
+      return matchesDay && matchesTime && matchesLocation;
+    });
+    
+    if (similarSessions.length >= 5) {
+      const avgCheckIns = similarSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / similarSessions.length;
+      const totalCapacity = similarSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0);
+      const fillRate = totalCapacity > 0 
+        ? (similarSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / totalCapacity) * 100
+        : 0;
+      return { 
+        avgCheckIns, 
+        fillRate, 
+        confidence: similarSessions.length >= 15 ? 'high' : 'medium',
+        basedOn: `${cls.day} ${cls.time} at ${cls.location}`,
+        sampleSize: similarSessions.length
+      };
+    }
+    
+    // Fallback: Try location-only
+    const locationSessions = rawData.filter((session: SessionData) => {
+      return session.Location?.toLowerCase() === cls.location.toLowerCase();
+    });
+    
+    if (locationSessions.length >= 10) {
+      const avgCheckIns = locationSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / locationSessions.length;
+      const totalCapacity = locationSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0);
+      const fillRate = totalCapacity > 0 
+        ? (locationSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / totalCapacity) * 100
+        : 0;
+      return { 
+        avgCheckIns, 
+        fillRate, 
+        confidence: 'low',
+        basedOn: `${cls.location} average`,
+        sampleSize: locationSessions.length
+      };
+    }
+    
+    // Ultimate fallback: Overall average
+    const avgCheckIns = rawData.length > 0
+      ? rawData.reduce((sum: number, s: SessionData) => sum + (s.CheckedIn || 0), 0) / rawData.length
+      : 10;
+    const totalCapacity = rawData.reduce((sum: number, s: SessionData) => sum + (s.Capacity || 0), 0);
+    const fillRate = totalCapacity > 0 
+      ? (rawData.reduce((sum: number, s: SessionData) => sum + (s.CheckedIn || 0), 0) / totalCapacity) * 100
+      : 50;
+    return { 
+      avgCheckIns, 
+      fillRate, 
+      confidence: 'low',
+      basedOn: 'Overall studio average',
+      sampleSize: rawData.length
+    };
+  };
+
   // Get all historical sessions for the selected class (with date filter applied)
+  // For optimized replacements, look up sessions for the NEW trainer-class combo
   const getClassSessions = (cls: ScheduleClass): SessionData[] => {
     if (!cls) return [];
     
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
+    const isOptimized = (cls as any).isOptimizedReplacement;
+    
+    // For optimized replacements, find sessions for the NEW trainer teaching this class format
+    // Look for ANY session of this class type by this trainer at this location
+    if (isOptimized) {
+      return rawData.filter((session: SessionData) => {
+        const sessionDate = parseISO(session.Date);
+        if (sessionDate >= today) return false;
+        const inDateRange = isWithinInterval(sessionDate, { start: filters.dateFrom, end: filters.dateTo });
+        if (!inDateRange) return false;
+        
+        // Match by trainer and class type (ignore day/time for optimized since we want historic perf)
+        const matchesClass = session.Class?.toLowerCase() === cls.class.toLowerCase();
+        const matchesLocation = session.Location?.toLowerCase() === cls.location.toLowerCase();
+        const matchesTrainer = session.Trainer?.toLowerCase().includes(cls.trainer.toLowerCase()) ||
+                              cls.trainer.toLowerCase().includes(session.Trainer?.toLowerCase() || '');
+        
+        return matchesClass && matchesLocation && matchesTrainer;
+      }).sort((a, b) => new Date(b.Date).getTime() - new Date(a.Date).getTime());
+    }
+    
+    // Standard lookup for non-optimized classes
     return rawData.filter((session: SessionData) => {
       const sessionDate = parseISO(session.Date);
       
@@ -1344,8 +2456,43 @@ function ProScheduler() {
     }).sort((a, b) => new Date(b.Date).getTime() - new Date(a.Date).getTime());
   };
 
+  // Get sessions for the ORIGINAL class (for comparison in optimized replacements)
+  const getOriginalClassSessions = (cls: ScheduleClass): SessionData[] => {
+    if (!cls) return [];
+    const isOptimized = (cls as any).isOptimizedReplacement;
+    if (!isOptimized) return [];
+    
+    const originalClass = (cls as any).originalClass;
+    // originalTrainer available if needed: (cls as any).originalTrainer
+    if (!originalClass) return [];
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    return rawData.filter((session: SessionData) => {
+      const sessionDate = parseISO(session.Date);
+      if (sessionDate >= today) return false;
+      const inDateRange = isWithinInterval(sessionDate, { start: filters.dateFrom, end: filters.dateTo });
+      if (!inDateRange) return false;
+      
+      // Match original class details
+      const matchesDay = session.Day === cls.day;
+      const matchesTime = session.Time?.startsWith(cls.time);
+      const matchesClass = session.Class?.toLowerCase() === originalClass.toLowerCase();
+      const matchesLocation = session.Location?.toLowerCase() === cls.location.toLowerCase();
+      
+      return matchesDay && matchesTime && matchesClass && matchesLocation;
+    }).sort((a, b) => new Date(b.Date).getTime() - new Date(a.Date).getTime());
+  };
+
   // Render class card with enhanced styling
   const renderClassCard = (cls: ScheduleClass) => {
+    // Check if this is an optimized replacement
+    const isOptimizedReplacement = (cls as any).isOptimizedReplacement || false;
+    const originalClass = (cls as any).originalClass;
+    const originalTrainer = (cls as any).originalTrainer;
+    const optimizationReason = (cls as any).optimizationReason;
+    
     const fillRateColor = cls.fillRate >= 80 
       ? 'from-green-500 to-emerald-500' 
       : cls.fillRate >= 60 
@@ -1366,8 +2513,11 @@ function ProScheduler() {
       'Functional': 'from-teal-50/80 to-teal-100/80 border-teal-200'
     };
 
-    // Find matching format color
+    // Find matching format color - for optimized replacements use a special gradient
     const getFormatColor = () => {
+      if (isOptimizedReplacement) {
+        return 'from-emerald-100 to-green-200 border-emerald-400 ring-2 ring-emerald-300';
+      }
       for (const [format, color] of Object.entries(formatColors)) {
         if (cls.class.toLowerCase().includes(format.toLowerCase())) {
           return color;
@@ -1475,10 +2625,25 @@ function ProScheduler() {
               <Plus className="w-3 h-3" />
             </div>
           )}
+          {isOptimizedReplacement && (
+            <div className="bg-emerald-600 text-white rounded-full p-1 shadow-md animate-pulse" title={`Optimized: Replaces ${originalClass} (${originalTrainer})\n${optimizationReason}`}>
+              <Zap className="w-3 h-3" />
+            </div>
+          )}
         </div>
 
+        {/* Optimization Banner - Show when class is optimized replacement */}
+        {isOptimizedReplacement && (
+          <div className="absolute top-0 left-0 right-0 bg-gradient-to-r from-emerald-600 to-green-600 text-white text-[8px] font-bold py-0.5 px-2 flex items-center justify-center gap-1 shadow-sm">
+            <Zap className="w-2.5 h-2.5" />
+            <span>OPTIMIZED</span>
+            <span className="opacity-75">|</span>
+            <span className="font-normal opacity-90 truncate">was: {originalClass}</span>
+          </div>
+        )}
+
         {/* Collapsed View - Beautiful & Clean with Key Metrics */}
-        <div className="p-2.5 pointer-events-none">
+        <div className={`p-2.5 pointer-events-none ${isOptimizedReplacement ? 'pt-5' : ''}`}>
           {/* Header with Class Name and Icons */}
           <div className="flex items-center justify-between mb-1.5">
             <div className="font-bold text-sm text-slate-900 truncate flex-1 mr-2">
@@ -1538,7 +2703,7 @@ function ProScheduler() {
                 cls.fillRate >= 60 ? 'text-amber-600' : 
                 'text-red-600'
               }`}>
-                {cls.sessionCount === 0 ? '-' : `${cls.fillRate}%`}
+                {cls.sessionCount === 0 ? '-' : formatMetric(cls.fillRate, '%')}
               </div>
               <div className="flex-1 max-w-[50px]">
                 <div className="bg-slate-200 rounded-full h-1">
@@ -1555,7 +2720,7 @@ function ProScheduler() {
               <div className={`text-sm font-bold ${
                 cls.sessionCount === 0 ? 'text-gray-400' : 'text-emerald-600'
               }`}>
-                {cls.sessionCount === 0 ? '-' : cls.avgCheckIns}
+                {cls.sessionCount === 0 ? '-' : formatMetric(cls.avgCheckIns)}
               </div>
               <div className="text-[9px] text-slate-500">
                 avg
@@ -1783,20 +2948,229 @@ function ProScheduler() {
 
       {/* Drag-and-Drop Info Banner */}
       {viewMode === 'calendar' && (
-        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4 flex items-center gap-3">
-          <div className="bg-blue-500 text-white rounded-full p-2">
+        <div className={`border rounded-xl p-4 flex items-center gap-3 transition-all duration-300 ${
+          draggedClass 
+            ? 'bg-gradient-to-r from-blue-500 to-indigo-600 border-blue-600 shadow-xl scale-105' 
+            : 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200'
+        }`}>
+          <div className={`rounded-full p-2 ${
+            draggedClass ? 'bg-white text-blue-600 animate-pulse' : 'bg-blue-500 text-white'
+          }`}>
             <ArrowRightLeft className="w-5 h-5" />
           </div>
           <div className="flex-1">
-            <div className="font-semibold text-blue-900 text-sm">Drag & Drop Enabled</div>
-            <div className="text-blue-700 text-xs">Drag class cards to different time slots or days to reschedule. Changes are saved automatically.</div>
+            <div className={`font-semibold text-sm ${draggedClass ? 'text-white' : 'text-blue-900'}`}>
+              {draggedClass ? '🎯 Moving Class - Drop in any time slot!' : 'Drag & Drop Enabled'}
+            </div>
+            <div className={`text-xs ${draggedClass ? 'text-blue-100' : 'text-blue-700'}`}>
+              {draggedClass 
+                ? `Dragging: ${draggedClass.class} (${draggedClass.trainer}) from ${draggedClass.day} ${draggedClass.time}`
+                : 'Drag class cards to different time slots or days to reschedule. Changes are saved automatically.'
+              }
+            </div>
           </div>
           {draggedClass && (
-            <div className="bg-blue-500 text-white px-3 py-1.5 rounded-full text-xs font-bold animate-pulse">
-              Moving: {draggedClass.class}
+            <div className="bg-white text-blue-600 px-4 py-2 rounded-full text-sm font-bold shadow-lg">
+              📍 Drop to move
             </div>
           )}
         </div>
+      )}
+
+      {/* OPTIMIZATION MODE SUMMARY PANEL */}
+      {showHighPerformingOnly && optimizedSchedule && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-gradient-to-r from-emerald-600 via-green-600 to-teal-600 rounded-2xl p-6 shadow-xl mb-6 text-white"
+        >
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="bg-white/20 rounded-xl p-3">
+                <Zap className="w-7 h-7" />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold flex items-center gap-2">
+                  ⚡ Smart Schedule Optimization Active
+                </h3>
+                <p className="text-emerald-100 text-sm">
+                  Optimized schedule • Max {optimizedSchedule.maxTrainerHours}hrs/trainer • No hosted classes
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowHighPerformingOnly(false)}
+              className="bg-white/20 hover:bg-white/30 rounded-lg px-4 py-2 text-sm font-semibold transition-colors"
+            >
+              Exit Optimization Mode
+            </button>
+          </div>
+          
+          {/* Location Class Counts - Minimum Requirements */}
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            {Object.entries(optimizedSchedule.locationCounts || {}).map(([location, count]) => {
+              const minimum = (optimizedSchedule.minimumClasses as Record<string, number>)?.[location] || 0;
+              const isMet = count >= minimum;
+              const shortfall = (optimizedSchedule as any).locationShortfalls?.[location] as { needed: number; reasons: string[] } | undefined;
+              return (
+                <div key={location} className={`rounded-xl p-4 ${isMet ? 'bg-green-500/30' : 'bg-red-500/30'} border ${isMet ? 'border-green-400/50' : 'border-red-400/50'}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-semibold text-sm">{location.includes('Kwality') ? 'Kwality House' : 'Supreme HQ Bandra'}</span>
+                    {isMet ? (
+                      <span className="bg-green-500 text-white text-[10px] px-2 py-0.5 rounded-full uppercase font-bold">✓ Met</span>
+                    ) : (
+                      <span className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full uppercase font-bold">⚠ -{shortfall?.needed || (minimum - count)} Below</span>
+                    )}
+                  </div>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-3xl font-black">{count}</span>
+                    <span className="text-sm opacity-75">/ {minimum} min classes</span>
+                  </div>
+                  <div className="w-full bg-white/20 rounded-full h-2 mt-2">
+                    <div 
+                      className={`h-2 rounded-full ${isMet ? 'bg-green-400' : 'bg-red-400'}`}
+                      style={{ width: `${Math.min((count / minimum) * 100, 100)}%` }}
+                    />
+                  </div>
+                  
+                  {/* Show reasons why minimum not met */}
+                  {!isMet && shortfall && shortfall.reasons.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-red-400/30">
+                      <div className="text-[10px] uppercase text-red-200 mb-1 font-semibold">Why Not Met:</div>
+                      <ul className="space-y-1">
+                        {shortfall.reasons.slice(0, 4).map((reason, idx) => (
+                          <li key={idx} className="text-[10px] text-red-100/80 flex items-start gap-1.5">
+                            <span className="text-red-400 mt-0.5">•</span>
+                            <span>{reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          
+          {/* Stats Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+            <div className="bg-white/10 rounded-xl p-4 text-center">
+              <div className="text-3xl font-black">{optimizedSchedule.summary.totalClasses}</div>
+              <div className="text-xs text-emerald-200 uppercase tracking-wide">Total Classes</div>
+            </div>
+            <div className="bg-white/10 rounded-xl p-4 text-center">
+              <div className="text-3xl font-black text-green-300">{optimizedSchedule.summary.highPerforming}</div>
+              <div className="text-xs text-emerald-200 uppercase tracking-wide">High Performing</div>
+            </div>
+            <div className="bg-white/10 rounded-xl p-4 text-center">
+              <div className="text-3xl font-black text-amber-300">{optimizedSchedule.summary.underperforming}</div>
+              <div className="text-xs text-emerald-200 uppercase tracking-wide">Underperforming</div>
+            </div>
+            <div className="bg-white/10 rounded-xl p-4 text-center">
+              <div className="text-3xl font-black text-cyan-300">{optimizedSchedule.summary.replacementsFound}</div>
+              <div className="text-xs text-emerald-200 uppercase tracking-wide">Replacements Found</div>
+            </div>
+            <div className="bg-white/10 rounded-xl p-4 text-center">
+              <div className="text-3xl font-black text-yellow-300">
+                {optimizedSchedule.summary.replacementsFound > 0 
+                  ? `+${formatMetric(optimizedSchedule.replacements.reduce((sum, r) => sum + (r.replacement.expectedCheckIns - r.original.avgCheckIns), 0))}` 
+                  : '0'}
+              </div>
+              <div className="text-xs text-emerald-200 uppercase tracking-wide">Expected +Attendance</div>
+            </div>
+          </div>
+          
+          {/* Replacement Details */}
+          {optimizedSchedule.replacements.length > 0 && (
+            <div className="bg-white/10 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-bold flex items-center gap-2">
+                  <RefreshCw className="w-4 h-4" />
+                  Optimized Replacements ({optimizedSchedule.replacements.length})
+                </h4>
+                <button
+                  onClick={() => setShowAllReplacements(true)}
+                  className="bg-white/20 hover:bg-white/30 rounded-lg px-4 py-2 text-xs font-semibold transition-colors flex items-center gap-2"
+                >
+                  <Eye className="w-4 h-4" />
+                  View All Replacements
+                </button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[200px] overflow-y-auto">
+                {optimizedSchedule.replacements.slice(0, 9).map((r, i) => (
+                  <div key={i} className="bg-white/10 rounded-lg p-3 text-sm">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="flex-1">
+                        <div className="font-semibold text-red-300 line-through text-xs opacity-75">
+                          {r.original.class} ({r.original.trainer})
+                        </div>
+                        <div className="flex items-center gap-1 text-emerald-200 font-bold">
+                          <ArrowUpRight className="w-3 h-3" />
+                          {r.replacement.class} ({r.replacement.trainerDisplay})
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="text-emerald-300">{r.original.day} {r.original.time}</span>
+                      <span className="bg-green-500/30 px-2 py-0.5 rounded-full font-bold">
+                        +{formatMetric(r.replacement.expectedCheckIns - r.original.avgCheckIns)} attendance
+                      </span>
+                    </div>
+                    <div className="text-[9px] text-emerald-200/70 mt-1 truncate" title={r.replacement.reason}>
+                      {r.replacement.reason}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {optimizedSchedule.replacements.length > 9 && (
+                <button 
+                  onClick={() => setShowAllReplacements(true)}
+                  className="w-full text-center text-xs text-emerald-200 mt-3 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                >
+                  View all {optimizedSchedule.replacements.length} replacements →
+                </button>
+              )}
+            </div>
+          )}
+          
+          {/* Trainer Hours Optimization */}
+          {optimizedSchedule.trainerHoursTracker && optimizedSchedule.trainerHoursTracker.size > 0 && (
+            <div className="mt-4 bg-white/10 rounded-xl p-4">
+              <h4 className="font-bold mb-3 flex items-center gap-2">
+                <Users className="w-4 h-4" />
+                Trainer Hours (Max {optimizedSchedule.maxTrainerHours}hrs/week across ALL locations)
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                {Array.from(optimizedSchedule.trainerHoursTracker.entries())
+                  .filter(([_, hours]) => hours > 0)
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 12)
+                  .map(([trainerName, hours]) => {
+                    const isAtMax = hours >= (optimizedSchedule.maxTrainerHours || 16);
+                    const isNearMax = hours >= (optimizedSchedule.maxTrainerHours || 16) - 2;
+                    return (
+                      <div key={trainerName} className={`rounded-lg px-3 py-2 text-xs ${isAtMax ? 'bg-red-500/30 border border-red-400/50' : isNearMax ? 'bg-amber-500/20 border border-amber-400/50' : 'bg-white/10'}`}>
+                        <div className="font-semibold capitalize">{trainerName}</div>
+                        <div className="flex items-center gap-2 text-[10px]">
+                          <span className={`font-bold ${isAtMax ? 'text-red-300' : isNearMax ? 'text-amber-300' : 'text-emerald-200'}`}>
+                            {hours}/{optimizedSchedule.maxTrainerHours || 16}hrs
+                          </span>
+                          {isAtMax && <span className="text-red-200">MAX</span>}
+                        </div>
+                        <div className="w-full bg-white/20 rounded-full h-1 mt-1">
+                          <div 
+                            className={`h-1 rounded-full ${isAtMax ? 'bg-red-400' : isNearMax ? 'bg-amber-400' : 'bg-gradient-to-r from-emerald-400 to-green-400'}`}
+                            style={{ width: `${Math.min((hours / (optimizedSchedule.maxTrainerHours || 16)) * 100, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })
+                }
+              </div>
+            </div>
+          )}
+        </motion.div>
       )}
 
       {/* Advanced Control Panel */}
@@ -1893,6 +3267,13 @@ function ProScheduler() {
             <Edit3 className="w-4 h-4 mx-auto mb-1" />
             <div className="text-xs font-bold">Filters</div>
           </button>
+          <button
+            onClick={() => setShowOptimizationSettings(true)}
+            className="p-3 rounded-xl border transition-all duration-300 bg-white/70 backdrop-blur-sm border-slate-200 hover:border-indigo-300 hover:bg-white/90 text-slate-700"
+          >
+            <Settings className="w-4 h-4 mx-auto mb-1" />
+            <div className="text-xs font-bold">Rules</div>
+          </button>
         </div>
       </div>
 
@@ -1912,8 +3293,17 @@ function ProScheduler() {
                     <label className="block text-xs text-gray-600 mb-1">From</label>
                     <input
                       type="date"
-                      value={filters.dateFrom.toISOString().split('T')[0]}
-                      onChange={(e) => setFilters({ ...filters, dateFrom: new Date(e.target.value) })}
+                      lang="en-US"
+                      value={format(filters.dateFrom, 'yyyy-MM-dd')}
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          const [year, month, day] = e.target.value.split('-').map(Number);
+                          const newDate = new Date(year, month - 1, day, 12, 0, 0);
+                          console.log('From date:', e.target.value, '→', newDate.toLocaleDateString());
+                          setFilters({ ...filters, dateFrom: newDate });
+                        }
+                      }}
+                      max={format(new Date(), 'yyyy-MM-dd')}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
@@ -1921,8 +3311,17 @@ function ProScheduler() {
                     <label className="block text-xs text-gray-600 mb-1">To</label>
                     <input
                       type="date"
-                      value={filters.dateTo.toISOString().split('T')[0]}
-                      onChange={(e) => setFilters({ ...filters, dateTo: new Date(e.target.value) })}
+                      lang="en-US"
+                      value={format(filters.dateTo, 'yyyy-MM-dd')}
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          const [year, month, day] = e.target.value.split('-').map(Number);
+                          const newDate = new Date(year, month - 1, day, 23, 59, 59);
+                          console.log('To date:', e.target.value, '→', newDate.toLocaleDateString());
+                          setFilters({ ...filters, dateTo: newDate });
+                        }
+                      }}
+                      max={format(new Date(), 'yyyy-MM-dd')}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
@@ -2654,8 +4053,28 @@ function ProScheduler() {
                     >
                       {scheduleGrid[day.key]?.[slot.time24]?.map(cls => renderClassCard(cls))}
                       
+                      {/* Drop Preview - Show ghost of dragged class */}
+                      {draggedClass && dropTarget?.day === day.key && dropTarget?.time === slot.time24 && (
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.8 }}
+                          animate={{ opacity: 0.5, scale: 1 }}
+                          className="absolute inset-0 bg-blue-500 rounded-lg border-2 border-dashed border-blue-600 flex items-center justify-center pointer-events-none z-10"
+                        >
+                          <div className="text-center text-white font-bold text-sm px-3">
+                            <div className="flex items-center gap-2 justify-center mb-1">
+                              <span>↓</span>
+                              <span>Drop {draggedClass.class} here</span>
+                              <span>↓</span>
+                            </div>
+                            <div className="text-xs opacity-80">
+                              {draggedClass.trainer} • {day.full} at {slot.time12}
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                      
                       {/* Empty slot - add class button */}
-                      {(!scheduleGrid[day.key]?.[slot.time24] || scheduleGrid[day.key][slot.time24].length === 0) && (
+                      {(!scheduleGrid[day.key]?.[slot.time24] || scheduleGrid[day.key][slot.time24].length === 0) && !draggedClass && (
                         <motion.div 
                           whileHover={{ scale: 1.02 }}
                           onClick={() => {
@@ -2931,6 +4350,20 @@ function ProScheduler() {
                                         </div>
                                       ))}
                                     </div>
+                                    
+                                    {/* Drop Preview */}
+                                    {draggedClass && dropTarget?.day === day.key && dropTarget?.time === slot.time24 && (
+                                      <motion.div
+                                        initial={{ opacity: 0, scale: 0.8 }}
+                                        animate={{ opacity: 0.5, scale: 1 }}
+                                        className="absolute inset-0 bg-blue-500 rounded-lg border-2 border-dashed border-blue-600 flex items-center justify-center pointer-events-none z-10"
+                                      >
+                                        <div className="text-center text-white font-bold text-xs px-2">
+                                          <div>↓ Drop here ↓</div>
+                                          <div className="text-[10px] opacity-80">{draggedClass.class}</div>
+                                        </div>
+                                      </motion.div>
+                                    )}
                                   </div>
                                 );
                               })}
@@ -3044,6 +4477,19 @@ function ProScheduler() {
                                         <div className="border border-dashed border-slate-200 rounded-lg p-2 text-center text-[10px] text-slate-400">
                                           No class
                                         </div>
+                                      )}
+                                      
+                                      {/* Drop Preview */}
+                                      {draggedClass && dropTarget?.day === day.key && dropTarget?.time === slot.time24 && (
+                                        <motion.div
+                                          initial={{ opacity: 0, scale: 0.8 }}
+                                          animate={{ opacity: 0.5, scale: 1 }}
+                                          className="absolute inset-0 bg-blue-500 rounded-lg border-2 border-dashed border-blue-600 flex items-center justify-center pointer-events-none z-10"
+                                        >
+                                          <div className="text-center text-white font-bold text-[10px] px-1">
+                                            ↓ Drop ↓
+                                          </div>
+                                        </motion.div>
                                       )}
                                     </div>
                                   </div>
@@ -3956,41 +5402,89 @@ function ProScheduler() {
                   </div>
                 </div>
 
-                {/* Core Stats Grid */}
-                <div className="grid grid-cols-2 gap-3" aria-label="Core trainer stats">
-                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Sessions</div>
-                    <div className="text-xl font-bold">{hasHistoricalData ? classSessions.length : '-'}</div>
-                  </div>
-                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Avg Check-In</div>
-                    <div className="text-xl font-bold">
-                      {hasHistoricalData && classSessions.length > 0 
-                        ? (classSessions.reduce((sum, s) => sum + s.CheckedIn, 0) / classSessions.length).toFixed(1)
-                        : '-'}
-                    </div>
-                  </div>
-                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Fill Rate</div>
-                    <div className="text-xl font-bold">{selectedClass.fillRate > 0 ? `${selectedClass.fillRate}%` : '-'}</div>
-                  </div>
-                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Cancel Rate</div>
-                    <div className="text-xl font-bold text-red-300">
-                      {hasHistoricalData && selectedClass.avgBooked > 0
-                        ? `${(selectedClass.avgLateCancelled / selectedClass.avgBooked * 100).toFixed(1)}%`
-                        : '-'}
-                    </div>
-                  </div>
-                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 col-span-2">
-                    <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Total Revenue</div>
-                    <div className="text-xl font-bold text-green-300">
-                      {hasHistoricalData 
-                        ? formatCurrency(classSessions.reduce((sum, s) => sum + s.Revenue, 0))
-                        : '-'}
-                    </div>
-                  </div>
-                </div>
+                {/* Core Stats Grid - with projected metrics support */}
+                {(() => {
+                  const isOptimized = (selectedClass as any).isOptimizedReplacement;
+                  const projectedMetrics = !hasHistoricalData && isOptimized ? getProjectedMetrics(selectedClass) : null;
+                  
+                  return (
+                    <>
+                      {/* Projected Metrics Banner - only show when using projections */}
+                      {projectedMetrics && (
+                        <div className="bg-amber-500/20 border border-amber-400/40 rounded-xl p-3 mb-3">
+                          <div className="flex items-center gap-2 text-amber-200">
+                            <TrendingUp className="w-4 h-4" />
+                            <span className="text-xs font-semibold uppercase">Projected Metrics</span>
+                          </div>
+                          <div className="text-[10px] text-amber-100/80 mt-1">
+                            Based on {projectedMetrics.basedOn} ({projectedMetrics.sampleSize} samples, {projectedMetrics.confidence} confidence)
+                          </div>
+                        </div>
+                      )}
+                      
+                      <div className="grid grid-cols-2 gap-3" aria-label="Core trainer stats">
+                        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
+                          <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">
+                            Sessions {projectedMetrics && <span className="text-amber-300">(Est.)</span>}
+                          </div>
+                          <div className="text-xl font-bold">
+                            {hasHistoricalData ? classSessions.length : projectedMetrics ? '~' + Math.round(projectedMetrics.sampleSize / 4) : '-'}
+                          </div>
+                        </div>
+                        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
+                          <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">
+                            Avg Check-In {projectedMetrics && <span className="text-amber-300">(Proj.)</span>}
+                          </div>
+                          <div className={`text-xl font-bold ${projectedMetrics ? 'text-amber-200' : ''}`}>
+                            {hasHistoricalData && classSessions.length > 0 
+                              ? formatMetric(classSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / classSessions.length)
+                              : projectedMetrics
+                                ? formatMetric(projectedMetrics.avgCheckIns)
+                                : formatMetric(selectedClass.avgCheckIns)}
+                          </div>
+                        </div>
+                        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
+                          <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">
+                            Fill Rate {projectedMetrics && <span className="text-amber-300">(Proj.)</span>}
+                          </div>
+                          <div className={`text-xl font-bold ${projectedMetrics ? 'text-amber-200' : ''}`}>
+                            {hasHistoricalData && classSessions.length > 0
+                              ? formatMetric(
+                                  classSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0) > 0
+                                    ? (classSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / classSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0)) * 100
+                                    : 0,
+                                  '%'
+                                )
+                              : projectedMetrics
+                                ? formatMetric(projectedMetrics.fillRate, '%')
+                                : formatMetric(selectedClass.fillRate, '%')}
+                          </div>
+                        </div>
+                        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3">
+                          <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Cancel Rate</div>
+                          <div className="text-xl font-bold text-red-300">
+                            {hasHistoricalData && classSessions.length > 0
+                              ? formatMetric(
+                                  classSessions.reduce((sum, s) => sum + (s.Booked || 0), 0) > 0
+                                    ? (classSessions.reduce((sum, s) => sum + (s.LateCancelled || 0), 0) / classSessions.reduce((sum, s) => sum + (s.Booked || 0), 0)) * 100
+                                    : 0,
+                                  '%'
+                                )
+                              : '-'}
+                          </div>
+                        </div>
+                        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-3 col-span-2">
+                          <div className="text-[10px] font-semibold uppercase tracking-wide opacity-70">Total Revenue</div>
+                          <div className="text-xl font-bold text-green-300">
+                            {hasHistoricalData 
+                              ? formatCurrency(classSessions.reduce((sum, s) => sum + (s.Revenue || 0), 0))
+                              : '-'}
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
 
                 {/* Profile Summary */}
                 <div className="bg-white/10 rounded-xl p-4" aria-label="Trainer profile summary">
@@ -4003,6 +5497,122 @@ function ProScheduler() {
                     <li><span className="opacity-70">Capacity:</span> <span className="font-medium">{selectedClass.capacity}</span></li>
                   </ul>
                 </div>
+
+                {/* Optimization Scheduling Reason - Show if this is an optimized replacement */}
+                {(selectedClass as any).isOptimizedReplacement && (() => {
+                  const originalSessions = getOriginalClassSessions(selectedClass);
+                  const newSessions = classSessions;
+                  const projectedMetrics = newSessions.length === 0 ? getProjectedMetrics(selectedClass) : null;
+                  const useProjected = newSessions.length === 0 && projectedMetrics;
+                  
+                  // Calculate metrics from actual historical data
+                  const origCheckIns = originalSessions.length > 0
+                    ? originalSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / originalSessions.length
+                    : (selectedClass as any).originalCheckIns || 0;
+                  const origFillRate = originalSessions.length > 0 && originalSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0) > 0
+                    ? (originalSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / originalSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0)) * 100
+                    : (selectedClass as any).originalFillRate || 0;
+                  
+                  const newCheckIns = newSessions.length > 0
+                    ? newSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / newSessions.length
+                    : useProjected ? projectedMetrics.avgCheckIns : (selectedClass.avgCheckIns || 0);
+                  const newFillRate = newSessions.length > 0 && newSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0) > 0
+                    ? (newSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / newSessions.reduce((sum, s) => sum + (s.Capacity || 0), 0)) * 100
+                    : useProjected ? projectedMetrics.fillRate : (selectedClass.fillRate || 0);
+                  
+                  return (
+                    <div className="bg-gradient-to-r from-emerald-600/30 to-green-600/30 rounded-xl p-4 border border-emerald-400/50">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Zap className="w-4 h-4 text-emerald-300" />
+                        <span className="text-xs font-semibold uppercase tracking-wide text-emerald-200">Optimization Logic</span>
+                      </div>
+                      
+                      {/* Projected Banner */}
+                      {useProjected && (
+                        <div className="bg-amber-500/20 border border-amber-400/40 rounded-lg p-2 mb-3">
+                          <div className="flex items-center gap-2 text-amber-200 text-[10px]">
+                            <TrendingUp className="w-3 h-3" />
+                            <span className="font-semibold uppercase">New metrics are projected</span>
+                          </div>
+                          <div className="text-[9px] text-amber-100/80">
+                            Based on {projectedMetrics.basedOn} ({projectedMetrics.confidence} confidence)
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Original vs Optimized Comparison */}
+                      <div className="grid grid-cols-2 gap-3 mb-4">
+                        <div className="bg-red-500/20 rounded-lg p-2 border border-red-400/30">
+                          <div className="text-[9px] uppercase text-red-200 mb-1">Was ({originalSessions.length} sessions)</div>
+                          <div className="text-xs font-medium text-red-100 truncate">{(selectedClass as any).originalClass}</div>
+                          <div className="text-[10px] text-red-200">by {(selectedClass as any).originalTrainer}</div>
+                          <div className="text-sm font-bold text-red-300 mt-1">
+                            {formatMetric(origCheckIns)} avg / {formatMetric(origFillRate, '%')}
+                          </div>
+                        </div>
+                        <div className={`rounded-lg p-2 border ${useProjected ? 'bg-amber-500/20 border-amber-400/30' : 'bg-green-500/20 border-green-400/30'}`}>
+                          <div className={`text-[9px] uppercase mb-1 ${useProjected ? 'text-amber-200' : 'text-green-200'}`}>
+                            {useProjected ? `Projected (${projectedMetrics.sampleSize} samples)` : `Now (${newSessions.length} sessions)`}
+                          </div>
+                          <div className={`text-xs font-medium truncate ${useProjected ? 'text-amber-100' : 'text-green-100'}`}>{selectedClass.class}</div>
+                          <div className={`text-[10px] ${useProjected ? 'text-amber-200' : 'text-green-200'}`}>by {selectedClass.trainer}</div>
+                          <div className={`text-sm font-bold mt-1 ${useProjected ? 'text-amber-300' : 'text-green-300'}`}>
+                            {useProjected && '~'}{formatMetric(newCheckIns)} avg / {formatMetric(newFillRate, '%')}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Performance Improvement */}
+                      {newCheckIns > origCheckIns && (
+                        <div className="bg-emerald-500/20 rounded-lg p-2 mb-3 border border-emerald-400/30">
+                          <div className="flex items-center gap-2">
+                            <TrendingUp className="w-4 h-4 text-emerald-300" />
+                            <span className="text-sm font-bold text-emerald-200">
+                              {useProjected ? '~' : ''}+{formatMetric(newCheckIns - origCheckIns)} avg attendance improvement{useProjected ? ' (projected)' : ''}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Scheduling Reasons */}
+                      <div className="space-y-2">
+                        <div className="text-[10px] uppercase text-emerald-200 mb-1">Why This Change?</div>
+                        <div className="text-xs text-emerald-100 leading-relaxed">
+                          {((selectedClass as any).optimizationFullReason || (selectedClass as any).optimizationReason || 'High-performing class replacement').split(' • ').map((reason: string, idx: number) => (
+                            <div key={idx} className="flex items-start gap-2 mb-1">
+                              <span className="text-emerald-400 mt-0.5">•</span>
+                              <span>{reason}</span>
+                            </div>
+                          ))}
+                        </div>
+                        
+                        {/* Trainer Hours */}
+                        <div className="mt-3 pt-3 border-t border-emerald-400/30">
+                          <div className="flex justify-between items-center text-[10px]">
+                            <span className="text-emerald-200">Trainer Hours After</span>
+                            <span className="font-bold text-emerald-100">
+                              {(selectedClass as any).trainerHoursAfter || 0} / {(selectedClass as any).trainerMaxHours || 16}hrs
+                            </span>
+                          </div>
+                          <div className="flex gap-2 mt-2">
+                            {(selectedClass as any).isPriorityTrainer && (
+                              <span className="bg-blue-500/30 text-blue-200 px-2 py-0.5 rounded text-[9px] uppercase">Priority Trainer</span>
+                            )}
+                            {(selectedClass as any).isNewTrainer && (
+                              <span className="bg-amber-500/30 text-amber-200 px-2 py-0.5 rounded text-[9px] uppercase">New Trainer</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Optimization Score */}
+                      <div className="mt-3 pt-3 border-t border-emerald-400/30 flex items-center justify-between">
+                        <span className="text-[10px] text-emerald-200">Optimization Score</span>
+                        <span className="text-lg font-bold text-emerald-300">{(selectedClass as any).optimizationScore || 0}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Specialty & Highlights */}
                 <div className="bg-white/10 rounded-xl p-4">
@@ -6059,6 +7669,964 @@ function ProScheduler() {
           </div>
         );
       })()}
+
+      {/* OPTIMIZATION SETTINGS MODAL */}
+      {showOptimizationSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden"
+          >
+            {/* Header */}
+            <div className="bg-gradient-to-r from-indigo-600 via-blue-600 to-purple-600 px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Settings className="w-6 h-6 text-white" />
+                <div>
+                  <h2 className="text-xl font-bold text-white">Optimization Rules</h2>
+                  <p className="text-indigo-100 text-sm">Configure trainer priorities, format assignments, and scheduling constraints</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowOptimizationSettings(false)}
+                className="text-white/80 hover:text-white transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            {/* Content */}
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-180px)]">
+              <div className="space-y-8">
+                
+                {/* Location Constraints */}
+                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-6 border border-blue-200">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <MapPin className="w-5 h-5 text-blue-600" />
+                    Location Constraints & Priority Trainers
+                  </h3>
+                  <p className="text-sm text-slate-600 mb-4">
+                    Configure max parallel classes, required formats, and priority trainers for each location.
+                  </p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {Object.entries(optimizationSettings.locationConstraints).map(([location, constraints]: [string, LocationConstraints]) => (
+                      <div key={location} className="bg-white rounded-xl p-4 border border-blue-100">
+                        <h4 className="font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                          <Building className="w-4 h-4 text-blue-500" />
+                          {location.includes('Kwality') ? 'Kwality House' : 'Supreme HQ Bandra'}
+                        </h4>
+                        
+                        {/* Max Parallel Classes */}
+                        <div className="mb-4">
+                          <label className="block text-sm text-slate-600 mb-1">Max Parallel Classes</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="10"
+                            value={constraints.maxParallelClasses}
+                            onChange={(e) => {
+                              const newSettings = { ...optimizationSettings };
+                              newSettings.locationConstraints[location].maxParallelClasses = parseInt(e.target.value) || 1;
+                              setOptimizationSettings(newSettings);
+                            }}
+                            className="w-24 px-3 py-2 text-sm border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          />
+                        </div>
+                        
+                        {/* Required Formats */}
+                        <div className="mb-4">
+                          <label className="block text-sm text-slate-600 mb-1">Required Formats (must have)</label>
+                          <div className="flex flex-wrap gap-2">
+                            {constraints.requiredFormats.map((fmt: string) => (
+                              <div key={fmt} className="flex items-center gap-1 bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs capitalize">
+                                {fmt}
+                                <button
+                                  onClick={() => {
+                                    const newSettings = { ...optimizationSettings };
+                                    newSettings.locationConstraints[location].requiredFormats = constraints.requiredFormats.filter((f: string) => f !== fmt);
+                                    setOptimizationSettings(newSettings);
+                                  }}
+                                  className="ml-1 text-blue-600 hover:text-red-600"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="Add required format..."
+                            className="mt-2 w-full px-3 py-1 text-sm border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const input = e.target as HTMLInputElement;
+                                const value = input.value.trim().toLowerCase();
+                                if (value && !constraints.requiredFormats.includes(value)) {
+                                  const newSettings = { ...optimizationSettings };
+                                  newSettings.locationConstraints[location].requiredFormats = [...constraints.requiredFormats, value];
+                                  setOptimizationSettings(newSettings);
+                                  input.value = '';
+                                }
+                              }
+                            }}
+                          />
+                        </div>
+                        
+                        {/* Priority Trainers */}
+                        <div>
+                          <label className="block text-sm text-slate-600 mb-1">Priority Trainers (maximize hours)</label>
+                          <div className="flex flex-wrap gap-2">
+                            {constraints.priorityTrainers.map((trainer: string, idx: number) => (
+                              <div key={trainer} className="flex items-center gap-1 bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs">
+                                <span className="w-4 h-4 bg-green-500 text-white rounded-full text-[10px] flex items-center justify-center font-bold">{idx + 1}</span>
+                                {trainer}
+                                <button
+                                  onClick={() => {
+                                    const newSettings = { ...optimizationSettings };
+                                    newSettings.locationConstraints[location].priorityTrainers = constraints.priorityTrainers.filter((_: string, i: number) => i !== idx);
+                                    setOptimizationSettings(newSettings);
+                                  }}
+                                  className="ml-1 text-green-600 hover:text-red-600"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="Add priority trainer..."
+                            className="mt-2 w-full px-3 py-1 text-sm border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const input = e.target as HTMLInputElement;
+                                const value = input.value.trim().toLowerCase();
+                                if (value && !constraints.priorityTrainers.includes(value)) {
+                                  const newSettings = { ...optimizationSettings };
+                                  newSettings.locationConstraints[location].priorityTrainers = [...constraints.priorityTrainers, value];
+                                  setOptimizationSettings(newSettings);
+                                  input.value = '';
+                                }
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Format Priorities */}
+                <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl p-6 border border-purple-200">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-purple-600" />
+                    Format-Specific Trainer Priorities
+                  </h3>
+                  <p className="text-sm text-slate-600 mb-4">
+                    Assign trainers who specialize in specific class formats.
+                  </p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {optimizationSettings.formatPriorities.map((fp: FormatPriority, fpIndex: number) => (
+                      <div key={fp.format} className="bg-white rounded-xl p-4 border border-purple-100">
+                        <h4 className="font-semibold text-slate-700 mb-3 capitalize flex items-center gap-2">
+                          {fp.format.includes('cycle') && <Zap className="w-4 h-4 text-yellow-500" />}
+                          {fp.format.includes('fit') && <Star className="w-4 h-4 text-green-500" />}
+                          {fp.format.includes('mat') && <Activity className="w-4 h-4 text-purple-500" />}
+                          {fp.format.replace(/_/g, ' ')}
+                        </h4>
+                        <div className="flex flex-wrap gap-2">
+                          {fp.priorityTrainers.map((trainer: string, idx: number) => (
+                            <div key={trainer} className="flex items-center gap-1 bg-purple-100 text-purple-800 px-2 py-1 rounded-full text-xs">
+                              <span className="w-4 h-4 bg-purple-500 text-white rounded-full text-[10px] flex items-center justify-center font-bold">{idx + 1}</span>
+                              {trainer}
+                              <button
+                                onClick={() => {
+                                  const newSettings = { ...optimizationSettings };
+                                  newSettings.formatPriorities[fpIndex].priorityTrainers = fp.priorityTrainers.filter((_: string, i: number) => i !== idx);
+                                  setOptimizationSettings(newSettings);
+                                }}
+                                className="ml-1 text-purple-600 hover:text-red-600"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="Add trainer..."
+                          className="mt-2 w-full px-2 py-1 text-xs border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const input = e.target as HTMLInputElement;
+                              const value = input.value.trim().toLowerCase();
+                              if (value && !fp.priorityTrainers.includes(value)) {
+                                const newSettings = { ...optimizationSettings };
+                                newSettings.formatPriorities[fpIndex].priorityTrainers = [...fp.priorityTrainers, value];
+                                setOptimizationSettings(newSettings);
+                                input.value = '';
+                              }
+                            }
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* New Trainers */}
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-6 border border-amber-200">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <UserPlus className="w-5 h-5 text-amber-600" />
+                    New Trainer Restrictions
+                  </h3>
+                  <p className="text-sm text-slate-600 mb-4">
+                    New trainers are restricted to specific formats until they gain experience.
+                  </p>
+                  
+                  <div className="space-y-4">
+                    {(optimizationSettings.newTrainers || []).map((trainer: TrainerPriority, tIndex: number) => (
+                      <div key={trainer.name} className="bg-white rounded-xl p-4 border border-amber-100 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <UserPlus className="w-5 h-5 text-amber-500" />
+                          <span className="font-semibold capitalize">{trainer.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-500">Allowed:</span>
+                          <div className="flex flex-wrap gap-1">
+                            {trainer.allowedFormats?.map((fmt: string) => (
+                              <span key={fmt} className="bg-green-100 text-green-700 px-2 py-0.5 rounded-full text-xs capitalize">{fmt}</span>
+                            )) || <span className="text-xs text-slate-400">All formats</span>}
+                          </div>
+                          <button
+                            onClick={() => {
+                              const newSettings = { ...optimizationSettings };
+                              newSettings.newTrainers = newSettings.newTrainers.filter((_: TrainerPriority, i: number) => i !== tIndex);
+                              setOptimizationSettings(newSettings);
+                            }}
+                            className="ml-2 text-red-500 hover:text-red-700"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {/* Add new trainer form */}
+                    <div className="bg-white rounded-xl p-4 border border-dashed border-amber-300">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Trainer name..."
+                          className="flex-1 px-3 py-2 text-sm border border-amber-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                          id="new-trainer-name"
+                        />
+                        <button
+                          onClick={() => {
+                            const input = document.getElementById('new-trainer-name') as HTMLInputElement;
+                            const value = input.value.trim().toLowerCase();
+                            if (value) {
+                              const newSettings = { ...optimizationSettings };
+                              newSettings.newTrainers = [...newSettings.newTrainers, {
+                                name: value,
+                                targetHours: 15,
+                                allowedFormats: ['powercycle', 'cycle', 'barre', 'recovery'],
+                                isNewTrainer: true
+                              }];
+                              setOptimizationSettings(newSettings);
+                              input.value = '';
+                            }
+                          }}
+                          className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600"
+                        >
+                          Add New Trainer
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Target Hours */}
+                <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-6 border border-green-200">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <Clock className="w-5 h-5 text-green-600" />
+                    Trainer Hour Targets
+                  </h3>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="flex items-center gap-4">
+                      <label className="text-sm font-medium text-slate-700">Target Hours Per Week:</label>
+                      <input
+                        type="number"
+                        min="10"
+                        max="40"
+                        value={optimizationSettings.targetTrainerHours}
+                        onChange={(e) => {
+                          const newSettings = { ...optimizationSettings };
+                          newSettings.targetTrainerHours = parseInt(e.target.value) || 15;
+                          setOptimizationSettings(newSettings);
+                        }}
+                        className="w-24 px-3 py-2 text-sm border border-green-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                      />
+                      <span className="text-sm text-slate-500">hours</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-4">
+                      <label className="text-sm font-medium text-slate-700">Maximum Hours Per Trainer:</label>
+                      <input
+                        type="number"
+                        min="10"
+                        max="40"
+                        value={optimizationSettings.maxTrainerHours}
+                        onChange={(e) => {
+                          const newSettings = { ...optimizationSettings };
+                          newSettings.maxTrainerHours = parseInt(e.target.value) || 16;
+                          setOptimizationSettings(newSettings);
+                        }}
+                        className="w-24 px-3 py-2 text-sm border border-green-200 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                      />
+                      <span className="text-sm text-slate-500">hours max</span>
+                    </div>
+                  </div>
+                  
+                  <div className="mt-4 flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      id="minimize-trainers"
+                      checked={optimizationSettings.minimizeTrainersPerSlot}
+                      onChange={(e) => {
+                        const newSettings = { ...optimizationSettings };
+                        newSettings.minimizeTrainersPerSlot = e.target.checked;
+                        setOptimizationSettings(newSettings);
+                      }}
+                      className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                    />
+                    <label htmlFor="minimize-trainers" className="text-sm text-slate-700">
+                      Minimize number of trainers per time slot (consolidate hours)
+                    </label>
+                  </div>
+                </div>
+
+                {/* BLOCKED TRAINERS */}
+                <div className="bg-gradient-to-r from-red-50 to-rose-50 rounded-xl p-6 border border-red-200">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <UserMinus className="w-5 h-5 text-red-600" />
+                    Blocked Trainers
+                  </h3>
+                  <p className="text-sm text-slate-600 mb-4">
+                    These trainers will NEVER be assigned any optimized classes. They will only keep their existing scheduled classes.
+                  </p>
+                  
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {(optimizationSettings.blockedTrainers || []).map((trainer: string) => (
+                      <div key={trainer} className="flex items-center gap-1 bg-red-100 text-red-800 px-3 py-1.5 rounded-full text-sm font-medium capitalize">
+                        <UserMinus className="w-4 h-4" />
+                        {trainer}
+                        <button
+                          onClick={() => {
+                            const newSettings = { ...optimizationSettings };
+                            newSettings.blockedTrainers = newSettings.blockedTrainers.filter((t: string) => t !== trainer);
+                            setOptimizationSettings(newSettings);
+                          }}
+                          className="ml-1 text-red-600 hover:text-red-900 hover:bg-red-200 rounded-full p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      id="add-blocked-trainer"
+                      placeholder="Add trainer to block..."
+                      className="flex-1 px-3 py-2 text-sm border border-red-200 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const input = e.target as HTMLInputElement;
+                          const value = input.value.trim().toLowerCase();
+                          if (value && !(optimizationSettings.blockedTrainers || []).includes(value)) {
+                            const newSettings = { ...optimizationSettings };
+                            newSettings.blockedTrainers = [...(newSettings.blockedTrainers || []), value];
+                            setOptimizationSettings(newSettings);
+                            input.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => {
+                        const input = document.getElementById('add-blocked-trainer') as HTMLInputElement;
+                        const value = input.value.trim().toLowerCase();
+                        if (value && !(optimizationSettings.blockedTrainers || []).includes(value)) {
+                          const newSettings = { ...optimizationSettings };
+                          newSettings.blockedTrainers = [...(newSettings.blockedTrainers || []), value];
+                          setOptimizationSettings(newSettings);
+                          input.value = '';
+                        }
+                      }}
+                      className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600"
+                    >
+                      Block Trainer
+                    </button>
+                  </div>
+                </div>
+
+                {/* EXCLUDED FORMATS */}
+                <div className="bg-gradient-to-r from-orange-50 to-amber-50 rounded-xl p-6 border border-orange-200">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <Ban className="w-5 h-5 text-orange-600" />
+                    Excluded Formats
+                  </h3>
+                  <p className="text-sm text-slate-600 mb-4">
+                    These class formats will NEVER be scheduled as optimized replacements (e.g., hosted classes, guest sessions).
+                  </p>
+                  
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {(optimizationSettings.excludedFormats || []).map((fmt: string) => (
+                      <div key={fmt} className="flex items-center gap-1 bg-orange-100 text-orange-800 px-3 py-1.5 rounded-full text-sm font-medium capitalize">
+                        <Ban className="w-4 h-4" />
+                        {fmt}
+                        <button
+                          onClick={() => {
+                            const newSettings = { ...optimizationSettings };
+                            newSettings.excludedFormats = newSettings.excludedFormats.filter((f: string) => f !== fmt);
+                            setOptimizationSettings(newSettings);
+                          }}
+                          className="ml-1 text-orange-600 hover:text-orange-900 hover:bg-orange-200 rounded-full p-0.5"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      id="add-excluded-format"
+                      placeholder="Add format to exclude (e.g., hosted, guest)..."
+                      className="flex-1 px-3 py-2 text-sm border border-orange-200 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const input = e.target as HTMLInputElement;
+                          const value = input.value.trim().toLowerCase();
+                          if (value && !(optimizationSettings.excludedFormats || []).includes(value)) {
+                            const newSettings = { ...optimizationSettings };
+                            newSettings.excludedFormats = [...(newSettings.excludedFormats || []), value];
+                            setOptimizationSettings(newSettings);
+                            input.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => {
+                        const input = document.getElementById('add-excluded-format') as HTMLInputElement;
+                        const value = input.value.trim().toLowerCase();
+                        if (value && !(optimizationSettings.excludedFormats || []).includes(value)) {
+                          const newSettings = { ...optimizationSettings };
+                          newSettings.excludedFormats = [...(newSettings.excludedFormats || []), value];
+                          setOptimizationSettings(newSettings);
+                          input.value = '';
+                        }
+                      }}
+                      className="px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600"
+                    >
+                      Exclude Format
+                    </button>
+                  </div>
+                </div>
+
+                {/* MINIMUM CLASSES PER LOCATION */}
+                <div className="bg-gradient-to-r from-cyan-50 to-teal-50 rounded-xl p-6 border border-cyan-200">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <Building className="w-5 h-5 text-cyan-600" />
+                    Minimum Classes Per Location
+                  </h3>
+                  <p className="text-sm text-slate-600 mb-4">
+                    Ensure each location has at least this many classes scheduled in the optimized schedule.
+                  </p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {Object.entries(optimizationSettings.minClassesPerLocation || {}).map(([location, minClasses]) => (
+                      <div key={location} className="bg-white rounded-xl p-4 border border-cyan-100">
+                        <h4 className="font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                          <MapPin className="w-4 h-4 text-cyan-500" />
+                          {location.includes('Kwality') ? 'Kwality House, Kemps Corner' : 'Supreme HQ, Bandra'}
+                        </h4>
+                        
+                        <div className="flex items-center gap-3">
+                          <label className="text-sm text-slate-600">Minimum Classes:</label>
+                          <input
+                            type="number"
+                            min="50"
+                            max="150"
+                            value={minClasses as number}
+                            onChange={(e) => {
+                              const newSettings = { ...optimizationSettings };
+                              newSettings.minClassesPerLocation = {
+                                ...newSettings.minClassesPerLocation,
+                                [location]: parseInt(e.target.value) || 75
+                              };
+                              setOptimizationSettings(newSettings);
+                            }}
+                            className="w-24 px-3 py-2 text-sm border border-cyan-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-transparent font-bold text-cyan-700"
+                          />
+                          <span className="text-sm text-slate-500">classes per week</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* TIME RESTRICTIONS */}
+                <div className="bg-gradient-to-r from-slate-50 to-gray-50 rounded-xl p-6 border border-slate-200">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <Clock className="w-5 h-5 text-slate-600" />
+                    Time Restrictions
+                  </h3>
+                  <p className="text-sm text-slate-600 mb-4">
+                    Define when classes should NOT be scheduled.
+                  </p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="bg-white rounded-xl p-4 border border-slate-100">
+                      <h4 className="font-semibold text-slate-700 mb-3">Operating Hours</h4>
+                      <div className="flex items-center gap-4 mb-3">
+                        <div className="flex items-center gap-2">
+                          <label className="text-sm text-slate-600">No classes before:</label>
+                          <input
+                            type="time"
+                            value={optimizationSettings.noClassesBefore || '07:00'}
+                            onChange={(e) => {
+                              const newSettings = { ...optimizationSettings };
+                              newSettings.noClassesBefore = e.target.value;
+                              setOptimizationSettings(newSettings);
+                            }}
+                            className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm text-slate-600">No classes after:</label>
+                        <input
+                          type="time"
+                          value={optimizationSettings.noClassesAfter || '20:00'}
+                          onChange={(e) => {
+                            const newSettings = { ...optimizationSettings };
+                            newSettings.noClassesAfter = e.target.value;
+                            setOptimizationSettings(newSettings);
+                          }}
+                          className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-500"
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="bg-white rounded-xl p-4 border border-slate-100">
+                      <h4 className="font-semibold text-slate-700 mb-3">Mid-Day Break</h4>
+                      <p className="text-xs text-slate-500 mb-3">No classes between these times</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="time"
+                          value={optimizationSettings.noClassesBetweenStart || '12:30'}
+                          onChange={(e) => {
+                            const newSettings = { ...optimizationSettings };
+                            newSettings.noClassesBetweenStart = e.target.value;
+                            setOptimizationSettings(newSettings);
+                          }}
+                          className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-500"
+                        />
+                        <span className="text-slate-500">to</span>
+                        <input
+                          type="time"
+                          value={optimizationSettings.noClassesBetweenEnd || '15:30'}
+                          onChange={(e) => {
+                            const newSettings = { ...optimizationSettings };
+                            newSettings.noClassesBetweenEnd = e.target.value;
+                            setOptimizationSettings(newSettings);
+                          }}
+                          className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* TRAINER LEAVE / UNAVAILABILITY */}
+                <div className="bg-gradient-to-r from-indigo-50 to-violet-50 rounded-xl p-6 border border-indigo-200">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <Calendar className="w-5 h-5 text-indigo-600" />
+                    Trainer Leaves & Unavailability
+                  </h3>
+                  <p className="text-sm text-slate-600 mb-4">
+                    Trainers on leave will not be assigned any classes during their leave period.
+                  </p>
+                  
+                  {/* Existing Leaves */}
+                  <div className="space-y-2 mb-4">
+                    {(optimizationSettings.trainerLeaves || []).map((leave: TrainerLeave, idx: number) => (
+                      <div key={idx} className="flex items-center gap-3 bg-white rounded-lg p-3 border border-indigo-100">
+                        <div className="flex-1">
+                          <div className="font-semibold capitalize text-slate-700">{leave.trainerName}</div>
+                          <div className="text-xs text-slate-500">
+                            {leave.startDate} to {leave.endDate}
+                            {leave.reason && <span className="ml-2 text-indigo-500">({leave.reason})</span>}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const newSettings = { ...optimizationSettings };
+                            newSettings.trainerLeaves = newSettings.trainerLeaves.filter((_: TrainerLeave, i: number) => i !== idx);
+                            setOptimizationSettings(newSettings);
+                          }}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Add Leave Form */}
+                  <div className="bg-white rounded-lg p-4 border border-dashed border-indigo-300">
+                    <div className="grid grid-cols-4 gap-3">
+                      <input
+                        type="text"
+                        id="leave-trainer"
+                        placeholder="Trainer name"
+                        className="px-3 py-2 text-sm border border-indigo-200 rounded-lg"
+                      />
+                      <input
+                        type="date"
+                        id="leave-start"
+                        className="px-3 py-2 text-sm border border-indigo-200 rounded-lg"
+                      />
+                      <input
+                        type="date"
+                        id="leave-end"
+                        className="px-3 py-2 text-sm border border-indigo-200 rounded-lg"
+                      />
+                      <button
+                        onClick={() => {
+                          const trainer = (document.getElementById('leave-trainer') as HTMLInputElement).value.trim().toLowerCase();
+                          const start = (document.getElementById('leave-start') as HTMLInputElement).value;
+                          const end = (document.getElementById('leave-end') as HTMLInputElement).value;
+                          if (trainer && start && end) {
+                            const newSettings = { ...optimizationSettings };
+                            newSettings.trainerLeaves = [...(newSettings.trainerLeaves || []), {
+                              trainerName: trainer,
+                              startDate: start,
+                              endDate: end
+                            }];
+                            setOptimizationSettings(newSettings);
+                            (document.getElementById('leave-trainer') as HTMLInputElement).value = '';
+                            (document.getElementById('leave-start') as HTMLInputElement).value = '';
+                            (document.getElementById('leave-end') as HTMLInputElement).value = '';
+                          }
+                        }}
+                        className="px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm font-medium hover:bg-indigo-600"
+                      >
+                        Add Leave
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ADVANCED SETTINGS */}
+                <div className="bg-gradient-to-r from-pink-50 to-rose-50 rounded-xl p-6 border border-pink-200">
+                  <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <Settings className="w-5 h-5 text-pink-600" />
+                    Advanced Scheduling Rules
+                  </h3>
+                  
+                  <div className="space-y-4">
+                    {/* Trainer Days Off */}
+                    <div className="flex items-center gap-4">
+                      <label className="text-sm font-medium text-slate-700 w-64">Minimum days off per trainer:</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="4"
+                        value={optimizationSettings.minDaysOff || 2}
+                        onChange={(e) => {
+                          const newSettings = { ...optimizationSettings };
+                          newSettings.minDaysOff = parseInt(e.target.value) || 2;
+                          setOptimizationSettings(newSettings);
+                        }}
+                        className="w-20 px-3 py-2 text-sm border border-pink-200 rounded-lg"
+                      />
+                      <span className="text-sm text-slate-500">days per week</span>
+                    </div>
+                    
+                    {/* Avoid Multi-Location Days */}
+                    <div className="flex items-center gap-4">
+                      <input
+                        type="checkbox"
+                        id="avoid-multi-location"
+                        checked={optimizationSettings.avoidMultiLocationDays ?? true}
+                        onChange={(e) => {
+                          const newSettings = { ...optimizationSettings };
+                          newSettings.avoidMultiLocationDays = e.target.checked;
+                          setOptimizationSettings(newSettings);
+                        }}
+                        className="w-4 h-4 text-pink-600 border-gray-300 rounded"
+                      />
+                      <label htmlFor="avoid-multi-location" className="text-sm text-slate-700">
+                        Avoid scheduling trainers at multiple locations on the same day
+                      </label>
+                    </div>
+                    
+                    {/* Advanced Formats */}
+                    <div className="flex items-center gap-4">
+                      <label className="text-sm font-medium text-slate-700 w-64">Max HIIT/Amped Up classes per week:</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="5"
+                        value={optimizationSettings.advancedFormatsMaxPerWeek || 2}
+                        onChange={(e) => {
+                          const newSettings = { ...optimizationSettings };
+                          newSettings.advancedFormatsMaxPerWeek = parseInt(e.target.value) || 2;
+                          setOptimizationSettings(newSettings);
+                        }}
+                        className="w-20 px-3 py-2 text-sm border border-pink-200 rounded-lg"
+                      />
+                      <span className="text-sm text-slate-500">at {optimizationSettings.advancedFormatsLocation || 'Kwality House'} only</span>
+                    </div>
+                    
+                    {/* Regenerate with variety */}
+                    <div className="pt-4 border-t border-pink-200">
+                      <button
+                        onClick={() => {
+                          const newSettings = { ...optimizationSettings };
+                          newSettings.randomizationSeed = Date.now();
+                          setOptimizationSettings(newSettings);
+                        }}
+                        className="px-4 py-2 bg-pink-500 text-white rounded-lg text-sm font-medium hover:bg-pink-600 flex items-center gap-2"
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                        Generate New Schedule Variation
+                      </button>
+                      <p className="text-xs text-pink-600 mt-2">
+                        Click to generate a different optimized schedule while following all rules
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+            
+            {/* Footer */}
+            <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-between">
+              <button
+                onClick={() => {
+                  setOptimizationSettings(DEFAULT_OPTIMIZATION_SETTINGS);
+                }}
+                className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 transition-colors"
+              >
+                Reset to Defaults
+              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowOptimizationSettings(false)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 bg-white border border-slate-300 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    // Save to localStorage
+                    localStorage.setItem('proSchedulerOptimizationSettings', JSON.stringify(optimizationSettings));
+                    setShowOptimizationSettings(false);
+                    // Trigger recalculation
+                    if (typeof window !== 'undefined' && (window as { __proSchedulerCacheInvalidate?: () => void }).__proSchedulerCacheInvalidate) {
+                      (window as { __proSchedulerCacheInvalidate?: () => void }).__proSchedulerCacheInvalidate!();
+                    }
+                  }}
+                  className="px-6 py-2 text-sm font-medium text-white bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 rounded-lg transition-colors shadow-lg"
+                >
+                  Save Settings
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* VIEW ALL REPLACEMENTS MODAL */}
+      {showAllReplacements && optimizedSchedule && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden"
+          >
+            {/* Header */}
+            <div className="bg-gradient-to-r from-emerald-600 via-green-600 to-teal-600 px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Zap className="w-6 h-6 text-white" />
+                <div>
+                  <h2 className="text-xl font-bold text-white">All Optimization Changes</h2>
+                  <p className="text-emerald-100 text-sm">
+                    {optimizedSchedule.replacements.length} replacements • {optimizedSchedule.summary.underperforming} underperforming classes improved
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAllReplacements(false)}
+                className="text-white/80 hover:text-white transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            {/* Replacements List */}
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-180px)]">
+              {/* Summary Cards */}
+              <div className="grid grid-cols-4 gap-4 mb-6">
+                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-200">
+                  <div className="text-xs text-blue-600 uppercase font-semibold mb-1">Total Replacements</div>
+                  <div className="text-2xl font-bold text-blue-800">{optimizedSchedule.replacements.length}</div>
+                </div>
+                <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-200">
+                  <div className="text-xs text-green-600 uppercase font-semibold mb-1">Avg Improvement</div>
+                  <div className="text-2xl font-bold text-green-800">
+                    +{formatMetric(
+                      optimizedSchedule.replacements.length > 0
+                        ? optimizedSchedule.replacements.reduce((sum, r) => 
+                            sum + (r.replacement.expectedCheckIns - r.replacement.originalCheckIns), 0
+                          ) / optimizedSchedule.replacements.length
+                        : 0
+                    )}
+                  </div>
+                </div>
+                <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl p-4 border border-purple-200">
+                  <div className="text-xs text-purple-600 uppercase font-semibold mb-1">Priority Trainers Used</div>
+                  <div className="text-2xl font-bold text-purple-800">
+                    {optimizedSchedule.replacements.filter(r => r.replacement.isPriority).length}
+                  </div>
+                </div>
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-4 border border-amber-200">
+                  <div className="text-xs text-amber-600 uppercase font-semibold mb-1">New Trainers Used</div>
+                  <div className="text-2xl font-bold text-amber-800">
+                    {optimizedSchedule.replacements.filter(r => r.replacement.isNewTrainer).length}
+                  </div>
+                </div>
+              </div>
+
+              {/* Replacements Table */}
+              <div className="space-y-3">
+                <div className="grid grid-cols-12 gap-2 px-4 py-2 bg-slate-100 rounded-lg text-xs font-semibold text-slate-600 uppercase">
+                  <div className="col-span-2">Day/Time</div>
+                  <div className="col-span-2">Original</div>
+                  <div className="col-span-2">Replacement</div>
+                  <div className="col-span-1">Orig Avg</div>
+                  <div className="col-span-1">New Avg</div>
+                  <div className="col-span-3">Reason</div>
+                  <div className="col-span-1">Score</div>
+                </div>
+                
+                {optimizedSchedule.replacements.map((r, idx) => (
+                  <motion.div
+                    key={idx}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: idx * 0.02 }}
+                    className="grid grid-cols-12 gap-2 px-4 py-3 bg-white border border-slate-200 rounded-xl hover:shadow-md transition-shadow cursor-pointer"
+                    onClick={() => {
+                      // Find the optimized class and open drilldown
+                      const optimizedClass = filteredClasses.find(c => c.id === r.original.id);
+                      if (optimizedClass) {
+                        setSelectedClass(optimizedClass as ScheduleClass);
+                        setShowDrilldown(true);
+                        setShowAllReplacements(false);
+                      }
+                    }}
+                  >
+                    {/* Day/Time & Location */}
+                    <div className="col-span-2">
+                      <div className="font-semibold text-slate-800">{r.original.day}</div>
+                      <div className="text-xs text-slate-500">{r.original.time}</div>
+                      <div className="text-[10px] text-slate-400 truncate">{r.original.location.split(',')[0]}</div>
+                    </div>
+                    
+                    {/* Original Class/Trainer */}
+                    <div className="col-span-2">
+                      <div className="text-red-600 font-medium text-sm truncate">{r.replacement.originalClass}</div>
+                      <div className="text-xs text-red-400">{r.replacement.originalTrainer}</div>
+                    </div>
+                    
+                    {/* Replacement Class/Trainer */}
+                    <div className="col-span-2">
+                      <div className="text-green-600 font-medium text-sm truncate">{r.replacement.class}</div>
+                      <div className="text-xs text-green-500 flex items-center gap-1">
+                        {r.replacement.trainerDisplay}
+                        {r.replacement.isPriority && <Star className="w-3 h-3 text-blue-500" />}
+                        {r.replacement.isNewTrainer && <UserPlus className="w-3 h-3 text-amber-500" />}
+                      </div>
+                    </div>
+                    
+                    {/* Original Metrics */}
+                    <div className="col-span-1">
+                      <div className="text-red-500 font-semibold">{formatMetric(r.replacement.originalCheckIns)}</div>
+                      <div className="text-[10px] text-red-400">{formatMetric(r.replacement.originalFillRate, '%')}</div>
+                    </div>
+                    
+                    {/* New Metrics */}
+                    <div className="col-span-1">
+                      <div className="text-green-600 font-semibold">{formatMetric(r.replacement.expectedCheckIns)}</div>
+                      <div className="text-[10px] text-green-500">{formatMetric(r.replacement.expectedFillRate, '%')}</div>
+                    </div>
+                    
+                    {/* Reason */}
+                    <div className="col-span-3">
+                      <div className="text-xs text-slate-600 line-clamp-2">{r.replacement.fullReason || r.replacement.reason}</div>
+                    </div>
+                    
+                    {/* Score */}
+                    <div className="col-span-1">
+                      <div className={`text-center font-bold rounded-lg py-1 ${
+                        r.replacement.score >= 100 ? 'bg-green-100 text-green-700' :
+                        r.replacement.score >= 50 ? 'bg-blue-100 text-blue-700' :
+                        'bg-slate-100 text-slate-700'
+                      }`}>
+                        {r.replacement.score}
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+              
+              {optimizedSchedule.replacements.length === 0 && (
+                <div className="text-center py-12 text-slate-500">
+                  <Zap className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                  <p>No replacements needed - schedule is already optimized!</p>
+                </div>
+              )}
+            </div>
+            
+            {/* Footer */}
+            <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-between">
+              <p className="text-sm text-slate-500">
+                Click any row to see detailed analytics in the drilldown modal
+              </p>
+              <button
+                onClick={() => setShowAllReplacements(false)}
+                className="px-6 py-2 text-sm font-medium text-white bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-700 hover:to-green-700 rounded-lg transition-colors shadow-lg"
+              >
+                Close
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }

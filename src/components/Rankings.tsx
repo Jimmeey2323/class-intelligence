@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, memo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { SessionData } from '../types';
 import { formatNumber, formatCurrency, formatPercentage, calculateMetrics } from '../utils/calculations';
@@ -35,17 +35,27 @@ interface RankingGroup {
   metrics: ReturnType<typeof calculateMetrics>;
 }
 
-export default function Rankings() {
-  const { 
-    rawData: allRawData,
-    filteredData, 
-    includeTrainerInRankings, 
-    setIncludeTrainerInRankings,
-    excludeHostedClasses,
-    setExcludeHostedClasses,
-    filters,
-    setFilters
-  } = useDashboardStore();
+// PERFORMANCE: Granular selectors
+const useFilteredData = () => useDashboardStore(state => state.filteredData);
+const useRawData = () => useDashboardStore(state => state.rawData);
+const useIncludeTrainerInRankings = () => useDashboardStore(state => state.includeTrainerInRankings);
+const useSetIncludeTrainerInRankings = () => useDashboardStore(state => state.setIncludeTrainerInRankings);
+const useExcludeHostedClasses = () => useDashboardStore(state => state.excludeHostedClasses);
+const useSetExcludeHostedClasses = () => useDashboardStore(state => state.setExcludeHostedClasses);
+const useFilters = () => useDashboardStore(state => state.filters);
+const useSetFilters = () => useDashboardStore(state => state.setFilters);
+
+function Rankings() {
+  // PERFORMANCE: Use granular selectors
+  const allRawData = useRawData();
+  const filteredData = useFilteredData();
+  const includeTrainerInRankings = useIncludeTrainerInRankings();
+  const setIncludeTrainerInRankings = useSetIncludeTrainerInRankings();
+  const excludeHostedClasses = useExcludeHostedClasses();
+  const setExcludeHostedClasses = useSetExcludeHostedClasses();
+  const filters = useFilters();
+  const setFilters = useSetFilters();
+  
   const [topMetric, setTopMetric] = useState<RankingMetric>('classAvg');
   const [bottomMetric, setBottomMetric] = useState<RankingMetric>('classAvg');
   const [topCount, setTopCount] = useState(10);
@@ -542,3 +552,6 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
     />
   </>);
 }
+
+// PERFORMANCE: Export memoized component
+export default memo(Rankings);

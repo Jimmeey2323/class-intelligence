@@ -97,6 +97,37 @@ body {
   }
 }
 
+/* PERFORMANCE: Slower, GPU-optimized blob animation */
+@keyframes blob-slow {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(20px, -30px, 0) scale(1.05);
+  }
+}
+
+/* PERFORMANCE: Simple fade-in animation */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out;
+}
+
+.animate-blob-slow {
+  animation: blob-slow 15s ease-in-out infinite;
+  will-change: transform;
+}
+
 @keyframes twinkle {
   0%, 100% {
     opacity: 0.2;

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, memo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { formatCurrency, formatNumber, formatPercentage } from '../utils/calculations';
 import { TrendingUp, Users, DollarSign, Calendar, AlertCircle, Target, X, BarChart2 } from 'lucide-react';
@@ -11,7 +11,8 @@ interface MetricModalProps {
   children: React.ReactNode;
 }
 
-function MetricModal({ title, onClose, children }: MetricModalProps) {
+// PERFORMANCE: Memoize modal to prevent re-renders
+const MetricModal = memo(function MetricModal({ title, onClose, children }: MetricModalProps) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -42,10 +43,13 @@ function MetricModal({ title, onClose, children }: MetricModalProps) {
       </motion.div>
     </motion.div>
   );
-}
+});
 
-export default function MetricsCards() {
-  const { filteredData } = useDashboardStore();
+// PERFORMANCE: Granular selector
+const useFilteredData = () => useDashboardStore(state => state.filteredData);
+
+function MetricsCards() {
+  const filteredData = useFilteredData();
   const [hoveredCard, setHoveredCard] = useState<string | null>(null);
   const [selectedMetric, setSelectedMetric] = useState<string | null>(null);
 
@@ -369,3 +373,6 @@ export default function MetricsCards() {
     </>
   );
 }
+
+// PERFORMANCE: Export memoized component
+export default memo(MetricsCards);
