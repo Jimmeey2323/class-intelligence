@@ -1,4 +1,4 @@
-import { useState, useMemo, memo } from 'react';
+import { useState, useEffect, memo } from 'react';
 import { useDashboardStore } from '../store/dashboardStore';
 import { SessionData } from '../types';
 import { formatNumber, formatCurrency, formatPercentage, calculateMetrics } from '../utils/calculations';
@@ -37,7 +37,6 @@ interface RankingGroup {
 
 // PERFORMANCE: Granular selectors
 const useFilteredData = () => useDashboardStore(state => state.filteredData);
-const useRawData = () => useDashboardStore(state => state.rawData);
 const useIncludeTrainerInRankings = () => useDashboardStore(state => state.includeTrainerInRankings);
 const useSetIncludeTrainerInRankings = () => useDashboardStore(state => state.setIncludeTrainerInRankings);
 const useExcludeHostedClasses = () => useDashboardStore(state => state.excludeHostedClasses);
@@ -47,7 +46,6 @@ const useSetFilters = () => useDashboardStore(state => state.setFilters);
 
 function Rankings() {
   // PERFORMANCE: Use granular selectors
-  const allRawData = useRawData();
   const filteredData = useFilteredData();
   const includeTrainerInRankings = useIncludeTrainerInRankings();
   const setIncludeTrainerInRankings = useSetIncludeTrainerInRankings();
@@ -66,6 +64,9 @@ function Rankings() {
   const [drilldownTitle, setDrilldownTitle] = useState('');
   const [isDrilldownOpen, setIsDrilldownOpen] = useState(false);
 
+  const [rankedGroups, setRankedGroups] = useState<RankingGroup[]>([]);
+  const [isCalculating, setIsCalculating] = useState(false);
+
   // Use filtered data directly
   const rawData = filteredData;
 
@@ -75,59 +76,71 @@ function Rankings() {
     setIsDrilldownOpen(true);
   };
 
-  // Group sessions by composite key - MUST be before early return to comply with Rules of Hooks
-  const rankedGroups = useMemo(() => {
-    if (rawData.length === 0) return [];
-    const groups = new Map<string, SessionData[]>();
+  // Group sessions by composite key - Async calculation to prevent blocking
+  useEffect(() => {
+    if (rawData.length === 0) {
+      setRankedGroups([]);
+      return;
+    }
 
-    rawData.forEach((session) => {
-      const key = generateCompositeKey(
-        session.SessionName || session.Class,
-        session.Day,
-        session.Time,
-        session.Location,
-        includeTrainerInRankings ? session.Trainer : undefined
-      );
+    setIsCalculating(true);
 
-      if (!groups.has(key)) {
-        groups.set(key, []);
-      }
-      groups.get(key)!.push(session);
-    });
+    // Use setTimeout to push calculation to next tick, unblocking render
+    const timer = setTimeout(() => {
+      const groups = new Map<string, SessionData[]>();
 
-    const rankingGroups: RankingGroup[] = [];
-    groups.forEach((sessions, key) => {
-      const parsed = parseCompositeKey(key);
-      const metrics = calculateMetrics(sessions);
+      rawData.forEach((session) => {
+        const key = generateCompositeKey(
+          session.SessionName || session.Class,
+          session.Day,
+          session.Time,
+          session.Location,
+          includeTrainerInRankings ? session.Trainer : undefined
+        );
 
-      // Apply minCheckins and minClasses filters
-      if (metrics.totalCheckIns < filters.minCheckins) {
-        return;
-      }
-      if (sessions.length < (filters.minClasses || 0)) {
-        return;
-      }
-      
-      // Note: Status filter is applied visually (graying out) rather than removing items
-      // This allows inactive classes to remain visible but grayed out
-
-      rankingGroups.push({
-        key,
-        className: parsed.className,
-        day: parsed.day,
-        time: parsed.time,
-        location: parsed.location,
-        trainer: parsed.trainer,
-        sessions,
-        metrics,
+        if (!groups.has(key)) {
+          groups.set(key, []);
+        }
+        groups.get(key)!.push(session);
       });
-    });
 
-    return rankingGroups;
-  }, [rawData, includeTrainerInRankings, filters.minCheckins, filters.minClasses, filters.statusFilter, allRawData]);
+      const rankingGroups: RankingGroup[] = [];
+      groups.forEach((sessions, key) => {
+        const parsed = parseCompositeKey(key);
+        const metrics = calculateMetrics(sessions);
+
+        // Apply minCheckins and minClasses filters
+        if (metrics.totalCheckIns < filters.minCheckins) {
+          return;
+        }
+        if (sessions.length < (filters.minClasses || 0)) {
+          return;
+        }
+        
+        // Note: Status filter is applied visually (graying out) rather than removing items
+        // This allows inactive classes to remain visible but grayed out
+
+        rankingGroups.push({
+          key,
+          className: parsed.className,
+          day: parsed.day,
+          time: parsed.time,
+          location: parsed.location,
+          trainer: parsed.trainer,
+          sessions,
+          metrics,
+        });
+      });
+
+      setRankedGroups(rankingGroups);
+      setIsCalculating(false);
+    }, 10);
+
+    return () => clearTimeout(timer);
+  }, [rawData, includeTrainerInRankings, filters.minCheckins, filters.minClasses, filters.statusFilter]);
 
   // Early return after all hooks have been called
-  if (rawData.length === 0) return null;
+  if (rawData.length === 0 && !isCalculating) return null;
 
   const getMetricLabel = (metric: RankingMetric): string => {
     switch (metric) {
@@ -240,7 +253,15 @@ Total: ${formatNumber(group.metrics.compositeScore, 1)}`;
 
   return (
     <>
-    <div className="space-y-6">
+    <div className="space-y-6 relative">
+      {isCalculating && (
+        <div className="absolute inset-0 bg-white/50 z-10 flex items-start justify-center pt-20 backdrop-blur-sm rounded-2xl">
+           <div className="bg-white px-6 py-3 rounded-full shadow-lg flex items-center gap-3 border border-blue-100">
+             <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-600 border-t-transparent"></div>
+             <span className="font-medium text-blue-700">Updating rankings...</span>
+           </div>
+        </div>
+      )}
       {/* Filter Controls */}
       <motion.div 
         initial={{ opacity: 0, y: 10 }}

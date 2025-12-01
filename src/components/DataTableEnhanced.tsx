@@ -188,7 +188,7 @@ function DataTableEnhanced() {
     {
       value: 'default',
       label: '✨ All Metrics (Default)',
-      columns: ['expand', 'rank', 'groupValue', 'Trainer', 'Location', 'Class', 'Type', 'Date', 'Day', 'Time', 'classes', 'totalCheckIns', 'classAvg', 'classAvgNonEmpty', 'fillRate', 'waitlistRate', 'cancellationRate', 'totalRevenue', 'revPerCheckin', 'revPerBooking', 'revLostPerCancellation', 'weightedAverage', 'consistencyScore', 'emptyClasses', 'capacity', 'booked', 'actions'],
+      columns: ['expand', 'rank', 'groupValue', 'Trainer', 'formats', 'Location', 'Class', 'Type', 'Date', 'Day', 'Time', 'classes', 'totalCheckIns', 'classAvg', 'classAvgNonEmpty', 'fillRate', 'waitlistRate', 'cancellationRate', 'totalRevenue', 'revPerCheckin', 'revPerBooking', 'revLostPerCancellation', 'weightedAverage', 'consistencyScore', 'emptyClasses', 'capacity', 'booked', 'actions'],
     },
     {
       value: 'performance',
@@ -279,8 +279,15 @@ function DataTableEnhanced() {
       },
       {
         id: 'groupValue',
+        accessorFn: (row) => {
+          if ('isGroupRow' in row && row.isGroupRow) {
+            return row.groupValue;
+          }
+          return (row as SessionData).SessionName || (row as SessionData).Class || '';
+        },
         header: 'Group',
         size: columnSizing['groupValue'] || 250,
+        enableSorting: true,
         cell: ({ row }) => {
           const data = row.original;
           if ('isGroupRow' in data && data.isGroupRow) {
@@ -310,6 +317,52 @@ function DataTableEnhanced() {
         header: 'Class',
         size: columnSizing['Class'] || 150,
         cell: ({ getValue }) => <div className="whitespace-nowrap">{String(getValue() || '')}</div>,
+      },
+      {
+        id: 'formats',
+        header: 'Formats',
+        size: columnSizing['formats'] || 220,
+        cell: ({ row }) => {
+          const data = row.original;
+          // For grouped trainer rows, aggregate class formats by Day and Location
+          if ('isGroupRow' in data && data.isGroupRow && groupBy === 'Trainer') {
+            const children = data.children || [];
+            // Build map: Day -> Location -> Set<formats>
+            const map = new Map<string, Map<string, Set<string>>>();
+            children.forEach((s) => {
+              const day = s.Day || 'Unknown';
+              const loc = s.Location || 'Unknown';
+              const fmt = s.Class || s.Type || 'Unknown';
+              if (!map.has(day)) map.set(day, new Map());
+              const locMap = map.get(day)!;
+              if (!locMap.has(loc)) locMap.set(loc, new Set());
+              locMap.get(loc)!.add(fmt);
+            });
+
+            // Render a compact list: Day — Location: fmt1, fmt2
+            const parts: JSX.Element[] = [];
+            Array.from(map.entries()).sort().forEach(([day, locMap]) => {
+              Array.from(locMap.entries()).sort().forEach(([loc, set]) => {
+                const formats = Array.from(set).slice(0, 6).join(', ');
+                parts.push(
+                  <div key={`${day}-${loc}`} className="text-xs text-gray-600 truncate">
+                    <span className="font-medium text-gray-700 mr-1">{day}</span>
+                    <span className="text-slate-500 mr-1">·</span>
+                    <span className="text-slate-600 mr-1">{loc}:</span>
+                    <span className="text-slate-500">{formats}</span>
+                  </div>
+                );
+              });
+            });
+
+            return <div className="space-y-1 max-w-[300px]">{parts}</div>;
+          }
+
+          // For individual rows, show the Class/Type
+          const session = data as SessionData;
+          const fmt = session.Class || session.Type || '';
+          return <div className="whitespace-nowrap text-sm text-gray-600">{fmt}</div>;
+        },
       },
       {
         accessorKey: 'Type',
@@ -636,12 +689,8 @@ function DataTableEnhanced() {
 
   // Keep local sorting in sync with global store when criteria/grouping/filters change
   useEffect(() => {
-    // In grouped view, disable TanStack sorting so children stay under their group.
-    if (viewMode === 'grouped') {
-      if (sorting.length) setSortingState([]);
-      return;
-    }
-    // In flat view, default to sorting by rank ascending unless user changed it.
+    // Allow sorting in both grouped and flat views
+    // Default to sorting by rank ascending unless user changed it
     if (!sorting.length || sorting[0].id === 'rank' || !sorting.find((s) => s.id !== 'rank')) {
       setSortingState([{ id: 'rank', desc: false }]);
     }
@@ -794,7 +843,7 @@ function DataTableEnhanced() {
     getPaginationRowModel: getPaginationRowModel(),
     manualPagination: viewMode === 'grouped',
     columnResizeMode: 'onChange',
-    enableSorting: viewMode === 'flat',
+    enableSorting: true, // Enable sorting in both grouped and flat modes
   });
 
   const totals = calculateTotalsRow(processedData);
@@ -817,6 +866,12 @@ function DataTableEnhanced() {
     { value: 'TrainerDay', label: '👤📅 Trainer + Day' },
     { value: 'ClassLocation', label: '🏢 Class + Location' },
     { value: 'TrainerTime', label: '👤⏰ Trainer + Time' },
+    { value: 'AMSessions', label: '🌅 AM Sessions (Before 12pm)' },
+    { value: 'PMSessions', label: '🌆 PM Sessions (12pm+)' },
+    { value: 'MorningClasses', label: '🌄 Morning Classes (6am-11am)' },
+    { value: 'EveningClasses', label: '🌃 Evening Classes (5pm-9pm)' },
+    { value: 'Weekday', label: '📊 Weekday (Mon-Fri)' },
+    { value: 'Weekend', label: '🎉 Weekend (Sat-Sun)' },
     { value: 'Class', label: '📚 Class Only' },
     { value: 'Type', label: '🎯 Class Type' },
     { value: 'Trainer', label: '👤 Trainer Only' },

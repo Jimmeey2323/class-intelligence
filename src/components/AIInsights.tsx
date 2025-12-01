@@ -60,21 +60,21 @@ export default function AIInsights() {
     
     setLoading(true);
     try {
-      const suggestions = await aiService.suggestOptimalSchedule(filteredData);
+      const result = await aiService.suggestOptimalSchedule(filteredData);
       
       // Convert suggestions to OptimalSchedule format
       const schedule = {
-        recommendations: suggestions.map((suggestion: any) => ({
-          title: suggestion.title,
-          description: suggestion.description,
-          timeframe: suggestion.timeframe,
-          difficulty: suggestion.difficulty,
-          confidence: suggestion.confidence,
-          expectedFillRate: 75 + Math.random() * 20, // Mock data
-          expectedRevenue: 200 + Math.random() * 300 // Mock data
+        recommendations: result.suggestions.map((suggestion) => ({
+          title: `${suggestion.format} with ${suggestion.trainer}`,
+          description: suggestion.reasoning,
+          timeframe: `${suggestion.day} at ${suggestion.time}`,
+          difficulty: suggestion.expectedFillRate > 70 ? 'low' : suggestion.expectedFillRate > 50 ? 'medium' : 'high',
+          confidence: suggestion.expectedFillRate / 100,
+          expectedFillRate: suggestion.expectedFillRate,
+          expectedRevenue: 200 + suggestion.expectedFillRate * 3
         })),
-        keyChanges: suggestions.map((s: any) => s.title),
-        expectedImpact: suggestions.length > 0 ? `${suggestions.length} optimization opportunities identified` : 'No changes recommended'
+        keyChanges: result.suggestions.slice(0, 5).map((s) => `${s.format} at ${s.location} (${s.day} ${s.time})`),
+        expectedImpact: result.suggestions.length > 0 ? `${result.suggestions.length} optimization opportunities identified` : 'No changes recommended'
       };
       
       setOptimalSchedule(schedule);
@@ -95,9 +95,19 @@ export default function AIInsights() {
     
     setLoading(true);
     try {
-      const proposedChanges = optimalSchedule.keyChanges.map(change => ({ description: change }));
-      const prediction = await aiService.predictImpact(filteredData, proposedChanges);
-      setImpactPrediction(prediction);
+      // Use the first recommendation as the proposed change
+      const firstRecommendation = optimalSchedule.recommendations[0];
+      const proposedChange = {
+        type: 'add' as const,
+        session: firstRecommendation ? {
+          Class: firstRecommendation.title.split(' with ')[0],
+          Trainer: firstRecommendation.title.split(' with ')[1] || 'Unknown'
+        } : undefined
+      };
+      
+      const prediction = await aiService.predictImpact(filteredData, proposedChange);
+      const impactText = `${prediction.explanation} (Risk: ${prediction.riskLevel}, Confidence: ${(prediction.confidence * 100).toFixed(0)}%)`;
+      setImpactPrediction(impactText);
     } catch (error) {
       console.error('Failed to generate impact prediction:', error);
       setImpactPrediction('Impact prediction temporarily unavailable');

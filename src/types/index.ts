@@ -253,7 +253,13 @@ export type GroupBy =
   | 'ClassTrainer' // Class + Trainer
   | 'DayTime' // Day + Time
   | 'ClassLocation' // Class + Location
-  | 'TrainerTime'; // Trainer + Time
+  | 'TrainerTime' // Trainer + Time
+  | 'AMSessions' // Morning Sessions (before 12pm)
+  | 'PMSessions' // Afternoon/Evening Sessions (12pm onwards)
+  | 'MorningClasses' // Early Morning (6am-11am)
+  | 'EveningClasses' // Evening Classes (5pm-9pm)
+  | 'Weekday' // Monday-Friday
+  | 'Weekend'; // Saturday-Sunday
 
 export type AdditionalView = 
   | 'metrics'
@@ -343,6 +349,7 @@ export interface DashboardState {
   applyFilters: () => void;
   exportData: (format: 'csv' | 'xlsx') => void;
   updateClassSchedule?: (classId: string, newDay: string, newTime: string) => void;
+  applyOptimization?: (replacements: any[], newClasses: any[]) => void;
 }
 
 // Rankings

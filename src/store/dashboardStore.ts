@@ -384,53 +384,132 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     
     updateClassSchedule: (classId: string, newDay: string, newTime: string) => {
       set((state) => {
-        // Update in activeClassesData - it's structured as { [day]: classes[] }
-        const updatedActiveClasses = { ...state.activeClassesData };
+        // Normalize time format from AM/PM to 24h (e.g., "7:15 AM" -> "07:15")
+        const normalizeTime = (time: string): string => {
+          if (!time) return '08:00';
+          // If already in 24h format, return as-is
+          if (/^\d{2}:\d{2}$/.test(time)) return time;
+          
+          const match = time.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+          if (match) {
+            let hours = parseInt(match[1]);
+            const minutes = match[2];
+            const period = match[3].toUpperCase();
+            
+            if (period === 'PM' && hours !== 12) hours += 12;
+            if (period === 'AM' && hours === 12) hours = 0;
+            
+            return `${hours.toString().padStart(2, '0')}:${minutes}`;
+          }
+          return time;
+        };
+
+        // Deep clone to ensure React detects state change
+        const updatedActiveClasses: Record<string, any[]> = {};
+        Object.keys(state.activeClassesData).forEach(day => {
+          updatedActiveClasses[day] = state.activeClassesData[day].map((cls: any) => ({ ...cls }));
+        });
+        
         let updatedClass: any = null;
         let oldDay: string = '';
         let oldTime: string = '';
+        let foundInDay: string = '';
+        let foundAtIndex: number = -1;
         
-        // Find and update the class across all days
+        // Find the class across all days - match by stored ID first, then by constructed ID
         Object.keys(updatedActiveClasses).forEach(day => {
           const dayClasses = updatedActiveClasses[day];
           if (Array.isArray(dayClasses)) {
-            const classIndex = dayClasses.findIndex((cls: any) => cls.id === classId);
-            if (classIndex !== -1) {
-              // Found the class - save old values and update
-              const originalClass = dayClasses[classIndex];
-              oldDay = originalClass.day;
-              oldTime = originalClass.time;
-              
-              // Update class with new day/time AND new ID
-              const newId = classId.replace(`active-${oldDay}-${oldTime}`, `active-${newDay}-${newTime}`);
-              const cls = { 
-                ...originalClass, 
-                day: newDay, 
-                time: newTime,
-                id: newId
-              };
-              updatedClass = cls;
-              
-              // Remove from current day
-              updatedActiveClasses[day] = dayClasses.filter((c: any) => c.id !== classId);
-              
-              // Add to new day
-              if (!updatedActiveClasses[newDay]) {
-                updatedActiveClasses[newDay] = [];
+            dayClasses.forEach((cls: any, index: number) => {
+              // If the class already has an ID stored, use that
+              if (cls.id === classId) {
+                foundInDay = day;
+                foundAtIndex = index;
+                oldDay = cls.day || day;
+                oldTime = normalizeTime(cls.time);
+                updatedClass = { ...cls };
+                return;
               }
-              updatedActiveClasses[newDay] = [...updatedActiveClasses[newDay], cls];
-            }
+              
+              // Otherwise try constructing ID with normalized time and location (matching ProScheduler format)
+              const normalizedClsTime = normalizeTime(cls.time);
+              const clsDay = cls.day || day;
+              const clsLocation = cls.location || 'Unknown';
+              // Match the stable ID format used in ProScheduler
+              const constructedId = `active-${clsDay}-${normalizedClsTime}-${cls.className}-${clsLocation}`.replace(/\s+/g, '_');
+              if (constructedId === classId) {
+                foundInDay = day;
+                foundAtIndex = index;
+                oldDay = clsDay;
+                oldTime = normalizedClsTime;
+                updatedClass = { ...cls };
+              }
+            });
           }
         });
+        
+        if (foundAtIndex !== -1 && updatedClass) {
+          // Store original day/time on first move (for permanent reference)
+          const originalDay = updatedClass.originalDay || oldDay;
+          const originalTime = updatedClass.originalTime || oldTime;
+          
+          // Generate a stable unique ID based on class name, location, and original position
+          // This ID won't change even after multiple drag-drops
+          const className = updatedClass.className || updatedClass.class || 'Unknown';
+          const location = updatedClass.location || 'Unknown';
+          const stableId = `active-${originalDay}-${originalTime}-${className}-${location}`.replace(/\s+/g, '_');
+          
+          // Update the class with new values but keep stable ID
+          updatedClass = {
+            ...updatedClass,
+            day: newDay,
+            time: newTime,
+            id: stableId, // Use stable ID based on original position
+            originalDay,  // Store original day for reference
+            originalTime, // Store original time for reference
+            movedFrom: updatedClass.movedFrom || { day: oldDay, time: oldTime }, // Track last position
+            lastMoved: new Date().toISOString()
+          };
+          
+          // Remove from original day by matching the class object directly
+          updatedActiveClasses[foundInDay] = updatedActiveClasses[foundInDay].filter(
+            (_, idx) => idx !== foundAtIndex
+          );
+          
+          // Ensure target day array exists
+          if (!updatedActiveClasses[newDay]) {
+            updatedActiveClasses[newDay] = [];
+          }
+          
+          // Add to new day
+          updatedActiveClasses[newDay] = [...updatedActiveClasses[newDay], updatedClass];
+          
+          console.log('📝 Store update SUCCESS:', { 
+            classId, 
+            stableId,
+            oldDay, 
+            oldTime, 
+            newDay, 
+            newTime,
+            originalDay,
+            originalTime,
+            className: updatedClass.className
+          });
+        } else {
+          console.warn('⚠️ Class not found for drag-drop:', classId);
+          console.log('Available classes:', Object.entries(updatedActiveClasses).map(([day, classes]) => 
+            classes.map((c: any, i: number) => ({ day, id: c.id, className: c.className, time: c.time, index: i }))
+          ).flat());
+        }
         
         // Also update in rawData if the class exists there - use OLD day/time for matching
         const updatedRawData = state.rawData.map(session => {
           if (updatedClass && 
-              session.Class === updatedClass.className &&
+              session.Class === (updatedClass.className || updatedClass.class) &&
               session.Location === updatedClass.location &&
               session.Trainer === updatedClass.trainer &&
               session.Day === oldDay &&
-              session.Time === oldTime) {
+              session.Time?.startsWith(oldTime)) {
             return {
               ...session,
               Day: newDay,
@@ -440,28 +519,144 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
           return session;
         });
         
-        console.log('📝 Store update:', { 
-          classId, 
-          oldDay, 
-          oldTime, 
-          newDay, 
-          newTime,
-          updatedClass: updatedClass?.className
+        // Also update filteredData to reflect the changes
+        const updatedFilteredData = state.filteredData.map(session => {
+          if (updatedClass && 
+              session.Class === (updatedClass.className || updatedClass.class) &&
+              session.Location === updatedClass.location &&
+              session.Trainer === updatedClass.trainer &&
+              session.Day === oldDay &&
+              session.Time?.startsWith(oldTime)) {
+            return {
+              ...session,
+              Day: newDay,
+              Time: newTime
+            };
+          }
+          return session;
+        });
+        
+        // Also update processedData (the cleaned sheet data) to reflect the changes
+        const updatedProcessedData = state.processedData.map((row: any) => {
+          if (updatedClass && 
+              row.Class === (updatedClass.className || updatedClass.class) &&
+              row.Location === updatedClass.location &&
+              row.Trainer === updatedClass.trainer &&
+              row.Day === oldDay &&
+              (row.Time?.startsWith(oldTime) || row.time?.startsWith(oldTime))) {
+            return {
+              ...row,
+              Day: newDay,
+              day: newDay,
+              Time: newTime,
+              time: newTime
+            };
+          }
+          return row;
         });
         
         return {
           activeClassesData: updatedActiveClasses,
-          rawData: updatedRawData
+          rawData: updatedRawData,
+          filteredData: updatedFilteredData,
+          processedData: updatedProcessedData
         };
       });
       
       // Invalidate ProScheduler cache to force refresh
       if (typeof window !== 'undefined') {
         (window as any).__proSchedulerCacheInvalidate = Date.now();
+        // Also trigger a re-render by updating a timestamp
+        (window as any).__proSchedulerLastUpdate = Date.now();
       }
       
-      // Reapply filters to update the view
-      get().applyFilters();
+      // Send updated data to worker for reprocessing
+      const { rawData, activeClassesData } = get();
+      worker.postMessage({ 
+        type: 'PROCESS_DATA', 
+        payload: { rawData, activeClassesData } 
+      });
+    },
+
+    applyOptimization: (replacements: any[], newClasses: any[]) => {
+      set((state) => {
+        const updatedActiveClasses = { ...state.activeClassesData };
+        let updatedRawData = [...state.rawData];
+
+        // Process replacements
+        replacements.forEach(rep => {
+          const { original, replacement } = rep;
+          
+          // Find and update in activeClassesData
+          Object.keys(updatedActiveClasses).forEach(day => {
+             updatedActiveClasses[day] = updatedActiveClasses[day].map((cls: any) => {
+                // Match logic (similar to updateClassSchedule)
+                if (cls.className === original.className && 
+                    cls.trainer === original.trainer &&
+                    cls.day === original.day &&
+                    cls.time === original.time &&
+                    cls.location === original.location) {
+                    
+                    return {
+                        ...cls,
+                        className: replacement.className,
+                        trainer: replacement.trainer,
+                        // Keep other props
+                        isAIOptimized: true,
+                        optimizationReason: replacement.reason
+                    };
+                }
+                return cls;
+             });
+          });
+
+          // Update rawData
+          updatedRawData = updatedRawData.map(session => {
+             if (session.Class === original.className &&
+                 session.Trainer === original.trainer &&
+                 session.Day === original.day &&
+                 session.Time === original.time &&
+                 session.Location === original.location) {
+                 return {
+                     ...session,
+                     Class: replacement.className,
+                     Trainer: replacement.trainer
+                 };
+             }
+             return session;
+          });
+        });
+
+        // Process new classes (add to activeClassesData)
+        newClasses.forEach(cls => {
+            if (!updatedActiveClasses[cls.day]) {
+                updatedActiveClasses[cls.day] = [];
+            }
+            updatedActiveClasses[cls.day].push({
+                ...cls,
+                isAIOptimized: true,
+                optimizationReason: cls.reason
+            });
+        });
+
+        return {
+            activeClassesData: updatedActiveClasses,
+            rawData: updatedRawData
+        };
+      });
+      
+      // Invalidate ProScheduler cache to force refresh
+      if (typeof window !== 'undefined') {
+        (window as any).__proSchedulerCacheInvalidate = Date.now();
+        (window as any).__proSchedulerLastUpdate = Date.now();
+      }
+
+      // Trigger worker update
+      const { rawData, activeClassesData } = get();
+      worker.postMessage({ 
+        type: 'PROCESS_DATA', 
+        payload: { rawData, activeClassesData } 
+      });
     },
   };
 });

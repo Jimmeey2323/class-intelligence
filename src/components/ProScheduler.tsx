@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, memo, Fragment } from 'react';
+import { useState, useMemo, useEffect, useRef, memo, Fragment, useCallback } from 'react';
 import { useDashboardStore, getDataIndices } from '../store/dashboardStore';
 import { SessionData, CheckinData } from '../types';
 import { format, parseISO, isWithinInterval } from 'date-fns';
@@ -28,9 +28,13 @@ import {
   Activity,
   UserPlus,
   UserMinus,
-  Ban
+  Ban,
+  Sparkles,
+  Brain,
+  Loader2
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { aiService } from '../services/aiService';
+import { motion } from 'framer-motion';
 
 // Available trainer images (from `/images` folder)
 const IMAGE_FILES = [
@@ -233,6 +237,10 @@ interface ScheduleClass {
   totalBooked?: number;
   totalLateCancelled?: number;
   totalWaitlisted?: number;
+  // Original position tracking for moved classes
+  originalDay?: string;
+  originalTime?: string;
+  wasMoved?: boolean;
   topTrainers: Array<{ 
     name: string; 
     sessions: number; 
@@ -313,11 +321,65 @@ export type OptimizationReason =
   | 'optimize_horizontal_mix'
   | 'optimize_vertical_mix'
   | 'high_demand_slot'
-  | 'strategic_scheduling';
+  | 'strategic_scheduling'
+  | 'ai_demand_prediction'
+  | 'member_preference_match'
+  | 'trainer_fatigue_optimization';
+
+// Strategy modes for optimization
+export type OptimizationStrategy = 
+  | 'balanced'           // Balance all factors equally
+  | 'maximize_attendance' // Prioritize high-attendance predictions
+  | 'trainer_development' // Focus on developing newer trainers
+  | 'format_diversity'   // Ensure varied format mix
+  | 'peak_optimization'  // Focus on peak hours
+  | 'member_retention';  // Prioritize member preferences
+
+// Seeded random number generator for reproducible but unique iterations
+class SeededRandom {
+  private seed: number;
+  
+  constructor(seed: number) {
+    this.seed = seed;
+  }
+  
+  // Generate random number between 0 and 1
+  next(): number {
+    const x = Math.sin(this.seed++) * 10000;
+    return x - Math.floor(x);
+  }
+  
+  // Generate random number between min and max
+  range(min: number, max: number): number {
+    return min + this.next() * (max - min);
+  }
+  
+  // Shuffle array using Fisher-Yates
+  shuffle<T>(array: T[]): T[] {
+    const result = [...array];
+    for (let i = result.length - 1; i > 0; i--) {
+      const j = Math.floor(this.next() * (i + 1));
+      [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
+  }
+  
+  // Pick random element from array
+  pick<T>(array: T[]): T | undefined {
+    if (array.length === 0) return undefined;
+    return array[Math.floor(this.next() * array.length)];
+  }
+  
+  // Pick n random elements without replacement
+  pickN<T>(array: T[], n: number): T[] {
+    return this.shuffle(array).slice(0, Math.min(n, array.length));
+  }
+}
 
 interface OptimizationSettings {
   enabled: boolean;
   targetTrainerHours: number; // Default 15
+  strategy: OptimizationStrategy; // Optimization strategy mode
   maxTrainerHours: number; // Maximum hours per trainer (default 16)
   minDaysOff: number; // Minimum days off per trainer (default 2)
   minimizeTrainersPerSlot: boolean;
@@ -349,6 +411,7 @@ interface OptimizationSettings {
 const DEFAULT_OPTIMIZATION_SETTINGS: OptimizationSettings = {
   enabled: true,
   targetTrainerHours: 15,
+  strategy: 'balanced', // Default to balanced optimization
   maxTrainerHours: 16,
   minDaysOff: 2, // Each trainer gets at least 2 days off
   minimizeTrainersPerSlot: true,
@@ -371,7 +434,7 @@ const DEFAULT_OPTIMIZATION_SETTINGS: OptimizationSettings = {
   // Advanced formats
   advancedFormatsMaxPerWeek: 2,
   advancedFormatsLocation: 'Kwality House, Kemps Corner',
-  // Randomization for variety
+  // Randomization for variety - use current timestamp for unique iterations
   randomizationSeed: Date.now(),
   locationConstraints: {
     'Kwality House, Kemps Corner': {
@@ -429,12 +492,16 @@ let lastInvalidateTimestamp = 0;
 const useRawData = () => useDashboardStore(state => state.rawData);
 const useActiveClassesData = () => useDashboardStore(state => state.activeClassesData);
 const useCheckinsData = () => useDashboardStore(state => state.checkinsData);
+const useUpdateClassSchedule = () => useDashboardStore(state => state.updateClassSchedule);
+const useApplyOptimization = () => useDashboardStore(state => state.applyOptimization);
 
 function ProScheduler() {
   // PERFORMANCE: Use granular selectors instead of destructuring entire store
   const rawData = useRawData() || [];
   const activeClassesData = useActiveClassesData() || {};
   const checkinsData = useCheckinsData() || [];
+  const updateClassSchedule = useUpdateClassSchedule();
+  const applyOptimization = useApplyOptimization();
   
   // State management
   const [filters, setFilters] = useState<ProSchedulerFilters>({
@@ -507,6 +574,47 @@ function ProScheduler() {
   });
   const [showOptimizationSettings, setShowOptimizationSettings] = useState(false);
   const [showAllReplacements, setShowAllReplacements] = useState(false);
+  
+  // AI Optimization State
+  const [isAIOptimizing, setIsAIOptimizing] = useState(false);
+  const [isCalculatingOptimization, setIsCalculatingOptimization] = useState(false);
+  const [aiOptimizationResult, setAIOptimizationResult] = useState<{
+    replacements: Array<{
+      original: { className: string; trainer: string; day: string; time: string; location: string; avgCheckIns: number; fillRate: number; id?: string };
+      replacement: { className: string; trainer: string; reason: string; projectedCheckIns: number; projectedFillRate: number; confidence: number; isAIOptimized?: boolean; dataPoints?: string[]; reasoning?: string };
+    }>;
+    newClasses: Array<{
+      className: string;
+      trainer: string;
+      day: string;
+      time: string;
+      location: string;
+      reason: string;
+      projectedCheckIns: number;
+      confidence: number;
+      isAIOptimized?: boolean;
+      dataPoints?: string[];
+    }>;
+    formatMixAnalysis: {
+      current: Record<string, number>;
+      recommended: Record<string, number>;
+      adjustments: string[];
+    };
+    insights: string[];
+    recommendations?: Array<{
+      type: 'swap' | 'add' | 'remove' | 'time_change' | 'trainer_change';
+      title: string;
+      description: string;
+      reasoning?: string;
+      impact: string;
+      confidence: number;
+      dataPoints?: string[];
+      alternatives?: string[];
+      actionData?: any;
+    }>;
+  } | null>(null);
+  const [showAIResults, setShowAIResults] = useState(false);
+  const [appliedAIReplacements, setAppliedAIReplacements] = useState<Set<string>>(new Set());
   
   // Save optimization settings to localStorage when changed
   useEffect(() => {
@@ -763,7 +871,7 @@ function ProScheduler() {
     // Process active classes data as PRIMARY source - always show these
     if (activeClassesData && Object.keys(activeClassesData).length > 0) {
       Object.entries(activeClassesData).forEach(([day, dayClasses]) => {
-        dayClasses.forEach((activeClass: any, index: number) => {
+        dayClasses.forEach((activeClass: any) => {
           // FILTER: Skip classes without trainer or containing 'hosted'
           if (!activeClass.trainer || activeClass.trainer.trim() === '' || 
               activeClass.className?.toLowerCase().includes('hosted')) {
@@ -772,6 +880,9 @@ function ProScheduler() {
           // Normalize time format from Active.csv (e.g., "7:15 AM" -> "07:15")
           const normalizeTime = (time: string): string => {
             if (!time) return '08:00';
+            
+            // If already in 24h format, return as-is
+            if (/^\d{2}:\d{2}$/.test(time)) return time;
             
             // Parse AM/PM format
             const match = time.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
@@ -789,9 +900,20 @@ function ProScheduler() {
             return time;
           };
 
+          // Current day/time (may have been updated by drag-drop)
+          const currentDay = activeClass.day || day;
           const normalizedTime = normalizeTime(activeClass.time);
           
-          // Calculate metrics from historical data (if available) - EXCLUDE FUTURE SESSIONS
+          // Original day/time (for metrics lookup and reference display)
+          const originalDay = activeClass.originalDay || currentDay;
+          const originalTime = activeClass.originalTime || normalizedTime;
+          
+          // Generate stable ID - use stored ID or create one based on original position
+          const stableId = activeClass.id || 
+            `active-${originalDay}-${originalTime}-${activeClass.className}-${activeClass.location || 'Unknown'}`.replace(/\s+/g, '_');
+          
+          // Calculate metrics from historical data using ORIGINAL day/time
+          // This ensures metrics remain accurate even after moving the class
           const today = new Date();
           today.setHours(0, 0, 0, 0); // Start of today
           
@@ -804,11 +926,11 @@ function ProScheduler() {
             const inDateRange = isWithinInterval(sessionDate, { start: filters.dateFrom, end: filters.dateTo });
             if (!inDateRange) return false;
             
-            // Exact matching for consistency with drilldown table
+            // Use ORIGINAL day/time for metrics lookup (historical data is at original position)
             const sessionTime24 = session.Time?.substring(0, 5) || '';
-            const matchesTime = sessionTime24 === normalizedTime || 
-                               session.Time?.startsWith(normalizedTime);
-            const matchesDay = session.Day === day;
+            const matchesTime = sessionTime24 === originalTime || 
+                               session.Time?.startsWith(originalTime);
+            const matchesDay = session.Day === originalDay;
             const matchesClass = session.Class?.toLowerCase() === activeClass.className?.toLowerCase();
             const matchesLocation = session.Location?.toLowerCase() === activeClass.location?.toLowerCase();
             
@@ -948,9 +1070,9 @@ function ProScheduler() {
           }
 
           classes.push({
-            id: `active-${day}-${normalizedTime}-${activeClass.className}-${index}`,
-            day,
-            time: normalizedTime,
+            id: stableId, // Use stable ID for drag-drop
+            day: currentDay, // Current scheduled day (after any moves)
+            time: normalizedTime, // Current scheduled time
             class: activeClass.className || 'Unknown Class',
             trainer: activeClass.trainer || 'TBD',
             location: activeClass.location || 'Unknown Location',
@@ -979,9 +1101,13 @@ function ProScheduler() {
             bookingToCheckInRate: Math.round(bookingToCheckInRate * 10) / 10,
             consistency: Math.round(consistency * 10) / 10,
             topTrainers,
+            // Original position tracking (for reference and display)
+            originalDay: originalDay !== currentDay ? originalDay : undefined,
+            originalTime: originalTime !== normalizedTime ? originalTime : undefined,
+            wasMoved: originalDay !== currentDay || originalTime !== normalizedTime,
             // Trainer change indicators
             lastWeekTrainer: (() => {
-              // Get last week's trainer for this slot
+              // Get last week's trainer for this slot (use original day/time for historical lookup)
               const lastWeekStart = new Date(today);
               lastWeekStart.setDate(lastWeekStart.getDate() - 7);
               const lastWeekEnd = new Date(today);
@@ -990,8 +1116,8 @@ function ProScheduler() {
               const lastWeekSessions = rawData.filter((s: SessionData) => {
                 const sessionDate = parseISO(s.Date);
                 if (sessionDate < lastWeekStart || sessionDate > lastWeekEnd) return false;
-                return s.Day === day && 
-                       s.Time?.substring(0, 5) === normalizedTime && 
+                return s.Day === originalDay && 
+                       s.Time?.substring(0, 5) === originalTime && 
                        s.Class?.toLowerCase() === activeClass.className?.toLowerCase() &&
                        s.Location?.toLowerCase() === activeClass.location?.toLowerCase();
               });
@@ -1427,9 +1553,14 @@ function ProScheduler() {
     return averages;
   }, [scheduleClasses]);
 
+  // Cached optimized schedule result to prevent re-computation
+  const [cachedOptimizedSchedule, setCachedOptimizedSchedule] = useState<any>(null);
+  
   // ========== SMART SCHEDULE OPTIMIZATION ==========
   // When Top Classes mode is ON, replace underperforming classes with optimal alternatives
   // Respects location constraints, trainer priorities, format rules, and parallel class limits
+  // Uses seeded randomization for unique but reproducible iterations
+  // NOTE: Runs in a deferred manner to prevent UI blocking
   const optimizedSchedule = useMemo(() => {
     if (!showHighPerformingOnly) return null;
     
@@ -1437,6 +1568,29 @@ function ProScheduler() {
     const TRAINER_TARGET_HOURS = settings.targetTrainerHours;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    
+    // Initialize seeded random generator for unique iterations each time Top Classes is activated
+    const rng = new SeededRandom(settings.randomizationSeed);
+    
+    // Strategy weights based on selected mode
+    const getStrategyWeights = () => {
+      switch (settings.strategy) {
+        case 'maximize_attendance':
+          return { attendance: 2.0, trainerHours: 0.8, formatDiversity: 0.6, peakBonus: 1.5 };
+        case 'trainer_development':
+          return { attendance: 0.8, trainerHours: 1.5, formatDiversity: 1.0, newTrainerBonus: 2.0 };
+        case 'format_diversity':
+          return { attendance: 0.9, trainerHours: 0.9, formatDiversity: 2.0, peakBonus: 0.8 };
+        case 'peak_optimization':
+          return { attendance: 1.2, trainerHours: 0.9, formatDiversity: 0.7, peakBonus: 2.5 };
+        case 'member_retention':
+          return { attendance: 1.3, trainerHours: 0.8, formatDiversity: 1.2, loyaltyBonus: 2.0 };
+        case 'balanced':
+        default:
+          return { attendance: 1.0, trainerHours: 1.0, formatDiversity: 1.0, peakBonus: 1.0 };
+      }
+    };
+    const strategyWeights = getStrategyWeights();
     
     // Helper: Check if trainer is a priority trainer for a location
     const isPriorityTrainerForLocation = (trainerName: string, location: string): boolean => {
@@ -1884,19 +2038,21 @@ function ProScheduler() {
           if (metrics.name === underperformer.trainer.toLowerCase() && 
               topClass.class.toLowerCase() === underperformer.class.toLowerCase()) return;
           
-          // Calculate score with location-specific priorities
+          // Calculate score with location-specific priorities and strategy weights
           let score = 0;
           const reasons: string[] = [];
           
-          // Factor 1: Priority trainer bonus (HUGE boost)
+          // ========== AI-ENHANCED SCORING WITH STRATEGY WEIGHTS ==========
+          
+          // Factor 1: Priority trainer bonus (HUGE boost) - weighted by strategy
           if (metrics.isPriority) {
-            score += 50;
+            score += 50 * strategyWeights.trainerHours;
             reasons.push('Priority trainer for location');
           }
           
           // Factor 2: Format priority trainer match
           if (isPriorityTrainerForFormat(metrics.name, topClass.class)) {
-            score += 40;
+            score += 40 * strategyWeights.formatDiversity;
             reasons.push(`Specialized in ${formatCategory}`);
           }
           
@@ -1904,37 +2060,45 @@ function ProScheduler() {
           const currentTotalHours = trainerHoursTracker.get(metrics.name) || 0;
           const hoursToTarget = Math.min(TRAINER_TARGET_HOURS - currentTotalHours, MAX_TRAINER_HOURS - currentTotalHours);
           if (hoursToTarget > 0 && metrics.isPriority) {
-            score += hoursToTarget * 8; // Higher weight for priority trainers
+            score += hoursToTarget * 8 * strategyWeights.trainerHours;
             reasons.push(`Needs +${hoursToTarget.toFixed(0)}hrs (${currentTotalHours.toFixed(0)}/${MAX_TRAINER_HOURS} total)`);
           }
           
           // Penalty for trainers near or at max hours
           if (currentTotalHours >= MAX_TRAINER_HOURS - 2) {
-            score -= 30; // Strong penalty - close to max
+            score -= 30;
             reasons.push(`Near max hours (${currentTotalHours.toFixed(0)}/${MAX_TRAINER_HOURS})`);
           }
           
-          // Factor 4: Class performance improvement
+          // Factor 4: Class performance improvement - HEAVILY weighted by strategy
           const checkInsImprovement = topClass.avgCheckIns - underperformer.avgCheckIns;
           if (checkInsImprovement > 0) {
-            score += checkInsImprovement * 5;
+            score += checkInsImprovement * 5 * strategyWeights.attendance;
             reasons.push(`+${checkInsImprovement.toFixed(1)} attendance`);
           }
           
-          // Factor 5: Required format bonus (cycle/strength for Kwality)
+          // Factor 5: Peak time bonus (7-9am, 5-8pm are peak)
+          const timeHour = parseInt(underperformer.time.split(':')[0]);
+          const isPeakTime = (timeHour >= 7 && timeHour <= 9) || (timeHour >= 17 && timeHour <= 20);
+          if (isPeakTime && topClass.avgCheckIns > locationAvg) {
+            score += 20 * (strategyWeights.peakBonus || 1.0);
+            reasons.push('Peak time optimization');
+          }
+          
+          // Factor 6: Required format bonus (cycle/strength for Kwality)
           if (constraints.requiredFormats.includes(formatCategory)) {
-            score += 30;
+            score += 30 * strategyWeights.formatDiversity;
             reasons.push(`Required format: ${formatCategory}`);
           }
           
-          // Factor 6: Format mix diversity
+          // Factor 7: Format mix diversity
           const existingCategories = Array.from(dayFormats).map(f => getFormatCategory(f));
           if (!existingCategories.includes(formatCategory)) {
-            score += 20;
+            score += 20 * strategyWeights.formatDiversity;
             reasons.push(`Adds ${formatCategory} variety`);
           }
           
-          // Factor 7: Minimize trainers per slot (if trainer already teaches at this time)
+          // Factor 8: Minimize trainers per slot (if trainer already teaches at this time)
           const trainerAlreadyTeachesAtTime = locationFilteredClasses.some(
             cls => cls.trainer.toLowerCase() === metrics.name && 
                    cls.day === underperformer.day && 
@@ -1950,11 +2114,13 @@ function ProScheduler() {
             reasons.push('Trainer already at this time');
           }
           
-          // Factor 8: New trainer appropriate assignment
+          // Factor 9: New trainer appropriate assignment - enhanced with strategy
           if (metrics.isNewTrainer) {
             const restrictions = getNewTrainerRestrictions(metrics.name);
             if (restrictions?.some(f => topClass.class.toLowerCase().includes(f))) {
-              score += 10;
+              // Apply new trainer bonus if in trainer_development strategy
+              const newTrainerBonus = (strategyWeights as any).newTrainerBonus || 1.0;
+              score += 10 * newTrainerBonus;
               reasons.push('Good fit for new trainer');
             }
           }
@@ -1983,13 +2149,17 @@ function ProScheduler() {
               .map(word => word.charAt(0).toUpperCase() + word.slice(1))
               .join(' ');
             
+            // Add controlled randomization for variety (±15% variation)
+            const randomFactor = 0.85 + (rng.next() * 0.30); // 0.85 to 1.15
+            const adjustedScore = score * randomFactor;
+            
             candidates.push({
               trainer: metrics.name,
               trainerDisplay,
               class: topClass.class,
               expectedCheckIns: topClass.avgCheckIns,
               expectedFillRate: topClass.fillRate,
-              score,
+              score: adjustedScore,
               reason: reasons.slice(0, 2).join(', '),
               fullReason: reasons.join(' • '), // Full scheduling reason
               hoursToTarget,
@@ -2001,11 +2171,25 @@ function ProScheduler() {
         });
       });
       
-      // Sort candidates by score
+      // Sort candidates by adjusted score - this creates variety in each iteration
       candidates.sort((a, b) => b.score - a.score);
       
-      if (candidates.length > 0) {
-        const best = candidates[0];
+      // For extra variety, occasionally pick from top 3 instead of always top 1
+      // This ensures different schedules each time while maintaining quality
+      let best = candidates[0];
+      if (candidates.length >= 3) {
+        // 20% chance to pick 2nd or 3rd best if they're within 15% of top score
+        const variationChance = rng.next();
+        if (variationChance > 0.8) {
+          const topScore = candidates[0].score;
+          const viableCandidates = candidates.slice(0, 3).filter(c => c.score >= topScore * 0.85);
+          if (viableCandidates.length > 1) {
+            best = rng.pick(viableCandidates) || candidates[0];
+          }
+        }
+      }
+      
+      if (candidates.length > 0 && best) {
         
         // CRITICAL: Final check - ensure trainer won't exceed 16 hours
         const currentTotalHours = trainerHoursTracker.get(best.trainer) || 0;
@@ -2137,18 +2321,115 @@ function ProScheduler() {
     };
   }, [showHighPerformingOnly, scheduleClasses, rawData, filters.dateFrom, filters.dateTo, filters.locations, locationAverages, getFormatDifficulty, optimizationSettings]);
 
+  // Deferred optimization calculation to prevent UI freezing
+  useEffect(() => {
+    if (showHighPerformingOnly && !isCalculatingOptimization) {
+      setIsCalculatingOptimization(true);
+      // Use requestIdleCallback for non-blocking calculation
+      const timeoutId = setTimeout(() => {
+        setCachedOptimizedSchedule(optimizedSchedule);
+        setIsCalculatingOptimization(false);
+      }, 50);
+      return () => clearTimeout(timeoutId);
+    } else if (!showHighPerformingOnly) {
+      setCachedOptimizedSchedule(null);
+    }
+  }, [showHighPerformingOnly, optimizedSchedule]);
+
+  // AI-powered schedule optimization handler - runs async to prevent blocking
+  const handleAIOptimization = useCallback(async () => {
+    if (isAIOptimizing) return;
+    
+    setIsAIOptimizing(true);
+    setAIOptimizationResult(null);
+    setAppliedAIReplacements(new Set());
+    
+    // Small delay to let UI update with loading state
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    try {
+      // Prepare data for AI analysis - use FULL history for better context
+      // Only filter by location if specific locations are selected
+      const historicalContextData = rawData.filter(session => {
+        // Filter by selected locations
+        if (filters.locations.length > 0 && !filters.locations.includes(session.Location)) {
+          return false;
+        }
+        return true;
+      });
+      
+      // Map optimization settings to AI rules
+      const aiRules = {
+        targetFillRate: 70,
+        minSessionsForAnalysis: 4,
+        formatMixTargets: optimizationSettings.formatPriorities?.reduce((acc, fp) => {
+          acc[fp.format] = 15;
+          return acc;
+        }, {} as Record<string, number>) || {},
+        excludeTrainers: optimizationSettings.blockedTrainers || [],
+        excludeFormats: optimizationSettings.excludedFormats || ['hosted', 'host', 'guest'],
+        focusLocations: filters.locations.length > 0 ? filters.locations : undefined,
+        optimizationGoal: optimizationSettings.strategy === 'maximize_attendance' ? 'attendance' as const :
+                         optimizationSettings.strategy === 'format_diversity' ? 'format_diversity' as const :
+                         'balanced' as const,
+        requireBeginnerMix: true
+      };
+      
+      // Add class IDs to scheduleClasses for matching
+      const classesWithIds = scheduleClasses.map(cls => ({
+        ...cls,
+        id: cls.id
+      }));
+      
+      const result = await aiService.optimizeScheduleWithAI(
+        historicalContextData,
+        classesWithIds,
+        aiRules
+      );
+      
+      setAIOptimizationResult(result);
+      
+      // Auto-apply all AI replacements to the calendar
+      if (result.replacements && result.replacements.length > 0) {
+        const newApplied = new Set<string>();
+        result.replacements.forEach(replacement => {
+          // Find matching class in scheduleClasses using multiple keys for better matching
+          const matchKey = `${replacement.original.className}-${replacement.original.trainer}-${replacement.original.day}-${replacement.original.time}-${replacement.original.location}`;
+          newApplied.add(matchKey);
+          
+          // Also add alternative key format
+          const altKey = `${replacement.original.className?.toLowerCase()}-${replacement.original.trainer?.toLowerCase()}-${replacement.original.day}-${replacement.original.time}-${replacement.original.location}`;
+          newApplied.add(altKey);
+        });
+        setAppliedAIReplacements(newApplied);
+        console.log('Applied AI replacements:', newApplied.size, 'keys');
+      }
+      
+      setShowAIResults(true);
+      
+    } catch (error) {
+      console.error('AI optimization failed:', error);
+    } finally {
+      setIsAIOptimizing(false);
+    }
+  }, [isAIOptimizing, rawData, scheduleClasses, filters, optimizationSettings]);
+
   // Apply Pro Scheduler filters independently (do not use global filters)
   // When Top Classes mode is ON, include optimized replacements
+  // Uses cached schedule to prevent UI blocking
   const filteredClasses = useMemo(() => {
     // Combine regular and discontinued classes based on showDiscontinued state
     let classesToFilter = showDiscontinued 
       ? [...scheduleClasses, ...discontinuedClasses]
       : scheduleClasses;
     
+    // Use cached optimized schedule to prevent recalculation
+    const activeOptimizedSchedule = cachedOptimizedSchedule || optimizedSchedule;
+    
     // When Top Classes mode is ON, replace underperforming with optimized alternatives
-    if (showHighPerformingOnly && optimizedSchedule) {
-      const replacementMap = new Map<string, typeof optimizedSchedule.replacements[0]>();
-      optimizedSchedule.replacements.forEach(r => {
+    if (showHighPerformingOnly && activeOptimizedSchedule) {
+      const replacementMap = new Map<string, typeof activeOptimizedSchedule.replacements[0]>();
+      activeOptimizedSchedule.replacements.forEach((r: any) => {
         replacementMap.set(r.original.id, r);
       });
       
@@ -2200,6 +2481,62 @@ function ProScheduler() {
       });
     }
     
+    // Apply AI optimizations when available and applied
+    if (aiOptimizationResult && appliedAIReplacements.size > 0) {
+      // Build multiple key formats for matching
+      const aiReplacementMap = new Map<string, typeof aiOptimizationResult.replacements[0]>();
+      aiOptimizationResult.replacements.forEach(r => {
+        // Primary key
+        const key = `${r.original.className}-${r.original.trainer}-${r.original.day}-${r.original.time}-${r.original.location}`;
+        aiReplacementMap.set(key, r);
+        // Lowercase key for case-insensitive matching
+        const lowerKey = key.toLowerCase();
+        aiReplacementMap.set(lowerKey, r);
+      });
+      
+      classesToFilter = classesToFilter.map(cls => {
+        // Try multiple key formats
+        const key = `${cls.class}-${cls.trainer}-${cls.day}-${cls.time}-${cls.location}`;
+        const lowerKey = key.toLowerCase();
+        
+        // Check both keys
+        const aiReplacement = aiReplacementMap.get(key) || aiReplacementMap.get(lowerKey);
+        const isApplied = appliedAIReplacements.has(key) || appliedAIReplacements.has(lowerKey);
+        
+        if (aiReplacement && isApplied) {
+          console.log('Applying AI replacement:', cls.class, '->', aiReplacement.replacement.className);
+          return {
+            ...cls,
+            day: cls.day,
+            time: cls.time,
+            location: cls.location,
+            class: aiReplacement.replacement.className,
+            trainer: aiReplacement.replacement.trainer,
+            avgCheckIns: aiReplacement.replacement.projectedCheckIns,
+            fillRate: aiReplacement.replacement.projectedFillRate,
+            isAIOptimized: true,
+            aiConfidence: aiReplacement.replacement.confidence,
+            aiReason: aiReplacement.replacement.reason,
+            aiDataPoints: (aiReplacement.replacement as any).dataPoints || [],
+            originalClass: aiReplacement.original.className,
+            originalTrainer: aiReplacement.original.trainer,
+            originalCheckIns: aiReplacement.original.avgCheckIns,
+            originalFillRate: aiReplacement.original.fillRate
+          } as ScheduleClass & {
+            isAIOptimized: boolean;
+            aiConfidence: number;
+            aiReason: string;
+            aiDataPoints: string[];
+            originalClass: string;
+            originalTrainer: string;
+            originalCheckIns: number;
+            originalFillRate: number;
+          };
+        }
+        return cls;
+      });
+    }
+    
     return classesToFilter.filter(cls => {
       // Location filter
       if (filters.locations.length > 0 && !filters.locations.includes(cls.location)) return false;
@@ -2214,7 +2551,7 @@ function ProScheduler() {
       }
       // Class filter - match against both original and replacement class
       if (filters.classes.length > 0) {
-        const isOptimized = (cls as any).isOptimizedReplacement;
+        const isOptimized = (cls as any).isOptimizedReplacement || (cls as any).isAIOptimized;
         const originalClass = (cls as any).originalClass;
         if (!filters.classes.includes(cls.class) && 
             !(isOptimized && originalClass && filters.classes.includes(originalClass))) {
@@ -2230,7 +2567,7 @@ function ProScheduler() {
       }
       return true;
     });
-  }, [scheduleClasses, discontinuedClasses, showDiscontinued, filters, showHighPerformingOnly, locationAverages, optimizedSchedule]);
+  }, [scheduleClasses, discontinuedClasses, showDiscontinued, filters, showHighPerformingOnly, locationAverages, optimizedSchedule, cachedOptimizedSchedule, aiOptimizationResult, appliedAIReplacements]);
 
   // PERFORMANCE: Get unique values from pre-computed indices (O(1) instead of O(n))
   const uniqueTrainers = useMemo(() => {
@@ -2487,11 +2824,14 @@ function ProScheduler() {
 
   // Render class card with enhanced styling
   const renderClassCard = (cls: ScheduleClass) => {
-    // Check if this is an optimized replacement
+    // Check if this is an optimized replacement (Top Classes mode)
     const isOptimizedReplacement = (cls as any).isOptimizedReplacement || false;
+    // Check if this is an AI-optimized class
+    const isAIOptimized = (cls as any).isAIOptimized || false;
     const originalClass = (cls as any).originalClass;
     const originalTrainer = (cls as any).originalTrainer;
-    const optimizationReason = (cls as any).optimizationReason;
+    const optimizationReason = (cls as any).optimizationReason || (cls as any).aiReason;
+    const aiConfidence = (cls as any).aiConfidence;
     
     const fillRateColor = cls.fillRate >= 80 
       ? 'from-green-500 to-emerald-500' 
@@ -2515,6 +2855,9 @@ function ProScheduler() {
 
     // Find matching format color - for optimized replacements use a special gradient
     const getFormatColor = () => {
+      if (isAIOptimized) {
+        return 'from-violet-100 to-purple-200 border-purple-400 ring-2 ring-purple-300 ring-offset-1';
+      }
       if (isOptimizedReplacement) {
         return 'from-emerald-100 to-green-200 border-emerald-400 ring-2 ring-emerald-300';
       }
@@ -2541,45 +2884,33 @@ function ProScheduler() {
         return;
       }
       
-      console.log('🎯 Drag started:', cls.class, cls.id);
-      
-      // Prevent text selection during drag
-      e.currentTarget.style.userSelect = 'none';
-      
-      setDraggedClass(cls);
+      // Set data transfer
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', cls.id);
+      e.dataTransfer.setData('application/json', JSON.stringify({
+        id: cls.id,
+        class: cls.class,
+        day: cls.day,
+        time: cls.time
+      }));
       
-      // Create a better drag image
-      try {
-        const dragImage = e.currentTarget.cloneNode(true) as HTMLElement;
-        dragImage.style.position = 'absolute';
-        dragImage.style.top = '-1000px';
-        dragImage.style.opacity = '0.8';
-        dragImage.style.transform = 'rotate(2deg)';
-        dragImage.style.pointerEvents = 'none';
-        document.body.appendChild(dragImage);
-        e.dataTransfer.setDragImage(dragImage, e.nativeEvent.offsetX, e.nativeEvent.offsetY);
-        setTimeout(() => {
-          if (document.body.contains(dragImage)) {
-            document.body.removeChild(dragImage);
-          }
-        }, 0);
-      } catch (err) {
-        console.log('Drag image creation failed, using default');
-      }
+      // Update state after a microtask to avoid interfering with drag
+      setTimeout(() => {
+        setDraggedClass(cls);
+      }, 0);
     };
     
-    const handleDragEnd = () => {
-      console.log('🏁 Drag ended');
+    const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
       setDraggedClass(null);
       setDropTarget(null);
     };
     
     const handleCardClick = (e: React.MouseEvent) => {
-      // Don't trigger click if we just finished dragging
+      // Don't trigger click if we're dragging
       if (draggedClass) {
         e.preventDefault();
+        e.stopPropagation();
         return;
       }
       handleClassClick(cls);
@@ -2594,11 +2925,11 @@ function ProScheduler() {
         onClick={handleCardClick}
         onMouseEnter={() => setHoveredClassId(cls.id)}
         onMouseLeave={() => setHoveredClassId(null)}
-        style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
-        className={`bg-gradient-to-br ${isDiscontinued ? 'from-gray-200 to-gray-300 border-gray-400 opacity-70' : cardColor} backdrop-blur-sm border rounded-xl shadow-sm hover:shadow-lg cursor-${isDiscontinued ? 'not-allowed' : 'move'} transition-all duration-300 overflow-hidden group relative ${isDiscontinued ? 'grayscale' : ''} ${draggedClass?.id === cls.id ? 'opacity-30' : ''}`}
+        style={{ userSelect: 'none', WebkitUserSelect: 'none', cursor: isDiscontinued ? 'not-allowed' : 'grab' }}
+        className={`bg-gradient-to-br ${isDiscontinued ? 'from-gray-200 to-gray-300 border-gray-400 opacity-70' : cardColor} border rounded-xl shadow-sm hover:shadow-md overflow-hidden group relative ${isDiscontinued ? 'grayscale' : ''} ${draggedClass?.id === cls.id ? 'opacity-40 scale-95' : ''}`}
       >
         {/* Status Indicators - Top Right */}
-        <div className="absolute top-1.5 right-1.5 flex gap-1 z-10 pointer-events-auto">
+        <div className="absolute top-1.5 right-1.5 flex gap-1 z-10">
           {isEdited && !isDiscontinued && (
             <>
               <button
@@ -2630,10 +2961,27 @@ function ProScheduler() {
               <Zap className="w-3 h-3" />
             </div>
           )}
+          {isAIOptimized && !isOptimizedReplacement && (
+            <div className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-full p-1 shadow-md" title={`AI Optimized (${aiConfidence}% confidence): Replaces ${originalClass}\n${optimizationReason}`}>
+              <Sparkles className="w-3 h-3" />
+            </div>
+          )}
         </div>
 
+        {/* AI Optimization Banner */}
+        {isAIOptimized && !isOptimizedReplacement && (
+          <div className="absolute top-0 left-0 right-0 bg-gradient-to-r from-purple-600 via-violet-600 to-indigo-600 text-white text-[8px] font-bold py-0.5 px-2 flex items-center justify-center gap-1 shadow-sm">
+            <Sparkles className="w-2.5 h-2.5" />
+            <span>AI OPTIMIZED</span>
+            <span className="opacity-75">|</span>
+            <span className="font-normal opacity-90">{aiConfidence}%</span>
+            <span className="opacity-75">|</span>
+            <span className="font-normal opacity-90 truncate">was: {originalClass}</span>
+          </div>
+        )}
+
         {/* Optimization Banner - Show when class is optimized replacement */}
-        {isOptimizedReplacement && (
+        {isOptimizedReplacement && !isAIOptimized && (
           <div className="absolute top-0 left-0 right-0 bg-gradient-to-r from-emerald-600 to-green-600 text-white text-[8px] font-bold py-0.5 px-2 flex items-center justify-center gap-1 shadow-sm">
             <Zap className="w-2.5 h-2.5" />
             <span>OPTIMIZED</span>
@@ -2642,8 +2990,16 @@ function ProScheduler() {
           </div>
         )}
 
+        {/* Moved From Banner - Show when class was drag-dropped */}
+        {cls.wasMoved && cls.originalDay && cls.originalTime && !isOptimizedReplacement && (
+          <div className="absolute top-0 left-0 right-0 bg-gradient-to-r from-blue-500 to-indigo-500 text-white text-[8px] font-medium py-0.5 px-2 flex items-center justify-center gap-1 shadow-sm">
+            <ArrowRightLeft className="w-2.5 h-2.5" />
+            <span>Moved from: {cls.originalDay} @ {cls.originalTime}</span>
+          </div>
+        )}
+
         {/* Collapsed View - Beautiful & Clean with Key Metrics */}
-        <div className={`p-2.5 pointer-events-none ${isOptimizedReplacement ? 'pt-5' : ''}`}>
+        <div className={`p-2.5 ${isAIOptimized || isOptimizedReplacement || (cls.wasMoved && cls.originalDay) ? 'pt-5' : ''}`}>
           {/* Header with Class Name and Icons */}
           <div className="flex items-center justify-between mb-1.5">
             <div className="font-bold text-sm text-slate-900 truncate flex-1 mr-2">
@@ -2729,168 +3085,95 @@ function ProScheduler() {
           </div>
         </div>
 
-        {/* Expanded View on Hover */}
-        <AnimatePresence>
-          {isHovered && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.2 }}
-              className="border-t border-white/50 bg-white/80 backdrop-blur-sm pointer-events-none"
-            >
-              <div className="p-3 space-y-2">
-                {/* Trainer & Location */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2 text-xs text-gray-700">
-                    <div className="bg-blue-100 rounded-full p-1">
-                      {findTrainerImage(cls.trainer) ? (
-                        // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                        <img src={findTrainerImage(cls.trainer) as string} alt={`${cls.trainer} avatar`} className="w-5 h-5 rounded-full object-cover" />
-                      ) : (
-                        <Users className="w-2.5 h-2.5 text-blue-600" />
-                      )}
-                    </div>
-                    <span className="font-medium truncate">{cls.trainer}</span>
+        {/* Expanded View on Hover - simplified for performance */}
+        {isHovered && (
+          <div className="border-t border-gray-200 bg-white/95">
+            <div className="p-3 space-y-2">
+              {/* Trainer & Location */}
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2 text-xs text-gray-700">
+                  <div className="bg-blue-100 rounded-full p-1">
+                    {findTrainerImage(cls.trainer) ? (
+                      <img src={findTrainerImage(cls.trainer) as string} alt={`${cls.trainer} avatar`} className="w-5 h-5 rounded-full object-cover" />
+                    ) : (
+                      <Users className="w-2.5 h-2.5 text-blue-600" />
+                    )}
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-gray-700">
-                    <div className="bg-purple-100 rounded-full p-1">
-                      <MapPin className="w-2.5 h-2.5 text-purple-600" />
-                    </div>
-                    <span className="font-medium truncate">{cls.location}</span>
-                  </div>
+                  <span className="font-medium truncate">{cls.trainer}</span>
                 </div>
-
-                {/* Quick Stats */}
-                <div className="bg-white/70 rounded-lg p-2 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-medium text-gray-600">Fill Rate</span>
-                    <div className="flex items-center gap-1.5">
-                      {cls.sessionCount > 0 ? (
-                        <>
-                          <div className="w-10 bg-gray-200 rounded-full h-1">
-                            <div 
-                              className={`bg-gradient-to-r ${fillRateColor} h-1 rounded-full transition-all duration-500`}
-                              style={{ width: `${Math.min(cls.fillRate, 100)}%` }}
-                            ></div>
-                          </div>
-                          <span className="text-[10px] font-bold text-gray-800">{cls.fillRate}%</span>
-                        </>
-                      ) : (
-                        <span className="text-[10px] font-bold text-gray-400">-</span>
-                      )}
-                    </div>
+                <div className="flex items-center gap-2 text-xs text-gray-700">
+                  <div className="bg-purple-100 rounded-full p-1">
+                    <MapPin className="w-2.5 h-2.5 text-purple-600" />
                   </div>
-                  <div className="flex items-center justify-between text-[10px]">
-                    <span className="font-medium text-gray-600">Attendance</span>
-                    <span className={`font-bold ${cls.sessionCount === 0 ? 'text-gray-400' : 'text-gray-800'}`}>
-                      {cls.sessionCount === 0 ? '-' : `${cls.avgCheckIns}/${cls.capacity}`}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-[10px]">
-                    <span className="font-medium text-gray-600">Revenue</span>
-                    <span className={`font-bold ${cls.sessionCount === 0 ? 'text-gray-400' : 'text-emerald-600'}`}>
-                      {cls.sessionCount === 0 ? '-' : `₹${(cls.revenue/100).toLocaleString('en-IN')}`}
-                    </span>
-                  </div>
-                </div>
-
-                {/* No Data Message */}
-                {cls.sessionCount === 0 && (
-                  <div className="bg-amber-50/70 rounded-lg p-2 text-center">
-                    <div className="text-[10px] font-semibold text-amber-700">No Historical Data</div>
-                    <div className="text-[9px] text-amber-600 mt-0.5">This class hasn't been held yet</div>
-                  </div>
-                )}
-
-                {/* Client Attendance Patterns */}
-                {(() => {
-                  // Calculate attendance patterns based on historical sessions for this class
-                  const avgCheckIns = cls.avgCheckIns;
-                  
-                  // Don't show patterns if no historical data
-                  if (cls.sessionCount === 0) return null;
-                  
-                  // Estimate client patterns based on fill rate and historical data
-                  const estimateClientPatterns = () => {
-                    if (avgCheckIns === 0) return { fixed: 0, firstTime: 0, unpredictable: 0 };
-                    
-                    // Higher fill rates indicate more consistent attendance
-                    const consistencyFactor = cls.fillRate / 100;
-                    
-                    // Estimate fixed attendees (regular weekly attendees)
-                    // Higher fill rate and more sessions = more fixed attendees
-                    const fixedRatio = Math.min(0.4 + (consistencyFactor * 0.3), 0.7);
-                    const fixed = parseFloat((avgCheckIns * fixedRatio).toFixed(1));
-                    
-                    // Estimate first-time attendees (based on class popularity and newness)
-                    // Popular classes get more first-timers
-                    const firstTimeRatio = cls.fillRate > 80 ? 0.15 : cls.fillRate > 60 ? 0.2 : 0.25;
-                    const firstTime = parseFloat((avgCheckIns * firstTimeRatio).toFixed(1));
-                    
-                    // Rest are unpredictable/occasional attendees
-                    const unpredictable = parseFloat(Math.max(0, avgCheckIns - fixed - firstTime).toFixed(1));
-                    
-                    return { fixed, firstTime, unpredictable };
-                  };
-
-                  const patterns = estimateClientPatterns();
-                  const total = patterns.fixed + patterns.firstTime + patterns.unpredictable;
-
-                  return total > 0 ? (
-                    <div className="bg-blue-50/70 rounded-lg p-2 space-y-1">
-                      <div className="text-[10px] font-semibold text-blue-700 mb-1.5">Client Patterns</div>
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-[9px]">
-                          <div className="flex items-center gap-1">
-                            <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
-                            <span className="text-gray-600">Fixed Weekly</span>
-                          </div>
-                          <span className="font-bold text-green-700">{patterns.fixed}</span>
-                        </div>
-                        <div className="flex items-center justify-between text-[9px]">
-                          <div className="flex items-center gap-1">
-                            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full"></div>
-                            <span className="text-gray-600">First-Timers</span>
-                          </div>
-                          <span className="font-bold text-blue-700">{patterns.firstTime}</span>
-                        </div>
-                        <div className="flex items-center justify-between text-[9px]">
-                          <div className="flex items-center gap-1">
-                            <div className="w-1.5 h-1.5 bg-amber-500 rounded-full"></div>
-                            <span className="text-gray-600">Occasional</span>
-                          </div>
-                          <span className="font-bold text-amber-700">{patterns.unpredictable}</span>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null;
-                })()}
-
-                {/* Show Similar Button */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowSimilarClasses(cls.id);
-                  }}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  className="w-full bg-blue-500 hover:bg-blue-600 text-white text-[9px] font-medium py-1.5 px-2 rounded-md transition-all duration-200 flex items-center justify-center gap-1 shadow-sm hover:shadow-md pointer-events-auto"
-                >
-                  <Repeat className="w-2.5 h-2.5" />
-                  Show Similar
-                </button>
-
-                {/* Hover Hint */}
-                <div className="text-center pt-1 border-t border-gray-200">
-                  <div className="text-[9px] text-blue-600 font-medium flex items-center justify-center gap-1">
-                    <Eye className="w-2.5 h-2.5" />
-                    Click for detailed analytics
-                  </div>
+                  <span className="font-medium truncate">{cls.location}</span>
                 </div>
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+
+              {/* Quick Stats */}
+              <div className="bg-white/70 rounded-lg p-2 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-medium text-gray-600">Fill Rate</span>
+                  <div className="flex items-center gap-1.5">
+                    {cls.sessionCount > 0 ? (
+                      <>
+                        <div className="w-10 bg-gray-200 rounded-full h-1">
+                          <div 
+                            className={`bg-gradient-to-r ${fillRateColor} h-1 rounded-full`}
+                            style={{ width: `${Math.min(cls.fillRate, 100)}%` }}
+                          ></div>
+                        </div>
+                        <span className="text-[10px] font-bold text-gray-800">{cls.fillRate}%</span>
+                      </>
+                    ) : (
+                      <span className="text-[10px] font-bold text-gray-400">-</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="font-medium text-gray-600">Attendance</span>
+                  <span className={`font-bold ${cls.sessionCount === 0 ? 'text-gray-400' : 'text-gray-800'}`}>
+                    {cls.sessionCount === 0 ? '-' : `${cls.avgCheckIns}/${cls.capacity}`}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="font-medium text-gray-600">Revenue</span>
+                  <span className={`font-bold ${cls.sessionCount === 0 ? 'text-gray-400' : 'text-emerald-600'}`}>
+                    {cls.sessionCount === 0 ? '-' : `₹${(cls.revenue/100).toLocaleString('en-IN')}`}
+                  </span>
+                </div>
+              </div>
+
+              {/* No Data Message */}
+              {cls.sessionCount === 0 && (
+                <div className="bg-amber-50/70 rounded-lg p-2 text-center">
+                  <div className="text-[10px] font-semibold text-amber-700">No Historical Data</div>
+                  <div className="text-[9px] text-amber-600 mt-0.5">This class hasn't been held yet</div>
+                </div>
+              )}
+
+              {/* Show Similar Button */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowSimilarClasses(cls.id);
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="w-full bg-blue-500 hover:bg-blue-600 text-white text-[9px] font-medium py-1.5 px-2 rounded-md flex items-center justify-center gap-1 shadow-sm hover:shadow-md"
+              >
+                <Repeat className="w-2.5 h-2.5" />
+                Show Similar
+              </button>
+
+              {/* Hover Hint */}
+              <div className="text-center pt-1 border-t border-gray-200">
+                <div className="text-[9px] text-blue-600 font-medium flex items-center justify-center gap-1">
+                  <Eye className="w-2.5 h-2.5" />
+                  Click for detailed analytics
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -2979,11 +3262,7 @@ function ProScheduler() {
 
       {/* OPTIMIZATION MODE SUMMARY PANEL */}
       {showHighPerformingOnly && optimizedSchedule && (
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-gradient-to-r from-emerald-600 via-green-600 to-teal-600 rounded-2xl p-6 shadow-xl mb-6 text-white"
-        >
+        <div className="bg-gradient-to-r from-emerald-600 via-green-600 to-teal-600 rounded-2xl p-6 shadow-xl mb-6 text-white">
           <div className="flex items-start justify-between mb-4">
             <div className="flex items-center gap-3">
               <div className="bg-white/20 rounded-xl p-3">
@@ -3170,7 +3449,7 @@ function ProScheduler() {
               </div>
             </div>
           )}
-        </motion.div>
+        </div>
       )}
 
       {/* Advanced Control Panel */}
@@ -3233,15 +3512,39 @@ function ProScheduler() {
           </button>
           <button
             onClick={() => setShowHighPerformingOnly(!showHighPerformingOnly)}
+            disabled={isCalculatingOptimization}
             className={`p-3 rounded-xl border transition-all duration-300 ${
-              showHighPerformingOnly
+              isCalculatingOptimization
+                ? 'bg-gradient-to-br from-gray-400 to-gray-500 text-white border-gray-400/30 cursor-wait'
+                : showHighPerformingOnly
                 ? 'bg-gradient-to-br from-green-600 via-emerald-600 to-green-700 text-white border-green-500/30 shadow-lg scale-105'
                 : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-green-300 hover:bg-white/90 text-slate-700'
             }`}
           >
-            <Award className="w-4 h-4 mx-auto mb-1" />
-            <div className="text-xs font-bold">Top Classes</div>
+            {isCalculatingOptimization ? (
+              <Loader2 className="w-4 h-4 mx-auto mb-1 animate-spin" />
+            ) : (
+              <Award className="w-4 h-4 mx-auto mb-1" />
+            )}
+            <div className="text-xs font-bold">{isCalculatingOptimization ? 'Loading...' : 'Top Classes'}</div>
           </button>
+          {/* Regenerate button - only visible when Top Classes is active */}
+          {showHighPerformingOnly && (
+            <button
+              onClick={() => {
+                // Generate new random seed for unique iteration
+                setOptimizationSettings(prev => ({
+                  ...prev,
+                  randomizationSeed: Date.now()
+                }));
+              }}
+              className="p-3 rounded-xl border transition-all duration-300 bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-500 text-white border-indigo-500/30 shadow-lg hover:scale-105 animate-pulse"
+              title="Generate a new unique schedule iteration"
+            >
+              <RefreshCw className="w-4 h-4 mx-auto mb-1" />
+              <div className="text-xs font-bold">Regenerate</div>
+            </button>
+          )}
           <button
             onClick={() => setShowDiscontinued(!showDiscontinued)}
             className={`p-3 rounded-xl border transition-all duration-300 ${
@@ -3276,6 +3579,491 @@ function ProScheduler() {
           </button>
         </div>
       </div>
+
+      {/* Top Classes AI Optimization Panel */}
+      {showHighPerformingOnly && (
+        <div className="bg-gradient-to-r from-emerald-50 via-green-50 to-teal-50 rounded-2xl border border-emerald-200 shadow-lg mb-6 overflow-hidden">
+          <div className="bg-gradient-to-r from-emerald-600 to-green-600 px-6 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Award className="w-5 h-5 text-white" />
+              <h2 className="text-lg font-bold text-white">AI Schedule Optimization</h2>
+              <span className="bg-white/20 text-white text-xs px-2 py-1 rounded-full font-medium">
+                {optimizedSchedule?.summary.replacementsFound || 0} optimizations
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setOptimizationSettings(prev => ({ ...prev, randomizationSeed: Date.now() }))}
+                className="flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Generate New Iteration
+              </button>
+              <button
+                onClick={handleAIOptimization}
+                disabled={isAIOptimizing}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                  isAIOptimizing 
+                    ? 'bg-purple-400/50 text-white/70 cursor-not-allowed' 
+                    : 'bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white shadow-lg hover:shadow-xl'
+                }`}
+              >
+                {isAIOptimizing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    AI Optimize
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+          
+          <div className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+              {/* Strategy Selector */}
+              <div>
+                <label className="block text-sm font-bold text-emerald-800 mb-2">Optimization Strategy</label>
+                <select
+                  value={optimizationSettings.strategy}
+                  onChange={(e) => setOptimizationSettings(prev => ({ 
+                    ...prev, 
+                    strategy: e.target.value as OptimizationStrategy,
+                    randomizationSeed: Date.now() // New seed when strategy changes
+                  }))}
+                  className="w-full p-2.5 border border-emerald-200 rounded-lg bg-white text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                >
+                  <option value="balanced">⚖️ Balanced (All factors)</option>
+                  <option value="maximize_attendance">📈 Maximize Attendance</option>
+                  <option value="trainer_development">🌱 Trainer Development</option>
+                  <option value="format_diversity">🎨 Format Diversity</option>
+                  <option value="peak_optimization">⏰ Peak Time Focus</option>
+                  <option value="member_retention">❤️ Member Retention</option>
+                </select>
+                <p className="text-xs text-emerald-600 mt-1">
+                  {optimizationSettings.strategy === 'balanced' && 'Equal weight to all optimization factors'}
+                  {optimizationSettings.strategy === 'maximize_attendance' && 'Prioritize high-attendance predictions'}
+                  {optimizationSettings.strategy === 'trainer_development' && 'Focus on developing newer trainers'}
+                  {optimizationSettings.strategy === 'format_diversity' && 'Ensure varied format mix daily'}
+                  {optimizationSettings.strategy === 'peak_optimization' && 'Optimize peak hours (7-9am, 5-8pm)'}
+                  {optimizationSettings.strategy === 'member_retention' && 'Prioritize member preferences'}
+                </p>
+              </div>
+              
+              {/* Target Trainer Hours */}
+              <div>
+                <label className="block text-sm font-bold text-emerald-800 mb-2">Target Trainer Hours</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="10"
+                    max="18"
+                    value={optimizationSettings.targetTrainerHours}
+                    onChange={(e) => setOptimizationSettings(prev => ({ 
+                      ...prev, 
+                      targetTrainerHours: parseInt(e.target.value)
+                    }))}
+                    className="flex-1 h-2 bg-emerald-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-sm font-bold text-emerald-700 w-12 text-center">
+                    {optimizationSettings.targetTrainerHours}hrs
+                  </span>
+                </div>
+                <p className="text-xs text-emerald-600 mt-1">Ideal weekly hours per trainer</p>
+              </div>
+              
+              {/* Max Trainer Hours */}
+              <div>
+                <label className="block text-sm font-bold text-emerald-800 mb-2">Max Trainer Hours</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="12"
+                    max="20"
+                    value={optimizationSettings.maxTrainerHours}
+                    onChange={(e) => setOptimizationSettings(prev => ({ 
+                      ...prev, 
+                      maxTrainerHours: parseInt(e.target.value)
+                    }))}
+                    className="flex-1 h-2 bg-emerald-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <span className="text-sm font-bold text-emerald-700 w-12 text-center">
+                    {optimizationSettings.maxTrainerHours}hrs
+                  </span>
+                </div>
+                <p className="text-xs text-emerald-600 mt-1">Maximum allowed per trainer</p>
+              </div>
+              
+              {/* Quick Stats */}
+              <div className="bg-white/70 rounded-xl p-4 border border-emerald-100">
+                <div className="text-sm font-bold text-emerald-800 mb-2">Optimization Summary</div>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Total Classes</span>
+                    <span className="font-bold text-gray-800">{optimizedSchedule?.summary.totalClasses || 0}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">High Performing</span>
+                    <span className="font-bold text-emerald-600">{optimizedSchedule?.summary.highPerforming || 0}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Underperforming</span>
+                    <span className="font-bold text-amber-600">{optimizedSchedule?.summary.underperforming || 0}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Optimized</span>
+                    <span className="font-bold text-green-600">{optimizedSchedule?.summary.replacementsFound || 0}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {/* Advanced Options Toggle */}
+            <details className="mt-4">
+              <summary className="cursor-pointer text-sm font-medium text-emerald-700 hover:text-emerald-800">
+                ⚙️ Advanced Options
+              </summary>
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-white/50 rounded-xl">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={optimizationSettings.minimizeTrainersPerSlot}
+                    onChange={(e) => setOptimizationSettings(prev => ({ 
+                      ...prev, 
+                      minimizeTrainersPerSlot: e.target.checked
+                    }))}
+                    className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span className="text-gray-700">Minimize trainers per time slot</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={optimizationSettings.avoidMultiLocationDays}
+                    onChange={(e) => setOptimizationSettings(prev => ({ 
+                      ...prev, 
+                      avoidMultiLocationDays: e.target.checked
+                    }))}
+                    className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span className="text-gray-700">Avoid multi-location days</span>
+                </label>
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-gray-700">Min days off:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="3"
+                    value={optimizationSettings.minDaysOff}
+                    onChange={(e) => setOptimizationSettings(prev => ({ 
+                      ...prev, 
+                      minDaysOff: parseInt(e.target.value) || 2
+                    }))}
+                    className="w-16 p-1 border border-emerald-200 rounded text-center"
+                  />
+                </div>
+              </div>
+            </details>
+            
+            {/* AI Optimization Results Panel */}
+            {showAIResults && aiOptimizationResult && (
+              <div className="mt-6 bg-gradient-to-r from-purple-50 via-indigo-50 to-violet-50 rounded-xl border border-purple-200 overflow-hidden">
+                <div className="bg-gradient-to-r from-purple-600 to-indigo-600 px-5 py-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Brain className="w-5 h-5 text-white" />
+                    <h3 className="font-bold text-white">Gemini AI Analysis</h3>
+                    <span className="bg-white/20 text-white text-xs px-2 py-0.5 rounded-full">
+                      {appliedAIReplacements.size} applied to calendar
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setAppliedAIReplacements(new Set());
+                        setAIOptimizationResult(null);
+                      }}
+                      className="text-white/70 hover:text-white text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded-lg transition-colors"
+                    >
+                      Reset All
+                    </button>
+                    <button
+                      onClick={() => setShowAIResults(false)}
+                      className="text-white/70 hover:text-white transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="p-5 space-y-5">
+                  {/* Summary Stats */}
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="bg-white/70 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-purple-700">{aiOptimizationResult.replacements.length}</div>
+                      <div className="text-xs text-gray-600">Optimizations Applied</div>
+                    </div>
+                    <div className="bg-white/70 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-green-600">
+                        +{Math.round(aiOptimizationResult.replacements.reduce((sum, r) => sum + (r.replacement.projectedFillRate - r.original.fillRate), 0) / Math.max(1, aiOptimizationResult.replacements.length))}%
+                      </div>
+                      <div className="text-xs text-gray-600">Avg Fill Rate Increase</div>
+                    </div>
+                    <div className="bg-white/70 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-indigo-600">
+                        {Math.round(aiOptimizationResult.replacements.reduce((sum, r) => sum + r.replacement.confidence, 0) / Math.max(1, aiOptimizationResult.replacements.length))}%
+                      </div>
+                      <div className="text-xs text-gray-600">Avg Confidence</div>
+                    </div>
+                  </div>
+
+                  {/* AI Insights */}
+                  {aiOptimizationResult.insights && aiOptimizationResult.insights.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-bold text-purple-800 mb-2 flex items-center gap-2">
+                        <Sparkles className="w-4 h-4" />
+                        AI Insights
+                      </h4>
+                      <div className="space-y-2">
+                        {aiOptimizationResult.insights.map((insight, idx) => (
+                          <div key={idx} className="flex items-start gap-2 text-sm text-purple-700 bg-white/60 rounded-lg p-3">
+                            <span className="text-purple-500">•</span>
+                            <span>{insight}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Recommendations with Action Buttons */}
+                  {aiOptimizationResult.recommendations && aiOptimizationResult.recommendations.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-bold text-purple-800 mb-2 flex items-center gap-2">
+                        <Activity className="w-4 h-4" />
+                        Recommendations
+                      </h4>
+                      <div className="space-y-3">
+                        {aiOptimizationResult.recommendations.slice(0, 5).map((rec, idx) => (
+                          <div key={idx} className="bg-white/80 rounded-lg p-4 border border-purple-100">
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex items-center gap-2">
+                                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                  rec.type === 'add' ? 'bg-green-100 text-green-700' :
+                                  rec.type === 'remove' ? 'bg-red-100 text-red-700' :
+                                  rec.type === 'swap' ? 'bg-blue-100 text-blue-700' :
+                                  rec.type === 'trainer_change' ? 'bg-purple-100 text-purple-700' :
+                                  'bg-yellow-100 text-yellow-700'
+                                }`}>
+                                  {rec.type.replace('_', ' ').toUpperCase()}
+                                </span>
+                                <span className="font-bold text-purple-800">{rec.title}</span>
+                              </div>
+                              <span className="text-xs bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full">
+                                {rec.confidence}% confidence
+                              </span>
+                            </div>
+                            <p className="text-sm text-gray-600 mb-2">{rec.description}</p>
+                            
+                            {/* Reasoning - data-backed explanation */}
+                            {(rec as any).reasoning && (
+                              <div className="bg-purple-50/50 rounded-lg p-2 mb-2">
+                                <div className="text-xs font-medium text-purple-700 mb-1">💡 Why this works:</div>
+                                <p className="text-xs text-purple-600">{(rec as any).reasoning}</p>
+                              </div>
+                            )}
+                            
+                            {/* Data Points */}
+                            {(rec as any).dataPoints && (rec as any).dataPoints.length > 0 && (
+                              <div className="mb-2">
+                                <div className="text-xs font-medium text-gray-500 mb-1">📊 Supporting Data:</div>
+                                <ul className="text-xs text-gray-600 space-y-0.5">
+                                  {(rec as any).dataPoints.slice(0, 4).map((dp: string, dpIdx: number) => (
+                                    <li key={dpIdx} className="flex items-start gap-1">
+                                      <span className="text-purple-400">•</span>
+                                      <span>{dp}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            
+                            <p className="text-xs text-purple-600 italic mb-3">📈 Expected Impact: {rec.impact}</p>
+                            
+                            {/* Alternatives */}
+                            {rec.alternatives && rec.alternatives.length > 0 && (
+                              <div className="mb-3">
+                                <div className="text-xs text-gray-500 mb-1">Alternative options:</div>
+                                <div className="flex flex-wrap gap-1">
+                                  {rec.alternatives.map((alt, altIdx) => (
+                                    <span key={altIdx} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full hover:bg-purple-100 hover:text-purple-600 cursor-pointer transition-colors">
+                                      {alt}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* Action Buttons */}
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => {
+                                  if (rec.actionData && applyOptimization) {
+                                    applyOptimization([rec.actionData], []);
+                                    // Show success toast or visual feedback
+                                    const newSet = new Set(appliedAIReplacements);
+                                    // Add a key if we can derive one, or just rely on store update
+                                    setAppliedAIReplacements(newSet);
+                                  } else {
+                                    alert(`Action: ${rec.type} - ${rec.title}\n\nThis recommendation requires manual adjustment.`);
+                                  }
+                                }}
+                                className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-xs font-medium py-2 px-3 rounded-lg transition-colors"
+                              >
+                                Apply Recommendation
+                              </button>
+                              <button
+                                className="bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium py-2 px-3 rounded-lg transition-colors"
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Format Mix Analysis */}
+                  {aiOptimizationResult.formatMixAnalysis && (
+                    <div>
+                      <h4 className="text-sm font-bold text-purple-800 mb-2 flex items-center gap-2">
+                        <Layers className="w-4 h-4" />
+                        Format Mix Analysis
+                      </h4>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        {Object.entries(aiOptimizationResult.formatMixAnalysis.current).slice(0, 8).map(([format, percentage]) => (
+                          <div key={format} className="bg-white/70 rounded-lg p-3 text-center">
+                            <div className="text-xs text-gray-600 mb-1">{format}</div>
+                            <div className="text-lg font-bold text-purple-700">{percentage}%</div>
+                            <div className="text-xs text-gray-500">
+                              Target: {aiOptimizationResult.formatMixAnalysis.recommended[format] || '—'}%
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {aiOptimizationResult.formatMixAnalysis.adjustments.length > 0 && (
+                        <div className="mt-3 text-xs text-purple-600 bg-purple-50 rounded-lg p-3">
+                          <strong>Recommended Adjustments:</strong>
+                          <ul className="mt-1 space-y-1">
+                            {aiOptimizationResult.formatMixAnalysis.adjustments.slice(0, 3).map((adj, idx) => (
+                              <li key={idx}>• {adj}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Applied Replacements Summary */}
+                  {aiOptimizationResult.replacements.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-bold text-purple-800 mb-2 flex items-center gap-2">
+                        <ArrowRightLeft className="w-4 h-4" />
+                        Applied Class Replacements ({appliedAIReplacements.size})
+                      </h4>
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {aiOptimizationResult.replacements.map((replacement, idx) => {
+                          const key = `${replacement.original.className}-${replacement.original.trainer}-${replacement.original.day}-${replacement.original.time}-${replacement.original.location}`;
+                          const isApplied = appliedAIReplacements.has(key);
+                          
+                          return (
+                            <div key={idx} className={`rounded-lg p-3 border ${isApplied ? 'bg-purple-50 border-purple-200' : 'bg-white/60 border-gray-200'}`}>
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center gap-2 flex-1">
+                                  <span className="text-red-500 line-through text-xs">{replacement.original.className}</span>
+                                  <ArrowRightLeft className="w-3 h-3 text-gray-400" />
+                                  <span className="text-green-600 font-bold text-xs">{replacement.replacement.className}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                    replacement.replacement.confidence >= 80 ? 'bg-green-100 text-green-700' :
+                                    replacement.replacement.confidence >= 60 ? 'bg-yellow-100 text-yellow-700' :
+                                    'bg-gray-100 text-gray-600'
+                                  }`}>
+                                    {replacement.replacement.confidence}%
+                                  </span>
+                                  {isApplied ? (
+                                    <span className="text-xs bg-purple-600 text-white px-2 py-0.5 rounded-full flex items-center gap-1">
+                                      <Sparkles className="w-2.5 h-2.5" /> Applied
+                                    </span>
+                                  ) : (
+                                    <button
+                                      onClick={() => {
+                                        if (applyOptimization) {
+                                          applyOptimization([{
+                                            original: replacement.original,
+                                            replacement: replacement.replacement
+                                          }], []);
+                                          
+                                          const newSet = new Set(appliedAIReplacements);
+                                          newSet.add(key);
+                                          newSet.add(key.toLowerCase());
+                                          setAppliedAIReplacements(newSet);
+                                        }
+                                      }}
+                                      className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-2 py-0.5 rounded-full transition-colors"
+                                    >
+                                      Apply
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              
+                              {/* Details row */}
+                              <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                                <span>📍 {replacement.original.location} • {replacement.original.day} {replacement.original.time}</span>
+                                <span className="flex items-center gap-2">
+                                  <span className="text-red-400">{replacement.original.fillRate}% →</span>
+                                  <span className="text-green-600 font-medium">{replacement.replacement.projectedFillRate}%</span>
+                                </span>
+                              </div>
+                              
+                              {/* Trainer change */}
+                              <div className="text-xs text-gray-500 mb-1">
+                                👤 {replacement.original.trainer} → <span className="text-purple-600 font-medium">{replacement.replacement.trainer}</span>
+                              </div>
+                              
+                              {/* Reason */}
+                              <div className="text-xs text-purple-600 bg-purple-50 rounded p-1.5 mt-1">
+                                💡 {replacement.replacement.reason}
+                              </div>
+                              
+                              {/* Data points if available */}
+                              {(replacement.replacement as any).dataPoints && (replacement.replacement as any).dataPoints.length > 0 && (
+                                <div className="mt-1.5 text-xs text-gray-500">
+                                  {(replacement.replacement as any).dataPoints.slice(0, 2).map((dp: string, dpIdx: number) => (
+                                    <div key={dpIdx} className="flex items-start gap-1">
+                                      <span className="text-purple-400">•</span>
+                                      <span>{dp}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Advanced Filters Panel */}
       {showAdvancedFilters && (
@@ -3683,7 +4471,7 @@ function ProScheduler() {
                 
                 return Array.from(trainerHours.entries())
                   .sort((a, b) => b[1].hours - a[1].hours)
-                  .map(([trainer, data], idx) => {
+                  .map(([trainer, data]) => {
                     
                     
                     const isSelected = filters.trainers.includes(trainer);
@@ -3692,11 +4480,8 @@ function ProScheduler() {
                     const initials = trainer.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
                     
                     return (
-                      <motion.div
+                      <div
                         key={trainer}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: idx * 0.03, duration: 0.25 }}
                         onClick={() => {
                           if (isSelected) {
                             setFilters({ ...filters, trainers: filters.trainers.filter(t => t !== trainer) });
@@ -3704,7 +4489,7 @@ function ProScheduler() {
                             setFilters({ ...filters, trainers: [...filters.trainers, trainer] });
                           }
                         }}
-                        className={`group relative bg-white rounded-lg p-2 hover:shadow-md transition-all cursor-pointer border ${isSelected ? 'ring-2 ring-blue-200' : 'hover:shadow-lg'}`}
+                        className={`group relative bg-white rounded-lg p-2 hover:shadow-md cursor-pointer border ${isSelected ? 'ring-2 ring-blue-200' : 'hover:shadow-lg'}`}
                         style={{ minWidth: 140 }}
                       >
                         {isSelected && (
@@ -3737,7 +4522,7 @@ function ProScheduler() {
                           </div>
                           <div className="text-[10px] text-slate-400">{data.classes} classes</div>
                         </div>
-                      </motion.div>
+                      </div>
                     );
                   });
               })()}
@@ -3877,14 +4662,12 @@ function ProScheduler() {
                 const totalFormats = Object.keys(formatCounts).length;
                 
                 return (
-                  <motion.div 
+                  <div 
                     key={day.key} 
-                    initial={{ opacity: 0, y: -10 }}
-                    animate={{ opacity: 1, y: 0 }}
                     className="font-medium text-slate-800 text-sm text-center bg-gradient-to-br from-slate-50 to-blue-50 rounded-lg border border-slate-200 overflow-hidden"
                   >
                     <div 
-                      className="p-2 cursor-pointer hover:bg-blue-50 transition-colors"
+                      className="p-2 cursor-pointer hover:bg-blue-50"
                       onClick={() => {
                         setExpandedDayFormats(prev => {
                           const next = new Set(prev);
@@ -3899,21 +4682,14 @@ function ProScheduler() {
                     >
                       <div className="flex items-center justify-center gap-1">
                         <span>{day.short}</span>
-                        <ChevronDown className={`w-3 h-3 text-blue-600 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                        <ChevronDown className={`w-3 h-3 text-blue-600 ${isExpanded ? 'rotate-180' : ''}`} />
                       </div>
                       <div className="text-xs text-blue-600 font-bold mt-1">{dayClasses.length}</div>
                     </div>
                     
-                    {/* Collapsible Format Mix */}
-                    <AnimatePresence>
-                      {isExpanded && totalFormats > 0 && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="border-t border-slate-200 bg-white"
-                        >
+                    {/* Collapsible Format Mix - simplified */}
+                    {isExpanded && totalFormats > 0 && (
+                      <div className="border-t border-slate-200 bg-white">
                           <div className="p-2 max-h-[300px] overflow-y-auto">
                             <div className="text-[9px] uppercase tracking-wider text-slate-500 font-bold mb-1.5">Format Mix ({totalFormats})</div>
                             <div className="space-y-2">
@@ -3984,10 +4760,9 @@ function ProScheduler() {
                               )}
                             </div>
                           </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </motion.div>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
 
@@ -4013,81 +4788,86 @@ function ProScheduler() {
                   {DAYS_OF_WEEK.map(day => (
                     <div 
                       key={`${day.key}-${slot.time24}`} 
-                      className={`min-h-[80px] relative rounded-lg transition-all ${
+                      className={`min-h-[80px] relative rounded-lg ${
                         dropTarget?.day === day.key && dropTarget?.time === slot.time24 
-                          ? 'ring-4 ring-blue-400 bg-blue-50' 
-                          : ''
+                          ? 'ring-2 ring-blue-400 bg-blue-50' 
+                          : 'bg-gray-50/30'
                       }`}
                       onDragOver={(e) => {
                         e.preventDefault();
+                        e.stopPropagation();
                         e.dataTransfer.dropEffect = 'move';
+                        if (dropTarget?.day !== day.key || dropTarget?.time !== slot.time24) {
+                          setDropTarget({ day: day.key, time: slot.time24 });
+                        }
+                      }}
+                      onDragEnter={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
                         setDropTarget({ day: day.key, time: slot.time24 });
                       }}
-                      onDragLeave={() => {
-                        setDropTarget(null);
+                      onDragLeave={(e) => {
+                        e.preventDefault();
+                        // Only clear if we're actually leaving the element
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = e.clientX;
+                        const y = e.clientY;
+                        if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+                          setDropTarget(null);
+                        }
                       }}
                       onDrop={(e) => {
                         e.preventDefault();
-                        console.log('📍 Drop event:', { 
-                          draggedClass: draggedClass?.class, 
-                          targetDay: day.key, 
-                          targetTime: slot.time24,
-                          currentDay: draggedClass?.day,
-                          currentTime: draggedClass?.time
-                        });
-                        if (draggedClass && (draggedClass.day !== day.key || draggedClass.time !== slot.time24)) {
+                        e.stopPropagation();
+                        
+                        // Get class data from dataTransfer or state
+                        let classData = draggedClass;
+                        
+                        // Try to get from dataTransfer as backup
+                        if (!classData) {
+                          try {
+                            const jsonData = e.dataTransfer.getData('application/json');
+                            if (jsonData) {
+                              classData = JSON.parse(jsonData);
+                            }
+                          } catch (err) {
+                            console.warn('Failed to parse drag data');
+                          }
+                        }
+                        
+                        if (classData && (classData.day !== day.key || classData.time !== slot.time24)) {
                           const store = useDashboardStore.getState();
                           if (store.updateClassSchedule) {
-                            console.log('✨ Updating class schedule...');
-                            store.updateClassSchedule(draggedClass.id, day.key, slot.time24);
-                            console.log(`✓ Moved ${draggedClass.class} to ${day.full} at ${slot.time12}`);
-                          } else {
-                            console.error('❌ updateClassSchedule not available in store');
+                            store.updateClassSchedule(classData.id, day.key, slot.time24);
                           }
-                        } else {
-                          console.log('⚠️ No move needed - same position');
                         }
+                        
                         setDraggedClass(null);
                         setDropTarget(null);
                       }}
                     >
                       {scheduleGrid[day.key]?.[slot.time24]?.map(cls => renderClassCard(cls))}
                       
-                      {/* Drop Preview - Show ghost of dragged class */}
+                      {/* Drop Preview - Simple indicator */}
                       {draggedClass && dropTarget?.day === day.key && dropTarget?.time === slot.time24 && (
-                        <motion.div
-                          initial={{ opacity: 0, scale: 0.8 }}
-                          animate={{ opacity: 0.5, scale: 1 }}
-                          className="absolute inset-0 bg-blue-500 rounded-lg border-2 border-dashed border-blue-600 flex items-center justify-center pointer-events-none z-10"
-                        >
-                          <div className="text-center text-white font-bold text-sm px-3">
-                            <div className="flex items-center gap-2 justify-center mb-1">
-                              <span>↓</span>
-                              <span>Drop {draggedClass.class} here</span>
-                              <span>↓</span>
-                            </div>
-                            <div className="text-xs opacity-80">
-                              {draggedClass.trainer} • {day.full} at {slot.time12}
-                            </div>
+                        <div className="absolute inset-0 bg-blue-100 rounded-lg border-2 border-dashed border-blue-500 flex items-center justify-center pointer-events-none z-10">
+                          <div className="text-center text-blue-700 font-medium text-xs px-2">
+                            Drop here
                           </div>
-                        </motion.div>
+                        </div>
                       )}
                       
                       {/* Empty slot - add class button */}
                       {(!scheduleGrid[day.key]?.[slot.time24] || scheduleGrid[day.key][slot.time24].length === 0) && !draggedClass && (
-                        <motion.div 
-                          whileHover={{ scale: 1.02 }}
+                        <div 
                           onClick={() => {
                             setSelectedTimeSlot({ day: day.key, time: slot.time24 });
                             setShowAddModal(true);
                           }}
-                          className="h-full border-2 border-dashed border-slate-200 rounded-xl flex items-center justify-center opacity-50 hover:opacity-100 cursor-pointer group transition-all duration-200 hover:bg-gradient-to-br hover:from-blue-50 hover:to-slate-50 hover:border-blue-300"
+                          className="h-full min-h-[60px] border border-dashed border-slate-200 rounded-lg flex items-center justify-center opacity-40 hover:opacity-100 cursor-pointer hover:bg-blue-50 hover:border-blue-300"
                         >
-                          <div className="text-center">
-                            <Plus className="w-4 h-4 text-slate-400 group-hover:text-blue-500 mx-auto mb-1" />
-                            <span className="text-[10px] text-slate-400 group-hover:text-blue-600 font-medium">Add</span>
-                          </div>
-                        </motion.div>
+                          <Plus className="w-4 h-4 text-slate-400" />
+                        </div>
                       )}
                     </div>
                   ))}
@@ -4181,72 +4961,64 @@ function ProScheduler() {
                                 </div>
                               </div>
                               
-                              {/* Collapsible Format Mix */}
-                              <AnimatePresence>
-                                {isExpanded && totalFormats > 0 && (
-                                  <motion.div
-                                    initial={{ height: 0, opacity: 0 }}
-                                    animate={{ height: 'auto', opacity: 1 }}
-                                    exit={{ height: 0, opacity: 0 }}
-                                    transition={{ duration: 0.2 }}
-                                    className="border-t border-slate-200 bg-white"
-                                  >
-                                    <div className="p-2 max-h-[200px] overflow-y-auto">
-                                      <div className="text-[9px] uppercase tracking-wider text-slate-500 font-bold mb-1.5">Format Mix ({totalFormats})</div>
-                                      <div className="space-y-2">
-                                        {groupedFormats.beginner.length > 0 && (
-                                          <div>
-                                            <div className="text-[8px] uppercase tracking-wider text-green-600 font-bold mb-1 flex items-center gap-1">
-                                              <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                                              Beginner ({groupedFormats.beginner.length})
-                                            </div>
-                                            <div className="space-y-0.5 ml-3">
-                                              {groupedFormats.beginner.map(([format, count]) => (
-                                                <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-green-50 px-1 py-0.5 rounded">
-                                                  <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
-                                                  <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
-                                                </div>
-                                              ))}
-                                            </div>
+                              {/* Collapsible Format Mix - simplified */}
+                              {isExpanded && totalFormats > 0 && (
+                                <div className="border-t border-slate-200 bg-white">
+                                  <div className="p-2 max-h-[200px] overflow-y-auto">
+                                    <div className="text-[9px] uppercase tracking-wider text-slate-500 font-bold mb-1.5">Format Mix ({totalFormats})</div>
+                                    <div className="space-y-2">
+                                      {groupedFormats.beginner.length > 0 && (
+                                        <div>
+                                          <div className="text-[8px] uppercase tracking-wider text-green-600 font-bold mb-1 flex items-center gap-1">
+                                            <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                            Beginner ({groupedFormats.beginner.length})
                                           </div>
-                                        )}
-                                        {groupedFormats.intermediate.length > 0 && (
-                                          <div>
-                                            <div className="text-[8px] uppercase tracking-wider text-blue-600 font-bold mb-1 flex items-center gap-1">
-                                              <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                                              Intermediate ({groupedFormats.intermediate.length})
-                                            </div>
-                                            <div className="space-y-0.5 ml-3">
-                                              {groupedFormats.intermediate.map(([format, count]) => (
-                                                <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-blue-50 px-1 py-0.5 rounded">
-                                                  <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
-                                                  <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
-                                                </div>
-                                              ))}
-                                            </div>
+                                          <div className="space-y-0.5 ml-3">
+                                            {groupedFormats.beginner.map(([format, count]) => (
+                                              <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-green-50 px-1 py-0.5 rounded">
+                                                <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                                <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                              </div>
+                                            ))}
                                           </div>
-                                        )}
-                                        {groupedFormats.advanced.length > 0 && (
-                                          <div>
-                                            <div className="text-[8px] uppercase tracking-wider text-red-600 font-bold mb-1 flex items-center gap-1">
-                                              <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                                              Advanced ({groupedFormats.advanced.length})
-                                            </div>
-                                            <div className="space-y-0.5 ml-3">
-                                              {groupedFormats.advanced.map(([format, count]) => (
-                                                <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-red-50 px-1 py-0.5 rounded">
-                                                  <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
-                                                  <span className="bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
-                                                </div>
-                                              ))}
-                                            </div>
+                                        </div>
+                                      )}
+                                      {groupedFormats.intermediate.length > 0 && (
+                                        <div>
+                                          <div className="text-[8px] uppercase tracking-wider text-blue-600 font-bold mb-1 flex items-center gap-1">
+                                            <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                            Intermediate ({groupedFormats.intermediate.length})
                                           </div>
-                                        )}
-                                      </div>
+                                          <div className="space-y-0.5 ml-3">
+                                            {groupedFormats.intermediate.map(([format, count]) => (
+                                              <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-blue-50 px-1 py-0.5 rounded">
+                                                <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                                <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+                                      {groupedFormats.advanced.length > 0 && (
+                                        <div>
+                                          <div className="text-[8px] uppercase tracking-wider text-red-600 font-bold mb-1 flex items-center gap-1">
+                                            <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                                            Advanced ({groupedFormats.advanced.length})
+                                          </div>
+                                          <div className="space-y-0.5 ml-3">
+                                            {groupedFormats.advanced.map(([format, count]) => (
+                                              <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-red-50 px-1 py-0.5 rounded">
+                                                <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                                <span className="bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
                                     </div>
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                             {/* Location Sub-headers - Minimalistic */}
                             <div className="flex">
@@ -4351,18 +5123,14 @@ function ProScheduler() {
                                       ))}
                                     </div>
                                     
-                                    {/* Drop Preview */}
+                                    {/* Drop Preview - simplified */}
                                     {draggedClass && dropTarget?.day === day.key && dropTarget?.time === slot.time24 && (
-                                      <motion.div
-                                        initial={{ opacity: 0, scale: 0.8 }}
-                                        animate={{ opacity: 0.5, scale: 1 }}
-                                        className="absolute inset-0 bg-blue-500 rounded-lg border-2 border-dashed border-blue-600 flex items-center justify-center pointer-events-none z-10"
-                                      >
+                                      <div className="absolute inset-0 bg-blue-500 opacity-50 rounded-lg border-2 border-dashed border-blue-600 flex items-center justify-center pointer-events-none z-10">
                                         <div className="text-center text-white font-bold text-xs px-2">
                                           <div>↓ Drop here ↓</div>
                                           <div className="text-[10px] opacity-80">{draggedClass.class}</div>
                                         </div>
-                                      </motion.div>
+                                      </div>
                                     )}
                                   </div>
                                 );
@@ -4394,18 +5162,15 @@ function ProScheduler() {
           {/* Horizontal Timeline View - All timeslots across week */}
           {calendarViewMode === 'horizontal' && (
             <div className="space-y-4">
-              {TIME_SLOTS.map((slot, idx) => {
+              {TIME_SLOTS.map((slot) => {
                 const slotClasses = filteredClasses.filter(cls => cls.time === slot.time24);
                 const slotHour = parseInt(slot.time24.split(':')[0]);
                 const isNonFunctional = slotHour < 7 || slotHour > 20;
                 if (!showNonFunctionalHours && isNonFunctional && slotClasses.length === 0) return null;
                 
                 return (
-                  <motion.div 
+                  <div 
                     key={slot.time24}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: idx * 0.03 }}
                     className="relative"
                   >
                     {/* Timeline connector */}
@@ -4479,17 +5244,13 @@ function ProScheduler() {
                                         </div>
                                       )}
                                       
-                                      {/* Drop Preview */}
+                                      {/* Drop Preview - simplified */}
                                       {draggedClass && dropTarget?.day === day.key && dropTarget?.time === slot.time24 && (
-                                        <motion.div
-                                          initial={{ opacity: 0, scale: 0.8 }}
-                                          animate={{ opacity: 0.5, scale: 1 }}
-                                          className="absolute inset-0 bg-blue-500 rounded-lg border-2 border-dashed border-blue-600 flex items-center justify-center pointer-events-none z-10"
-                                        >
+                                        <div className="absolute inset-0 bg-blue-500 opacity-50 rounded-lg border-2 border-dashed border-blue-600 flex items-center justify-center pointer-events-none z-10">
                                           <div className="text-center text-white font-bold text-[10px] px-1">
                                             ↓ Drop ↓
                                           </div>
-                                        </motion.div>
+                                        </div>
                                       )}
                                     </div>
                                   </div>
@@ -4504,7 +5265,7 @@ function ProScheduler() {
                         )}
                       </div>
                     </div>
-                  </motion.div>
+                  </div>
                 );
               })}
             </div>
@@ -4587,72 +5348,64 @@ function ProScheduler() {
                         <div className="text-xs text-emerald-600 font-semibold mt-1">{formatRevenue(totalRevenue)}</div>
                       </div>
                       
-                      {/* Collapsible Format Mix */}
-                      <AnimatePresence>
-                        {isExpanded && totalFormats > 0 && (
-                          <motion.div
-                            initial={{ height: 0, opacity: 0 }}
-                            animate={{ height: 'auto', opacity: 1 }}
-                            exit={{ height: 0, opacity: 0 }}
-                            transition={{ duration: 0.2 }}
-                            className="border-t border-gray-200 bg-white"
-                          >
-                            <div className="p-2 max-h-[200px] overflow-y-auto">
-                              <div className="text-[9px] uppercase tracking-wider text-slate-500 font-bold mb-1.5">Format Mix ({totalFormats})</div>
-                              <div className="space-y-2">
-                                {groupedFormats.beginner.length > 0 && (
-                                  <div>
-                                    <div className="text-[8px] uppercase tracking-wider text-green-600 font-bold mb-1 flex items-center gap-1">
-                                      <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                                      Beginner ({groupedFormats.beginner.length})
-                                    </div>
-                                    <div className="space-y-0.5 ml-3">
-                                      {groupedFormats.beginner.map(([format, count]) => (
-                                        <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-green-50 px-1 py-0.5 rounded">
-                                          <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
-                                          <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
-                                        </div>
-                                      ))}
-                                    </div>
+                      {/* Collapsible Format Mix - simplified */}
+                      {isExpanded && totalFormats > 0 && (
+                        <div className="border-t border-gray-200 bg-white">
+                          <div className="p-2 max-h-[200px] overflow-y-auto">
+                            <div className="text-[9px] uppercase tracking-wider text-slate-500 font-bold mb-1.5">Format Mix ({totalFormats})</div>
+                            <div className="space-y-2">
+                              {groupedFormats.beginner.length > 0 && (
+                                <div>
+                                  <div className="text-[8px] uppercase tracking-wider text-green-600 font-bold mb-1 flex items-center gap-1">
+                                    <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                    Beginner ({groupedFormats.beginner.length})
                                   </div>
-                                )}
-                                {groupedFormats.intermediate.length > 0 && (
-                                  <div>
-                                    <div className="text-[8px] uppercase tracking-wider text-blue-600 font-bold mb-1 flex items-center gap-1">
-                                      <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                                      Intermediate ({groupedFormats.intermediate.length})
-                                    </div>
-                                    <div className="space-y-0.5 ml-3">
-                                      {groupedFormats.intermediate.map(([format, count]) => (
-                                        <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-blue-50 px-1 py-0.5 rounded">
-                                          <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
-                                          <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
-                                        </div>
-                                      ))}
-                                    </div>
+                                  <div className="space-y-0.5 ml-3">
+                                    {groupedFormats.beginner.map(([format, count]) => (
+                                      <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-green-50 px-1 py-0.5 rounded">
+                                        <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                        <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                      </div>
+                                    ))}
                                   </div>
-                                )}
-                                {groupedFormats.advanced.length > 0 && (
-                                  <div>
-                                    <div className="text-[8px] uppercase tracking-wider text-red-600 font-bold mb-1 flex items-center gap-1">
-                                      <span className="w-2 h-2 rounded-full bg-red-500"></span>
-                                      Advanced ({groupedFormats.advanced.length})
-                                    </div>
-                                    <div className="space-y-0.5 ml-3">
-                                      {groupedFormats.advanced.map(([format, count]) => (
-                                        <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-red-50 px-1 py-0.5 rounded">
-                                          <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
-                                          <span className="bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
-                                        </div>
-                                      ))}
-                                    </div>
+                                </div>
+                              )}
+                              {groupedFormats.intermediate.length > 0 && (
+                                <div>
+                                  <div className="text-[8px] uppercase tracking-wider text-blue-600 font-bold mb-1 flex items-center gap-1">
+                                    <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                    Intermediate ({groupedFormats.intermediate.length})
                                   </div>
-                                )}
-                              </div>
+                                  <div className="space-y-0.5 ml-3">
+                                    {groupedFormats.intermediate.map(([format, count]) => (
+                                      <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-blue-50 px-1 py-0.5 rounded">
+                                        <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                        <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {groupedFormats.advanced.length > 0 && (
+                                <div>
+                                  <div className="text-[8px] uppercase tracking-wider text-red-600 font-bold mb-1 flex items-center gap-1">
+                                    <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                                    Advanced ({groupedFormats.advanced.length})
+                                  </div>
+                                  <div className="space-y-0.5 ml-3">
+                                    {groupedFormats.advanced.map(([format, count]) => (
+                                      <div key={format} className="flex items-center justify-between text-[10px] gap-1 hover:bg-red-50 px-1 py-0.5 rounded">
+                                        <span className="text-slate-700 text-left flex-1 truncate" title={format}>{format}</span>
+                                        <span className="bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-bold min-w-[20px] text-center">{count}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -4754,12 +5507,9 @@ function ProScheduler() {
                     };
                     
                     return (
-                      <motion.div
+                      <div
                         key={day.key}
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: DAYS_OF_WEEK.indexOf(day) * 0.1 }}
-                        className="bg-gradient-to-b from-slate-50 to-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all"
+                        className="bg-gradient-to-b from-slate-50 to-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md"
                       >
                         {/* Day Header */}
                         <div className="bg-gradient-to-r from-blue-100 to-indigo-100 rounded-t-xl p-3 text-center border-b border-slate-200">
@@ -4794,11 +5544,9 @@ function ProScheduler() {
                                           </span>
                                         </div>
                                         <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                                          <motion.div
-                                            initial={{ width: 0 }}
-                                            animate={{ width: `${percentage}%` }}
-                                            transition={{ delay: 0.2, duration: 0.8 }}
+                                          <div
                                             className={`h-full ${getFormatColor(format)} rounded-full shadow-sm`}
+                                            style={{ width: `${percentage}%` }}
                                           />
                                         </div>
                                       </div>
@@ -4857,7 +5605,7 @@ function ProScheduler() {
                             </>
                           )}
                         </div>
-                      </motion.div>
+                      </div>
                     );
                   })}
                 </div>
@@ -4897,55 +5645,38 @@ function ProScheduler() {
             </div>
           )}
 
-          {/* Timeline View - Enhanced Premium UI */}
+          {/* Timeline View - Simplified for Performance */}
           {calendarViewMode === 'timeline' && (
             <div className="relative py-4">
               {TIME_SLOTS.map((slot, idx) => {
                 const slotClasses = filteredClasses.filter(cls => cls.time === slot.time24);
                 const hasClasses = slotClasses.length > 0;
                 return (
-                  <motion.div 
+                  <div 
                     key={slot.time24} 
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: idx * 0.02 }}
                     className="flex gap-6 mb-8 relative group"
                   >
-                    {/* Enhanced Timeline with Glow Effects */}
+                    {/* Timeline */}
                     <div className="flex flex-col items-center relative z-10">
-                      <motion.div 
-                        whileHover={{ scale: 1.2, rotate: 180 }}
-                        transition={{ type: "spring", stiffness: 300 }}
-                        className={`relative w-5 h-5 rounded-full shadow-lg transition-all ${
+                      <div 
+                        className={`relative w-5 h-5 rounded-full shadow-lg ${
                           hasClasses 
                             ? 'bg-gradient-to-br from-blue-400 via-blue-500 to-indigo-600 ring-4 ring-blue-100 shadow-blue-500/50' 
                             : 'bg-gradient-to-br from-slate-300 to-slate-400 ring-2 ring-slate-100'
                         }`}
-                      >
-                        {hasClasses && (
-                          <motion.div
-                            className="absolute inset-0 rounded-full bg-blue-400"
-                            animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0, 0.5] }}
-                            transition={{ repeat: Infinity, duration: 2 }}
-                          />
-                        )}
-                      </motion.div>
+                      />
                       {idx < TIME_SLOTS.length - 1 && (
-                        <div className={`w-1 h-full relative ${
+                        <div className={`w-1 h-full ${
                           hasClasses 
                             ? 'bg-gradient-to-b from-blue-400 via-blue-300 to-slate-200' 
                             : 'bg-gradient-to-b from-slate-200 to-slate-100'
-                        } rounded-full`}>
-                          {hasClasses && (
-                            <div className="absolute inset-0 bg-gradient-to-b from-blue-500/30 to-transparent blur-sm" />
-                          )}
-                        </div>
+                        } rounded-full`} />
                       )}
                     </div>
                     
-                    {/* Time and Classes with Enhanced Card */}
+                    {/* Time and Classes */}
                     <div className="flex-1 pb-6">
-                      <div className={`inline-flex items-center gap-3 mb-4 px-4 py-2 rounded-xl transition-all ${
+                      <div className={`inline-flex items-center gap-3 mb-4 px-4 py-2 rounded-xl ${
                         hasClasses 
                           ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-lg shadow-blue-500/30' 
                           : 'bg-gradient-to-r from-slate-100 to-slate-200 text-slate-600'
@@ -4953,13 +5684,9 @@ function ProScheduler() {
                         <Clock className="w-4 h-4" />
                         <span className="font-bold text-lg">{slot.time12}</span>
                         {hasClasses && (
-                          <motion.span 
-                            initial={{ scale: 0 }}
-                            animate={{ scale: 1 }}
-                            className="bg-white/20 backdrop-blur-sm text-white px-3 py-1 rounded-full font-bold text-sm ml-2"
-                          >
+                          <span className="bg-white/20 backdrop-blur-sm text-white px-3 py-1 rounded-full font-bold text-sm ml-2">
                             {slotClasses.length} {slotClasses.length === 1 ? 'class' : 'classes'}
-                          </motion.span>
+                          </span>
                         )}
                       </div>
                       {hasClasses ? (
@@ -4967,19 +5694,15 @@ function ProScheduler() {
                           {slotClasses.map(cls => renderClassCard(cls))}
                         </div>
                       ) : (
-                        <motion.div 
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          className="text-sm text-slate-400 italic py-6 px-6 bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl border-2 border-dashed border-slate-200 flex items-center gap-3"
-                        >
+                        <div className="text-sm text-slate-400 italic py-6 px-6 bg-gradient-to-br from-slate-50 to-slate-100 rounded-xl border-2 border-dashed border-slate-200 flex items-center gap-3">
                           <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center">
                             <span className="text-slate-400 text-xs">—</span>
                           </div>
                           <span>No classes scheduled</span>
-                        </motion.div>
+                        </div>
                       )}
                     </div>
-                  </motion.div>
+                  </div>
                 );
               })}
             </div>
@@ -5079,60 +5802,41 @@ function ProScheduler() {
           <div className="space-y-6">
             {/* Hero Stats */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="relative bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 rounded-2xl p-6 shadow-2xl overflow-hidden group"
-              >
-                <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 rounded-2xl p-6 shadow-2xl overflow-hidden group">
+                <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-indigo-500/10 opacity-0 group-hover:opacity-100" />
                 <div className="relative z-10">
                   <div className="text-blue-200 text-sm font-bold uppercase tracking-widest mb-2">Total Sessions</div>
                   <div className="text-5xl font-black text-white mb-2">{totalSessions.toLocaleString()}</div>
                   <div className="text-blue-300 text-xs">Across all locations</div>
                 </div>
-              </motion.div>
+              </div>
 
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1 }}
-                className="relative bg-gradient-to-br from-emerald-900 via-green-900 to-teal-900 rounded-2xl p-6 shadow-2xl overflow-hidden group"
-              >
-                <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-teal-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative bg-gradient-to-br from-emerald-900 via-green-900 to-teal-900 rounded-2xl p-6 shadow-2xl overflow-hidden group">
+                <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-teal-500/10 opacity-0 group-hover:opacity-100" />
                 <div className="relative z-10">
                   <div className="text-emerald-200 text-sm font-bold uppercase tracking-widest mb-2">Check-Ins</div>
                   <div className="text-5xl font-black text-white mb-2">{totalCheckIns.toLocaleString()}</div>
                   <div className="text-emerald-300 text-xs">Total attendances</div>
                 </div>
-              </motion.div>
+              </div>
 
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 }}
-                className="relative bg-gradient-to-br from-purple-900 via-violet-900 to-indigo-900 rounded-2xl p-6 shadow-2xl overflow-hidden group"
-              >
-                <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative bg-gradient-to-br from-purple-900 via-violet-900 to-indigo-900 rounded-2xl p-6 shadow-2xl overflow-hidden group">
+                <div className="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-indigo-500/10 opacity-0 group-hover:opacity-100" />
                 <div className="relative z-10">
                   <div className="text-purple-200 text-sm font-bold uppercase tracking-widest mb-2">Avg Fill Rate</div>
                   <div className="text-5xl font-black text-white mb-2">{avgFillRate.toFixed(1)}%</div>
                   <div className="text-purple-300 text-xs">Overall utilization</div>
                 </div>
-              </motion.div>
+              </div>
 
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-                className="relative bg-gradient-to-br from-amber-900 via-orange-900 to-red-900 rounded-2xl p-6 shadow-2xl overflow-hidden group"
-              >
-                <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 to-red-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative bg-gradient-to-br from-amber-900 via-orange-900 to-red-900 rounded-2xl p-6 shadow-2xl overflow-hidden group">
+                <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 to-red-500/10 opacity-0 group-hover:opacity-100" />
                 <div className="relative z-10">
                   <div className="text-amber-200 text-sm font-bold uppercase tracking-widest mb-2">Revenue</div>
                   <div className="text-5xl font-black text-white mb-2">{formatCurrency(totalRevenue)}</div>
                   <div className="text-amber-300 text-xs">Total earnings</div>
                 </div>
-              </motion.div>
+              </div>
             </div>
 
             {/* Top Performers Grid */}
@@ -5147,12 +5851,9 @@ function ProScheduler() {
                 </div>
                 <div className="p-4 space-y-3">
                   {topFormats.map(([format, stats], idx) => (
-                    <motion.div
+                    <div
                       key={format}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: idx * 0.1 }}
-                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-slate-50 to-blue-50 hover:from-blue-50 hover:to-indigo-50 transition-all"
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-slate-50 to-blue-50 hover:from-blue-50 hover:to-indigo-50"
                     >
                       <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white font-bold flex items-center justify-center text-sm">
                         {idx + 1}
@@ -5165,7 +5866,7 @@ function ProScheduler() {
                         <div className="font-bold text-blue-700 text-sm">{formatCurrency(stats.revenue)}</div>
                         <div className="text-xs text-slate-500">{stats.capacity > 0 ? ((stats.checkIns / stats.capacity) * 100).toFixed(0) : 0}% fill</div>
                       </div>
-                    </motion.div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -5180,12 +5881,9 @@ function ProScheduler() {
                 </div>
                 <div className="p-4 space-y-3">
                   {topTrainers.map(([trainer, stats], idx) => (
-                    <motion.div
+                    <div
                       key={trainer}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: idx * 0.1 }}
-                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-slate-50 to-emerald-50 hover:from-emerald-50 hover:to-teal-50 transition-all"
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-slate-50 to-emerald-50 hover:from-emerald-50 hover:to-teal-50"
                     >
                       <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white font-bold flex items-center justify-center text-sm">
                         {idx + 1}
@@ -5198,7 +5896,7 @@ function ProScheduler() {
                         <div className="font-bold text-emerald-700 text-sm">{formatCurrency(stats.revenue)}</div>
                         <div className="text-xs text-slate-500">{stats.checkIns} check-ins</div>
                       </div>
-                    </motion.div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -5213,12 +5911,9 @@ function ProScheduler() {
                 </div>
                 <div className="p-4 space-y-3">
                   {topLocations.map(([location, stats], idx) => (
-                    <motion.div
+                    <div
                       key={location}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: idx * 0.1 }}
-                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-slate-50 to-purple-50 hover:from-purple-50 hover:to-pink-50 transition-all"
+                      className="flex items-center gap-3 p-3 rounded-xl bg-gradient-to-r from-slate-50 to-purple-50 hover:from-purple-50 hover:to-pink-50"
                     >
                       <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-600 text-white font-bold flex items-center justify-center text-sm">
                         {idx + 1}
@@ -5231,7 +5926,7 @@ function ProScheduler() {
                         <div className="font-bold text-purple-700 text-sm">{formatCurrency(stats.revenue)}</div>
                         <div className="text-xs text-slate-500">{stats.capacity > 0 ? ((stats.checkIns / stats.capacity) * 100).toFixed(0) : 0}% fill</div>
                       </div>
-                    </motion.div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -5251,10 +5946,8 @@ function ProScheduler() {
                     const color = difficulty === 'beginner' ? 'green' : difficulty === 'intermediate' ? 'blue' : 'red';
                     
                     return (
-                      <motion.div
+                      <div
                         key={difficulty}
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
                         className={`p-5 rounded-xl bg-gradient-to-br from-${color}-50 to-${color}-100 border-2 border-${color}-200`}
                       >
                         <div className={`text-${color}-700 text-xs font-bold uppercase tracking-widest mb-2`}>{difficulty}</div>
@@ -5270,7 +5963,7 @@ function ProScheduler() {
                             <span className="font-bold text-slate-800">{formatCurrency(totalDiffRevenue)}</span>
                           </div>
                         </div>
-                      </motion.div>
+                      </div>
                     );
                   })}
                 </div>
@@ -5314,11 +6007,9 @@ function ProScheduler() {
                     </div>
                   </div>
                   <div className="w-full bg-slate-200 rounded-full h-4 overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${avgFillRate}%` }}
-                      transition={{ duration: 1, delay: 0.5 }}
+                    <div
                       className="h-full bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full"
+                      style={{ width: `${avgFillRate}%` }}
                     />
                   </div>
                 </div>
@@ -5333,12 +6024,9 @@ function ProScheduler() {
         const classSessions = getClassSessions(selectedClass);
         const hasHistoricalData = classSessions.length > 0;
         return (
-          <motion.div
+          <div
             key="drilldown-modal"
             ref={drilldownModalRef}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
             onClick={(e) => {
               if (e.target === e.currentTarget) {
@@ -5348,10 +6036,7 @@ function ProScheduler() {
             }}
             tabIndex={0}
           >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+            <div
               onClick={(e) => e.stopPropagation()}
               className="bg-white/80 glass-card rounded-3xl max-w-7xl w-full max-h-[90vh] overflow-hidden shadow-2xl flex flex-col md:flex-row"
             >
@@ -5497,6 +6182,44 @@ function ProScheduler() {
                     <li><span className="opacity-70">Capacity:</span> <span className="font-medium">{selectedClass.capacity}</span></li>
                   </ul>
                 </div>
+
+                {/* Moved Class Indicator & Restore Button */}
+                {selectedClass.wasMoved && selectedClass.originalDay && selectedClass.originalTime && (
+                  <div className="bg-blue-500/20 border border-blue-400/40 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <ArrowRightLeft className="w-4 h-4 text-blue-300" />
+                      <span className="text-xs font-semibold uppercase tracking-wide text-blue-200">Class Was Moved</span>
+                    </div>
+                    <div className="text-sm text-blue-100 mb-3">
+                      Originally scheduled for <span className="font-bold">{selectedClass.originalDay}</span> at <span className="font-bold">{selectedClass.originalTime}</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (selectedClass.originalDay && selectedClass.originalTime && updateClassSchedule) {
+                          // Restore class to original position
+                          updateClassSchedule(selectedClass.id, selectedClass.originalDay, selectedClass.originalTime);
+                          
+                          // Update the selected class display
+                          setSelectedClass({
+                            ...selectedClass,
+                            day: selectedClass.originalDay,
+                            time: selectedClass.originalTime,
+                            wasMoved: false,
+                            originalDay: undefined,
+                            originalTime: undefined
+                          });
+                          
+                          // Show confirmation
+                          alert(`Class restored to ${selectedClass.originalDay} at ${selectedClass.originalTime}`);
+                        }
+                      }}
+                      className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                    >
+                      <Undo2 className="w-4 h-4" />
+                      Restore to Original Timeslot
+                    </button>
+                  </div>
+                )}
 
                 {/* Optimization Scheduling Reason - Show if this is an optimized replacement */}
                 {(selectedClass as any).isOptimizedReplacement && (() => {
@@ -5808,180 +6531,100 @@ function ProScheduler() {
                   return (
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                       {/* Sessions */}
-                      <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.4, delay: 0 }}
-                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
-                      >
-                        <div className="absolute inset-0 bg-gradient-to-br from-blue-600/10 via-transparent to-indigo-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                        <div className="absolute inset-0 bg-gradient-to-br from-blue-600/10 via-transparent to-indigo-600/10 opacity-0 group-hover:opacity-100" />
                         <div className="relative z-10">
                           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Sessions</div>
                           <div className="text-3xl font-black text-white mb-4">{classSessions.length}</div>
                           <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
-                            <motion.div 
-                              className="bg-gradient-to-r from-blue-500 via-blue-400 to-indigo-500 h-1.5 rounded-full shadow-lg shadow-blue-500/50"
-                              initial={{ width: 0 }}
-                              animate={{ width: '100%' }}
-                              transition={{ duration: 1.2, delay: 0.2, ease: "easeOut" }}
-                            />
+                            <div className="bg-gradient-to-r from-blue-500 via-blue-400 to-indigo-500 h-1.5 rounded-full shadow-lg shadow-blue-500/50 w-full" />
                           </div>
                         </div>
-                      </motion.div>
+                      </div>
 
                       {/* Total Check-ins */}
-                      <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.4, delay: 0.1 }}
-                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
-                      >
-                        <div className="absolute inset-0 bg-gradient-to-br from-emerald-600/10 via-transparent to-green-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                        <div className="absolute inset-0 bg-gradient-to-br from-emerald-600/10 via-transparent to-green-600/10 opacity-0 group-hover:opacity-100" />
                         <div className="relative z-10">
                           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Check-Ins</div>
                           <div className="text-3xl font-black text-white mb-4">{totalCheckIns}</div>
                           <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
-                            <motion.div 
-                              className="bg-gradient-to-r from-emerald-500 via-green-400 to-emerald-500 h-1.5 rounded-full shadow-lg shadow-emerald-500/50"
-                              initial={{ width: 0 }}
-                              animate={{ width: `${Math.min(fillRate, 100)}%` }}
-                              transition={{ duration: 1.2, delay: 0.3, ease: "easeOut" }}
-                            />
+                            <div className="bg-gradient-to-r from-emerald-500 via-green-400 to-emerald-500 h-1.5 rounded-full shadow-lg shadow-emerald-500/50" style={{ width: `${Math.min(fillRate, 100)}%` }} />
                           </div>
                         </div>
-                      </motion.div>
+                      </div>
 
                       {/* Avg (No Empty) */}
-                      <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.4, delay: 0.2 }}
-                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
-                      >
-                        <div className="absolute inset-0 bg-gradient-to-br from-cyan-600/10 via-transparent to-blue-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                        <div className="absolute inset-0 bg-gradient-to-br from-cyan-600/10 via-transparent to-blue-600/10 opacity-0 group-hover:opacity-100" />
                         <div className="relative z-10">
                           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Avg (No Empty)</div>
                           <div className="text-3xl font-black text-white mb-4">{avgCheckInsExcludingEmpty.toFixed(1)}</div>
                           <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
-                            <motion.div 
-                              className="bg-gradient-to-r from-cyan-500 via-blue-400 to-cyan-500 h-1.5 rounded-full shadow-lg shadow-cyan-500/50"
-                              initial={{ width: 0 }}
-                              animate={{ width: `${Math.min((avgCheckInsExcludingEmpty / 30) * 100, 100)}%` }}
-                              transition={{ duration: 1.2, delay: 0.4, ease: "easeOut" }}
-                            />
+                            <div className="bg-gradient-to-r from-cyan-500 via-blue-400 to-cyan-500 h-1.5 rounded-full shadow-lg shadow-cyan-500/50" style={{ width: `${Math.min((avgCheckInsExcludingEmpty / 30) * 100, 100)}%` }} />
                           </div>
                         </div>
-                      </motion.div>
+                      </div>
 
                       {/* Fill Rate */}
-                      <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.4, delay: 0.3 }}
-                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
-                      >
-                        <div className="absolute inset-0 bg-gradient-to-br from-purple-600/10 via-transparent to-indigo-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                        <div className="absolute inset-0 bg-gradient-to-br from-purple-600/10 via-transparent to-indigo-600/10 opacity-0 group-hover:opacity-100" />
                         <div className="relative z-10">
                           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Fill Rate</div>
                           <div className="text-3xl font-black text-white mb-4">{fillRate.toFixed(0)}%</div>
                           <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
-                            <motion.div 
-                              className="bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-500 h-1.5 rounded-full shadow-lg shadow-purple-500/50"
-                              initial={{ width: 0 }}
-                              animate={{ width: `${fillRate}%` }}
-                              transition={{ duration: 1.2, delay: 0.5, ease: "easeOut" }}
-                            />
+                            <div className="bg-gradient-to-r from-purple-500 via-indigo-400 to-purple-500 h-1.5 rounded-full shadow-lg shadow-purple-500/50" style={{ width: `${fillRate}%` }} />
                           </div>
                         </div>
-                      </motion.div>
+                      </div>
 
                       {/* Total Booked */}
-                      <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.4, delay: 0.4 }}
-                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
-                      >
-                        <div className="absolute inset-0 bg-gradient-to-br from-amber-600/10 via-transparent to-yellow-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                        <div className="absolute inset-0 bg-gradient-to-br from-amber-600/10 via-transparent to-yellow-600/10 opacity-0 group-hover:opacity-100" />
                         <div className="relative z-10">
                           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Booked</div>
                           <div className="text-3xl font-black text-white mb-4">{totalBooked}</div>
                           <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
-                            <motion.div 
-                              className="bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 h-1.5 rounded-full shadow-lg shadow-amber-500/50"
-                              initial={{ width: 0 }}
-                              animate={{ width: `${totalCapacity > 0 ? (totalBooked / totalCapacity) * 100 : 0}%` }}
-                              transition={{ duration: 1.2, delay: 0.6, ease: "easeOut" }}
-                            />
+                            <div className="bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 h-1.5 rounded-full shadow-lg shadow-amber-500/50" style={{ width: `${totalCapacity > 0 ? (totalBooked / totalCapacity) * 100 : 0}%` }} />
                           </div>
                         </div>
-                      </motion.div>
+                      </div>
 
                       {/* Cancellations */}
-                      <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.4, delay: 0.5 }}
-                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
-                      >
-                        <div className="absolute inset-0 bg-gradient-to-br from-red-600/10 via-transparent to-rose-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                        <div className="absolute inset-0 bg-gradient-to-br from-red-600/10 via-transparent to-rose-600/10 opacity-0 group-hover:opacity-100" />
                         <div className="relative z-10">
                           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Cancellations</div>
                           <div className="text-3xl font-black text-white mb-4">{totalCancellations}</div>
                           <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
-                            <motion.div 
-                              className="bg-gradient-to-r from-red-500 via-rose-400 to-red-500 h-1.5 rounded-full shadow-lg shadow-red-500/50"
-                              initial={{ width: 0 }}
-                              animate={{ width: `${cancelRate}%` }}
-                              transition={{ duration: 1.2, delay: 0.7, ease: "easeOut" }}
-                            />
+                            <div className="bg-gradient-to-r from-red-500 via-rose-400 to-red-500 h-1.5 rounded-full shadow-lg shadow-red-500/50" style={{ width: `${cancelRate}%` }} />
                           </div>
                         </div>
-                      </motion.div>
+                      </div>
 
                       {/* Cancel Rate */}
-                      <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.4, delay: 0.6 }}
-                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
-                      >
-                        <div className="absolute inset-0 bg-gradient-to-br from-orange-600/10 via-transparent to-red-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                        <div className="absolute inset-0 bg-gradient-to-br from-orange-600/10 via-transparent to-red-600/10 opacity-0 group-hover:opacity-100" />
                         <div className="relative z-10">
                           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Cancel Rate</div>
                           <div className="text-3xl font-black text-white mb-4">{cancelRate.toFixed(1)}%</div>
                           <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
-                            <motion.div 
-                              className="bg-gradient-to-r from-orange-500 via-red-400 to-orange-500 h-1.5 rounded-full shadow-lg shadow-orange-500/50"
-                              initial={{ width: 0 }}
-                              animate={{ width: `${cancelRate}%` }}
-                              transition={{ duration: 1.2, delay: 0.8, ease: "easeOut" }}
-                            />
+                            <div className="bg-gradient-to-r from-orange-500 via-red-400 to-orange-500 h-1.5 rounded-full shadow-lg shadow-orange-500/50" style={{ width: `${cancelRate}%` }} />
                           </div>
                         </div>
-                      </motion.div>
+                      </div>
 
                       {/* Total Revenue */}
-                      <motion.div 
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.4, delay: 0.7 }}
-                        className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl transition-all overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900"
-                      >
-                        <div className="absolute inset-0 bg-gradient-to-br from-green-600/10 via-transparent to-emerald-600/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div className="relative rounded-xl p-5 shadow-xl border border-slate-800/20 hover:shadow-2xl overflow-hidden group bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+                        <div className="absolute inset-0 bg-gradient-to-br from-green-600/10 via-transparent to-emerald-600/10 opacity-0 group-hover:opacity-100" />
                         <div className="relative z-10">
                           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Total Revenue</div>
                           <div className="text-3xl font-black text-white mb-4">{formatCurrency(totalRevenue)}</div>
                           <div className="mt-3 bg-slate-700/50 rounded-full h-1.5 overflow-hidden backdrop-blur-sm">
-                            <motion.div 
-                              className="bg-gradient-to-r from-green-500 via-emerald-400 to-green-500 h-1.5 rounded-full shadow-lg shadow-green-500/50"
-                              initial={{ width: 0 }}
-                              animate={{ width: '100%' }}
-                              transition={{ duration: 1.2, delay: 0.9, ease: "easeOut" }}
-                            />
+                            <div className="bg-gradient-to-r from-green-500 via-emerald-400 to-green-500 h-1.5 rounded-full shadow-lg shadow-green-500/50 w-full" />
                           </div>
                         </div>
-                      </motion.div>
+                      </div>
                     </div>
                   );
                 })()}
@@ -6499,8 +7142,8 @@ function ProScheduler() {
                 </button>
               </div>
               </div>
-            </motion.div>
-          </motion.div>
+            </div>
+          </div>
         );
       })()}
 
@@ -6522,11 +7165,7 @@ function ProScheduler() {
           }}
           tabIndex={-1}
         >
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-white rounded-2xl p-8 w-full max-w-2xl mx-4 shadow-2xl max-h-[90vh] overflow-y-auto"
-          >
+          <div className="bg-white rounded-2xl p-8 w-full max-w-2xl mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h3 className="text-xl font-bold text-gray-900">Add New Class</h3>
@@ -6741,7 +7380,7 @@ function ProScheduler() {
                 🚀 Add Smart Class
               </button>
             </div>
-          </motion.div>
+          </div>
         </div>
       )}
 
@@ -6767,12 +7406,7 @@ function ProScheduler() {
             }}
             tabIndex={-1}
           >
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden"
-            >
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
               {/* Header */}
               <div className="bg-gradient-to-r from-slate-700 to-slate-600 text-white p-6">
                 <div className="flex items-start justify-between">
@@ -6804,12 +7438,9 @@ function ProScheduler() {
                 ) : (
                   <div className="space-y-3">
                     {recommendations.map((rec, idx) => (
-                      <motion.div
+                      <div
                         key={`${rec.class}-${rec.trainer}-${idx}`}
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: idx * 0.1 }}
-                        className="bg-white rounded-lg p-4 border border-slate-200 hover:border-slate-300 hover:shadow-md transition-all"
+                        className="bg-white rounded-lg p-4 border border-slate-200 hover:border-slate-300 hover:shadow-md"
                       >
                         <div className="flex items-start justify-between gap-4">
                           {/* Left: Class Info */}
@@ -6861,14 +7492,14 @@ function ProScheduler() {
                                 handleReplaceClass(selectedClass, rec.trainer, rec.class);
                                 setShowSimilarClasses(null);
                               }}
-                              className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-xs transition-all shadow-sm hover:shadow-md flex items-center gap-1.5"
+                              className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-xs shadow-sm hover:shadow-md flex items-center gap-1.5"
                             >
                               <Repeat className="w-3.5 h-3.5" />
                               Replace
                             </button>
                           </div>
                         </div>
-                      </motion.div>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -6882,13 +7513,13 @@ function ProScheduler() {
                   </p>
                   <button
                     onClick={() => setShowSimilarClasses(null)}
-                    className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium transition-colors"
+                    className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg text-sm font-medium"
                   >
                     Close
                   </button>
                 </div>
               </div>
-            </motion.div>
+            </div>
           </div>
         );
       })()}
@@ -6911,11 +7542,7 @@ function ProScheduler() {
           }}
           tabIndex={-1}
         >
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-white rounded-2xl p-8 w-full max-w-md mx-4 shadow-2xl"
-          >
+          <div className="bg-white rounded-2xl p-8 w-full max-w-md mx-4 shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-xl font-bold text-gray-900">Edit Class</h3>
               <button
@@ -7100,7 +7727,7 @@ function ProScheduler() {
                 Save Changes
               </button>
             </div>
-          </motion.div>
+          </div>
         </div>
       )}
 
@@ -7273,12 +7900,7 @@ function ProScheduler() {
               }
             }}
           >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="w-full max-w-7xl transform rounded-3xl bg-white/80 glass-card text-left align-middle shadow-2xl transition-all max-h-[90vh] overflow-hidden"
-            >
+            <div className="w-full max-w-7xl transform rounded-3xl bg-white/80 glass-card text-left align-middle shadow-2xl max-h-[90vh] overflow-hidden">
               <div className="flex flex-col md:flex-row max-h-[90vh]">
                 {/* Left Profile Pane - Matching EnhancedDrilldownModal2 */}
                 <div className="md:w-1/3 bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white p-8 flex flex-col gap-6 overflow-y-auto max-h-[90vh]">
@@ -7665,7 +8287,7 @@ function ProScheduler() {
                       )}
                 </div>
               </div>
-            </motion.div>
+            </div>
           </div>
         );
       })()}
@@ -7673,12 +8295,7 @@ function ProScheduler() {
       {/* OPTIMIZATION SETTINGS MODAL */}
       {showOptimizationSettings && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden"
-          >
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
             {/* Header */}
             <div className="bg-gradient-to-r from-indigo-600 via-blue-600 to-purple-600 px-6 py-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -8455,19 +9072,14 @@ function ProScheduler() {
                 </button>
               </div>
             </div>
-          </motion.div>
+          </div>
         </div>
       )}
 
       {/* VIEW ALL REPLACEMENTS MODAL */}
       {showAllReplacements && optimizedSchedule && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden"
-          >
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden">
             {/* Header */}
             <div className="bg-gradient-to-r from-emerald-600 via-green-600 to-teal-600 px-6 py-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -8534,11 +9146,8 @@ function ProScheduler() {
                 </div>
                 
                 {optimizedSchedule.replacements.map((r, idx) => (
-                  <motion.div
+                  <div
                     key={idx}
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: idx * 0.02 }}
                     className="grid grid-cols-12 gap-2 px-4 py-3 bg-white border border-slate-200 rounded-xl hover:shadow-md transition-shadow cursor-pointer"
                     onClick={() => {
                       // Find the optimized class and open drilldown
@@ -8600,7 +9209,7 @@ function ProScheduler() {
                         {r.replacement.score}
                       </div>
                     </div>
-                  </motion.div>
+                  </div>
                 ))}
               </div>
               
@@ -8624,7 +9233,7 @@ function ProScheduler() {
                 Close
               </button>
             </div>
-          </motion.div>
+          </div>
         </div>
       )}
     </div>

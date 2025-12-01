@@ -209,6 +209,9 @@ self.onmessage = (e: MessageEvent<WorkerMessage | { type: 'APPLY_FILTERS'; paylo
       const groups = new Map<string, SessionData[]>();
       filtered.forEach((session) => {
         let key = '';
+        const normalizedTime = normalizeTime(session.Time);
+        const hour = parseInt(normalizedTime.split(':')[0] || '0');
+        
         switch (groupBy) {
           case 'ClassDayTimeLocation': key = generateCompositeKey(session.SessionName || session.Class, session.Day, session.Time, session.Location); break;
           case 'ClassDayTimeLocationTrainer': key = generateCompositeKey(session.SessionName || session.Class, session.Day, session.Time, session.Location, session.Trainer); break;
@@ -227,14 +230,30 @@ self.onmessage = (e: MessageEvent<WorkerMessage | { type: 'APPLY_FILTERS'; paylo
           case 'DayTime': key = `${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}`; break;
           case 'ClassLocation': key = `${getCleanedClass(session.SessionName || session.Class)}|${getCleanedLocation(session.Location)}`; break;
           case 'TrainerTime': key = `${session.Trainer}|${getCleanedTime(session.Time)}`; break;
+          case 'AMSessions': key = hour < 12 ? `AM - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : ''; break;
+          case 'PMSessions': key = hour >= 12 ? `PM - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : ''; break;
+          case 'MorningClasses': key = (hour >= 6 && hour < 12) ? `Morning (6am-12pm) - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : ''; break;
+          case 'EveningClasses': key = (hour >= 17 && hour < 21) ? `Evening (5pm-9pm) - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : ''; break;
+          case 'Weekday': {
+            const day = session.Day.toLowerCase();
+            const isWeekday = !['saturday', 'sunday', 'sat', 'sun'].includes(day);
+            key = isWeekday ? `Weekday - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : '';
+            break;
+          }
+          case 'Weekend': {
+            const day = session.Day.toLowerCase();
+            const isWeekend = ['saturday', 'sunday', 'sat', 'sun'].includes(day);
+            key = isWeekend ? `Weekend - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : '';
+            break;
+          }
           case 'Class': key = getCleanedClass(session.SessionName || session.Class); break;
           case 'Day': key = getCleanedDay(session.Day); break;
           case 'Time': key = getCleanedTime(session.Time); break;
           case 'Location': key = getCleanedLocation(session.Location); break;
           default: key = String((session as any)[groupBy] || '');
         }
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key)!.push(session);
+        if (key && !groups.has(key)) groups.set(key, []);
+        if (key) groups.get(key)!.push(session);
       });
 
       const groupedRows: GroupedRow[] = [];
@@ -301,6 +320,9 @@ self.onmessage = (e: MessageEvent<WorkerMessage | { type: 'APPLY_FILTERS'; paylo
     
     sessions.forEach((session) => {
       let key = '';
+      const normalizedTime = normalizeTime(session.Time);
+      const hour = parseInt(normalizedTime.split(':')[0] || '0');
+      
       switch (groupBy) {
         case 'ClassDayTimeLocation':
           key = generateCompositeKey(session.SessionName || session.Class, session.Day, session.Time, session.Location);
@@ -323,14 +345,30 @@ self.onmessage = (e: MessageEvent<WorkerMessage | { type: 'APPLY_FILTERS'; paylo
         case 'DayTime': key = `${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}`; break;
         case 'ClassLocation': key = `${getCleanedClass(session.SessionName || session.Class)}|${getCleanedLocation(session.Location)}`; break;
         case 'TrainerTime': key = `${session.Trainer}|${getCleanedTime(session.Time)}`; break;
+        case 'AMSessions': key = hour < 12 ? `AM - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : ''; break;
+        case 'PMSessions': key = hour >= 12 ? `PM - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : ''; break;
+        case 'MorningClasses': key = (hour >= 6 && hour < 12) ? `Morning (6am-12pm) - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : ''; break;
+        case 'EveningClasses': key = (hour >= 17 && hour < 21) ? `Evening (5pm-9pm) - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : ''; break;
+        case 'Weekday': {
+          const day = session.Day.toLowerCase();
+          const isWeekday = !['saturday', 'sunday', 'sat', 'sun'].includes(day);
+          key = isWeekday ? `Weekday - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : '';
+          break;
+        }
+        case 'Weekend': {
+          const day = session.Day.toLowerCase();
+          const isWeekend = ['saturday', 'sunday', 'sat', 'sun'].includes(day);
+          key = isWeekend ? `Weekend - ${getCleanedClass(session.SessionName || session.Class)}|${getCleanedDay(session.Day)}|${getCleanedTime(session.Time)}|${getCleanedLocation(session.Location)}` : '';
+          break;
+        }
         case 'Class': key = getCleanedClass(session.SessionName || session.Class); break;
         case 'Day': key = getCleanedDay(session.Day); break;
         case 'Time': key = getCleanedTime(session.Time); break;
         case 'Location': key = getCleanedLocation(session.Location); break;
         default: key = String((session as any)[groupBy] || '');
       }
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(session);
+      if (key && !groups.has(key)) groups.set(key, []);
+      if (key) groups.get(key)!.push(session);
     });
 
     const groupedRows: GroupedRow[] = [];
