@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, memo, Fragment, useCallback } from 'react';
+import { useState, useMemo, useEffect, useRef, memo, Fragment, useCallback, useTransition, useDeferredValue } from 'react';
 import { useDashboardStore, getDataIndices } from '../store/dashboardStore';
 import { SessionData, CheckinData } from '../types';
 import { format, parseISO, isWithinInterval } from 'date-fns';
@@ -31,10 +31,18 @@ import {
   Ban,
   Sparkles,
   Brain,
-  Loader2
+  Loader2,
+  Wand2,
+  Check,
+  Target,
+  RotateCcw,
+  AlertCircle
 } from 'lucide-react';
-import { aiService } from '../services/aiService';
-import { motion } from 'framer-motion';
+// aiService used for direct AI calls - keeping for future use
+// import { aiService } from '../services/aiService';
+import { smartOptimizer, OptimizationSuggestion, OptimizationResult } from '../services/smartScheduleOptimizer';
+import { AIOptimizer, DataAnalyzer, AIOptimizationResult, AIOptimizationError } from '../services/modularOptimizer';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // Available trainer images (from `/images` folder)
 const IMAGE_FILES = [
@@ -493,7 +501,8 @@ const useRawData = () => useDashboardStore(state => state.rawData);
 const useActiveClassesData = () => useDashboardStore(state => state.activeClassesData);
 const useCheckinsData = () => useDashboardStore(state => state.checkinsData);
 const useUpdateClassSchedule = () => useDashboardStore(state => state.updateClassSchedule);
-const useApplyOptimization = () => useDashboardStore(state => state.applyOptimization);
+// Keeping for future optimization features
+// const useApplyOptimization = () => useDashboardStore(state => state.applyOptimization);
 
 function ProScheduler() {
   // PERFORMANCE: Use granular selectors instead of destructuring entire store
@@ -501,7 +510,7 @@ function ProScheduler() {
   const activeClassesData = useActiveClassesData() || {};
   const checkinsData = useCheckinsData() || [];
   const updateClassSchedule = useUpdateClassSchedule();
-  const applyOptimization = useApplyOptimization();
+  // const applyOptimization = useApplyOptimization(); // Future use for applying AI suggestions
   
   // State management
   const [filters, setFilters] = useState<ProSchedulerFilters>({
@@ -539,8 +548,12 @@ function ProScheduler() {
   const [memberStatusFilter, setMemberStatusFilter] = useState<'all' | 'checked-in' | 'cancelled' | 'no-show'>('all');
   const [memberTypeFilter, setMemberTypeFilter] = useState<'all' | 'regulars' | 'new'>('all');
   const [showHighPerformingOnly, setShowHighPerformingOnly] = useState(false);
+  const [isOptimizationEnabled, setIsOptimizationEnabled] = useState(false); // Separate flag for optimization
   const [expandedDayFormats, setExpandedDayFormats] = useState<Set<string>>(new Set());
   const drilldownModalRef = useRef<HTMLDivElement>(null);
+  
+  // Use transition for non-urgent updates to prevent UI blocking
+  const [isPending, startTransition] = useTransition();
   
   // Optimization Settings State - merge saved with defaults to ensure all properties exist
   const [optimizationSettings, setOptimizationSettings] = useState<OptimizationSettings>(() => {
@@ -578,7 +591,8 @@ function ProScheduler() {
   // AI Optimization State
   const [isAIOptimizing, setIsAIOptimizing] = useState(false);
   const [isCalculatingOptimization, setIsCalculatingOptimization] = useState(false);
-  const [aiOptimizationResult, setAIOptimizationResult] = useState<{
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [aiOptimizationResult, _setAIOptimizationResult] = useState<{
     replacements: Array<{
       original: { className: string; trainer: string; day: string; time: string; location: string; avgCheckIns: number; fillRate: number; id?: string };
       replacement: { className: string; trainer: string; reason: string; projectedCheckIns: number; projectedFillRate: number; confidence: number; isAIOptimized?: boolean; dataPoints?: string[]; reasoning?: string };
@@ -613,8 +627,27 @@ function ProScheduler() {
       actionData?: any;
     }>;
   } | null>(null);
-  const [showAIResults, setShowAIResults] = useState(false);
+  // showAIResults state - kept for future UI enhancement
+  // const [showAIResults, setShowAIResults] = useState(false);
   const [appliedAIReplacements, setAppliedAIReplacements] = useState<Set<string>>(new Set());
+  
+  // Smart Optimization State - New improved AI system
+  const [smartOptimizationResult, setSmartOptimizationResult] = useState<OptimizationResult | null>(null);
+  const [isSmartOptimizing, setIsSmartOptimizing] = useState(false);
+  const [appliedSmartSuggestions, setAppliedSmartSuggestions] = useState<Set<string>>(new Set());
+  const [showSmartInsights, setShowSmartInsights] = useState(false);
+
+  // Modular Optimizer State - Per-day optimization
+  // These are used by handleOptimizeDay which is currently commented out
+  // const [dayOptimizations, setDayOptimizations] = useState<Map<string, DayOptimization>>(new Map());
+  // const [optimizingDays, setOptimizingDays] = useState<Set<string>>(new Set());
+  const [aiOptimizationError, setAIOptimizationError] = useState<AIOptimizationError | null>(null);
+  const [modularAIResult, setModularAIResult] = useState<AIOptimizationResult | null>(null);
+  // const [showOptimizePanel, setShowOptimizePanel] = useState(false);
+  
+  // Deferred values for optimization - these defer the heavy computation to prevent UI blocking
+  const deferredOptimizationSettings = useDeferredValue(optimizationSettings);
+  const deferredShowHighPerforming = useDeferredValue(showHighPerformingOnly);
   
   // Save optimization settings to localStorage when changed
   useEffect(() => {
@@ -1560,11 +1593,12 @@ function ProScheduler() {
   // When Top Classes mode is ON, replace underperforming classes with optimal alternatives
   // Respects location constraints, trainer priorities, format rules, and parallel class limits
   // Uses seeded randomization for unique but reproducible iterations
-  // NOTE: Runs in a deferred manner to prevent UI blocking
+  // NOTE: Now uses deferred values to prevent UI blocking - computation runs in low priority
   const optimizedSchedule = useMemo(() => {
-    if (!showHighPerformingOnly) return null;
+    // Use deferred value to prevent blocking - this computation only runs when React has idle time
+    if (!deferredShowHighPerforming) return null;
     
-    const settings = optimizationSettings;
+    const settings = deferredOptimizationSettings;
     const TRAINER_TARGET_HOURS = settings.targetTrainerHours;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -2319,100 +2353,333 @@ function ProScheduler() {
         minimumsNotMet: Object.keys(locationShortfalls).length > 0
       }
     };
-  }, [showHighPerformingOnly, scheduleClasses, rawData, filters.dateFrom, filters.dateTo, filters.locations, locationAverages, getFormatDifficulty, optimizationSettings]);
+  }, [deferredShowHighPerforming, scheduleClasses, rawData, filters.dateFrom, filters.dateTo, filters.locations, locationAverages, getFormatDifficulty, deferredOptimizationSettings]);
 
   // Deferred optimization calculation to prevent UI freezing
+  // Uses the deferred values to ensure computation doesn't block UI
   useEffect(() => {
-    if (showHighPerformingOnly && !isCalculatingOptimization) {
+    // Show loading state immediately when user toggles on
+    if (showHighPerformingOnly && !isCalculatingOptimization && !cachedOptimizedSchedule) {
       setIsCalculatingOptimization(true);
-      // Use requestIdleCallback for non-blocking calculation
-      const timeoutId = setTimeout(() => {
-        setCachedOptimizedSchedule(optimizedSchedule);
-        setIsCalculatingOptimization(false);
-      }, 50);
-      return () => clearTimeout(timeoutId);
+    }
+    
+    // When deferred computation completes, update cache
+    if (deferredShowHighPerforming && optimizedSchedule) {
+      setCachedOptimizedSchedule(optimizedSchedule);
+      setIsCalculatingOptimization(false);
     } else if (!showHighPerformingOnly) {
       setCachedOptimizedSchedule(null);
+      setIsCalculatingOptimization(false);
     }
-  }, [showHighPerformingOnly, optimizedSchedule]);
+  }, [showHighPerformingOnly, deferredShowHighPerforming, optimizedSchedule, isCalculatingOptimization, cachedOptimizedSchedule]);
 
-  // AI-powered schedule optimization handler - runs async to prevent blocking
+  // AI-powered schedule optimization handler - uses modular optimizer with proper error handling
   const handleAIOptimization = useCallback(async () => {
     if (isAIOptimizing) return;
     
+    // Reset state
     setIsAIOptimizing(true);
-    setAIOptimizationResult(null);
+    setAIOptimizationError(null);
+    setModularAIResult(null);
     setAppliedAIReplacements(new Set());
     
     // Small delay to let UI update with loading state
     await new Promise(resolve => setTimeout(resolve, 50));
     
+    // Check if AI is available FIRST - NO FALLBACK
+    if (!AIOptimizer.isAvailable()) {
+      setAIOptimizationError({
+        code: 'API_UNAVAILABLE',
+        message: 'AI service is not available. Please ensure your Google AI API key is configured correctly in the environment settings.',
+        timestamp: new Date()
+      });
+      setIsAIOptimizing(false);
+      return;
+    }
+    
     try {
-      // Prepare data for AI analysis - use FULL history for better context
-      // Only filter by location if specific locations are selected
-      const historicalContextData = rawData.filter(session => {
-        // Filter by selected locations
-        if (filters.locations.length > 0 && !filters.locations.includes(session.Location)) {
-          return false;
-        }
-        return true;
+      // Build performance data using modular analyzer
+      const dateFromStr = filters.dateFrom instanceof Date ? filters.dateFrom.toISOString().split('T')[0] : filters.dateFrom;
+      const dateToStr = filters.dateTo instanceof Date ? filters.dateTo.toISOString().split('T')[0] : filters.dateTo;
+      const performances = DataAnalyzer.analyzeClassPerformance(rawData, dateFromStr, dateToStr);
+      const trainerMetrics = DataAnalyzer.analyzeTrainerPerformance(rawData, {
+        targetTrainerHours: optimizationSettings.targetTrainerHours,
+        maxTrainerHours: optimizationSettings.maxTrainerHours || 16,
+        minDaysOff: optimizationSettings.minDaysOff || 2,
+        noClassesBefore: optimizationSettings.noClassesBefore || '07:00',
+        noClassesAfter: optimizationSettings.noClassesAfter || '20:00',
+        noClassesBetweenStart: optimizationSettings.noClassesBetweenStart || '12:30',
+        noClassesBetweenEnd: optimizationSettings.noClassesBetweenEnd || '15:30',
+        blockedTrainers: optimizationSettings.blockedTrainers || [],
+        excludedFormats: optimizationSettings.excludedFormats || ['hosted', 'host', 'guest'],
+        trainerLeaves: optimizationSettings.trainerLeaves || [],
+        locationConstraints: optimizationSettings.locationConstraints || {},
+        formatPriorities: optimizationSettings.formatPriorities || [],
+        newTrainers: optimizationSettings.newTrainers || [],
+        strategy: optimizationSettings.strategy || 'balanced'
       });
       
-      // Map optimization settings to AI rules
-      const aiRules = {
-        targetFillRate: 70,
-        minSessionsForAnalysis: 4,
-        formatMixTargets: optimizationSettings.formatPriorities?.reduce((acc, fp) => {
-          acc[fp.format] = 15;
-          return acc;
-        }, {} as Record<string, number>) || {},
-        excludeTrainers: optimizationSettings.blockedTrainers || [],
-        excludeFormats: optimizationSettings.excludedFormats || ['hosted', 'host', 'guest'],
-        focusLocations: filters.locations.length > 0 ? filters.locations : undefined,
-        optimizationGoal: optimizationSettings.strategy === 'maximize_attendance' ? 'attendance' as const :
-                         optimizationSettings.strategy === 'format_diversity' ? 'format_diversity' as const :
-                         'balanced' as const,
-        requireBeginnerMix: true
-      };
-      
-      // Add class IDs to scheduleClasses for matching
-      const classesWithIds = scheduleClasses.map(cls => ({
-        ...cls,
-        id: cls.id
-      }));
-      
-      const result = await aiService.optimizeScheduleWithAI(
-        historicalContextData,
-        classesWithIds,
-        aiRules
+      // Run AI optimization
+      const result = await AIOptimizer.optimizeFullSchedule(
+        scheduleClasses,
+        performances,
+        trainerMetrics,
+        {
+          targetTrainerHours: optimizationSettings.targetTrainerHours,
+          maxTrainerHours: optimizationSettings.maxTrainerHours || 16,
+          minDaysOff: optimizationSettings.minDaysOff || 2,
+          noClassesBefore: optimizationSettings.noClassesBefore || '07:00',
+          noClassesAfter: optimizationSettings.noClassesAfter || '20:00',
+          noClassesBetweenStart: optimizationSettings.noClassesBetweenStart || '12:30',
+          noClassesBetweenEnd: optimizationSettings.noClassesBetweenEnd || '15:30',
+          blockedTrainers: optimizationSettings.blockedTrainers || [],
+          excludedFormats: optimizationSettings.excludedFormats || ['hosted', 'host', 'guest'],
+          trainerLeaves: optimizationSettings.trainerLeaves || [],
+          locationConstraints: optimizationSettings.locationConstraints || {},
+          formatPriorities: optimizationSettings.formatPriorities || [],
+          newTrainers: optimizationSettings.newTrainers || [],
+          strategy: optimizationSettings.strategy || 'balanced'
+        }
       );
       
-      setAIOptimizationResult(result);
-      
-      // Auto-apply all AI replacements to the calendar
-      if (result.replacements && result.replacements.length > 0) {
-        const newApplied = new Set<string>();
-        result.replacements.forEach(replacement => {
-          // Find matching class in scheduleClasses using multiple keys for better matching
-          const matchKey = `${replacement.original.className}-${replacement.original.trainer}-${replacement.original.day}-${replacement.original.time}-${replacement.original.location}`;
-          newApplied.add(matchKey);
-          
-          // Also add alternative key format
-          const altKey = `${replacement.original.className?.toLowerCase()}-${replacement.original.trainer?.toLowerCase()}-${replacement.original.day}-${replacement.original.time}-${replacement.original.location}`;
-          newApplied.add(altKey);
-        });
-        setAppliedAIReplacements(newApplied);
-        console.log('Applied AI replacements:', newApplied.size, 'keys');
+      if (!result.success && result.error) {
+        setAIOptimizationError(result.error);
+        setIsAIOptimizing(false);
+        return;
       }
       
-      setShowAIResults(true);
+      setModularAIResult(result);
       
-    } catch (error) {
+      // Auto-apply high confidence suggestions
+      if (result.suggestions && result.suggestions.length > 0) {
+        const newApplied = new Set<string>();
+        result.suggestions
+          .filter(s => s.confidence >= 70)
+          .forEach(suggestion => {
+            newApplied.add(suggestion.id);
+          });
+        setAppliedAIReplacements(newApplied);
+      }
+      
+      // Show the optimization panel with results
+      setShowOptimizationPanel(true);
+      
+    } catch (error: any) {
       console.error('AI optimization failed:', error);
+      setAIOptimizationError({
+        code: 'UNKNOWN',
+        message: error.message || 'An unexpected error occurred during AI optimization.',
+        timestamp: new Date()
+      });
     } finally {
       setIsAIOptimizing(false);
     }
   }, [isAIOptimizing, rawData, scheduleClasses, filters, optimizationSettings]);
+
+  /* 
+   * Per-day optimization handler - COMMENTED OUT FOR NOW
+   * Will be enabled when per-day optimize buttons are added to calendar headers
+   * 
+  const handleOptimizeDay = useCallback(async (day: string) => {
+    if (optimizingDays.has(day)) return;
+    
+    setOptimizingDays(prev => new Set(prev).add(day));
+    setAIOptimizationError(null);
+    
+    // Check if AI is available FIRST - NO FALLBACK
+    if (!AIOptimizer.isAvailable()) {
+      setAIOptimizationError({
+        code: 'API_UNAVAILABLE',
+        message: 'AI service is not available. Please configure your API key.',
+        timestamp: new Date()
+      });
+      setOptimizingDays(prev => {
+        const next = new Set(prev);
+        next.delete(day);
+        return next;
+      });
+      return;
+    }
+    
+    try {
+      const dayDateFromStr = filters.dateFrom instanceof Date ? filters.dateFrom.toISOString().split('T')[0] : filters.dateFrom;
+      const dayDateToStr = filters.dateTo instanceof Date ? filters.dateTo.toISOString().split('T')[0] : filters.dateTo;
+      const performances = DataAnalyzer.analyzeClassPerformance(rawData, dayDateFromStr, dayDateToStr);
+      const trainerMetrics = DataAnalyzer.analyzeTrainerPerformance(rawData, {
+        targetTrainerHours: optimizationSettings.targetTrainerHours,
+        maxTrainerHours: optimizationSettings.maxTrainerHours || 16,
+        minDaysOff: optimizationSettings.minDaysOff || 2,
+        noClassesBefore: optimizationSettings.noClassesBefore || '07:00',
+        noClassesAfter: optimizationSettings.noClassesAfter || '20:00',
+        noClassesBetweenStart: optimizationSettings.noClassesBetweenStart || '12:30',
+        noClassesBetweenEnd: optimizationSettings.noClassesBetweenEnd || '15:30',
+        blockedTrainers: optimizationSettings.blockedTrainers || [],
+        excludedFormats: optimizationSettings.excludedFormats || ['hosted', 'host', 'guest'],
+        trainerLeaves: optimizationSettings.trainerLeaves || [],
+        locationConstraints: optimizationSettings.locationConstraints || {},
+        formatPriorities: optimizationSettings.formatPriorities || [],
+        newTrainers: optimizationSettings.newTrainers || [],
+        strategy: optimizationSettings.strategy || 'balanced'
+      });
+      
+      const locations = filters.locations.length > 0 ? filters.locations : [...new Set(scheduleClasses.map(c => c.location))];
+      
+      // Optimize for each location on this day
+      for (const location of locations) {
+        const result = await AIOptimizer.optimizeWithAI(
+          day,
+          location,
+          scheduleClasses,
+          performances,
+          trainerMetrics,
+          {
+            targetTrainerHours: optimizationSettings.targetTrainerHours,
+            maxTrainerHours: optimizationSettings.maxTrainerHours || 16,
+            minDaysOff: optimizationSettings.minDaysOff || 2,
+            noClassesBefore: optimizationSettings.noClassesBefore || '07:00',
+            noClassesAfter: optimizationSettings.noClassesAfter || '20:00',
+            noClassesBetweenStart: optimizationSettings.noClassesBetweenStart || '12:30',
+            noClassesBetweenEnd: optimizationSettings.noClassesBetweenEnd || '15:30',
+            blockedTrainers: optimizationSettings.blockedTrainers || [],
+            excludedFormats: optimizationSettings.excludedFormats || ['hosted', 'host', 'guest'],
+            trainerLeaves: optimizationSettings.trainerLeaves || [],
+            locationConstraints: optimizationSettings.locationConstraints || {},
+            formatPriorities: optimizationSettings.formatPriorities || [],
+            newTrainers: optimizationSettings.newTrainers || [],
+            strategy: optimizationSettings.strategy || 'balanced'
+          }
+        );
+        
+        if (!result.success && result.error) {
+          setAIOptimizationError(result.error);
+          break;
+        }
+        
+        // Store day optimization result
+        if (result.suggestions.length > 0) {
+          setDayOptimizations(prev => {
+            const next = new Map(prev);
+            next.set(`${day}-${location}`, {
+              day,
+              location,
+              changes: result.suggestions.map(s => ({
+                type: s.type === 'replace_trainer' || s.type === 'replace_class' ? 'replace' as const : 
+                      s.type === 'add_class' ? 'add' as const : 
+                      s.type === 'remove_class' ? 'remove' as const : 'swap' as const,
+                original: scheduleClasses.find(c => c.id === s.original.classId),
+                suggested: {
+                  class: s.suggested.className,
+                  trainer: s.suggested.trainer,
+                  time: s.suggested.time,
+                  location: s.suggested.location
+                },
+                reason: s.reason,
+                projectedImpact: s.confidence,
+                confidence: s.confidence
+              })),
+              formatMixBefore: {},
+              formatMixAfter: {},
+              projectedFillRateChange: result.projectedImpact.fillRateChange
+            });
+            return next;
+          });
+        }
+      }
+      
+    } catch (error: any) {
+      console.error('Day optimization failed:', error);
+      setAIOptimizationError({
+        code: 'UNKNOWN',
+        message: error.message || 'Failed to optimize this day.',
+        timestamp: new Date()
+      });
+    } finally {
+      setOptimizingDays(prev => {
+        const next = new Set(prev);
+        next.delete(day);
+        return next;
+      });
+    }
+  }, [optimizingDays, rawData, scheduleClasses, filters, optimizationSettings]);
+  */
+
+  // ========== SMART SCHEDULE OPTIMIZATION ==========
+  // New improved AI optimization that analyzes patterns and suggests changes
+  const handleSmartOptimization = useCallback(async () => {
+    if (isSmartOptimizing) return;
+    
+    setIsSmartOptimizing(true);
+    
+    try {
+      // Build profiles from historical data
+      smartOptimizer.buildProfiles(rawData, filters.dateFrom, filters.dateTo);
+      
+      // Generate optimizations
+      const result = smartOptimizer.generateOptimizations(
+        scheduleClasses,
+        {
+          targetTrainerHours: optimizationSettings.targetTrainerHours,
+          maxTrainerHours: optimizationSettings.maxTrainerHours || 16,
+          minDaysOff: optimizationSettings.minDaysOff || 2,
+          avoidMultiLocationDays: optimizationSettings.avoidMultiLocationDays || false,
+          priorityTrainers: optimizationSettings.priorityTrainers?.map(t => t.name) || [],
+          blockedTrainers: optimizationSettings.blockedTrainers || [],
+          excludedFormats: optimizationSettings.excludedFormats || ['hosted'],
+          locationConstraints: Object.fromEntries(
+            Object.entries(optimizationSettings.locationConstraints || {}).map(([loc, constraints]) => [
+              loc,
+              {
+                maxParallelClasses: constraints.maxParallelClasses,
+                requiredFormats: constraints.requiredFormats,
+                minClasses: optimizationSettings.minClassesPerLocation?.[loc] || 0
+              }
+            ])
+          ),
+          peakTimeBonus: 1.3,
+          formatDiversityWeight: 1.0,
+          trainerUtilizationWeight: 1.2,
+          attendanceWeight: 1.5
+        }
+      );
+      
+      setSmartOptimizationResult(result);
+      setShowSmartInsights(true);
+      
+      // Auto-apply high-confidence suggestions to calendar
+      const highConfidence = result.suggestions.filter(s => s.confidence >= 75 && s.priority === 'high');
+      const autoApplied = new Set<string>();
+      highConfidence.forEach(s => {
+        autoApplied.add(s.id);
+      });
+      setAppliedSmartSuggestions(autoApplied);
+      
+      console.log('Smart optimization complete:', result.suggestions.length, 'suggestions');
+      
+    } catch (error) {
+      console.error('Smart optimization failed:', error);
+    } finally {
+      setIsSmartOptimizing(false);
+    }
+  }, [isSmartOptimizing, rawData, scheduleClasses, filters, optimizationSettings]);
+  
+  // Apply a smart suggestion to the calendar
+  const applySmartSuggestion = useCallback((suggestion: OptimizationSuggestion) => {
+    setAppliedSmartSuggestions(prev => {
+      const next = new Set(prev);
+      if (next.has(suggestion.id)) {
+        next.delete(suggestion.id);
+      } else {
+        next.add(suggestion.id);
+      }
+      return next;
+    });
+  }, []);
+  
+  // Get suggestion for a specific class
+  const getSuggestionForClass = useCallback((classId: string): OptimizationSuggestion | null => {
+    if (!smartOptimizationResult) return null;
+    return smartOptimizationResult.suggestions.find(s => s.original.classId === classId) || null;
+  }, [smartOptimizationResult]);
 
   // Apply Pro Scheduler filters independently (do not use global filters)
   // When Top Classes mode is ON, include optimized replacements
@@ -2475,6 +2742,51 @@ function ProScheduler() {
             trainerMaxHours: number;
             isPriorityTrainer: boolean;
             isNewTrainer: boolean;
+          };
+        }
+        return cls;
+      });
+    }
+    
+    // Apply SMART optimizations - new improved system
+    if (smartOptimizationResult && appliedSmartSuggestions.size > 0) {
+      const suggestionMap = new Map<string, OptimizationSuggestion>();
+      smartOptimizationResult.suggestions.forEach(s => {
+        if (s.original.classId && appliedSmartSuggestions.has(s.id)) {
+          suggestionMap.set(s.original.classId, s);
+        }
+      });
+      
+      classesToFilter = classesToFilter.map(cls => {
+        const suggestion = suggestionMap.get(cls.id);
+        if (suggestion && (suggestion.type === 'replace_class' || suggestion.type === 'replace_trainer')) {
+          return {
+            ...cls,
+            class: suggestion.suggested.className || cls.class,
+            trainer: suggestion.suggested.trainer || cls.trainer,
+            avgCheckIns: suggestion.suggested.projectedCheckIns,
+            fillRate: suggestion.suggested.projectedFillRate,
+            isSmartOptimized: true,
+            smartConfidence: suggestion.confidence,
+            smartReason: suggestion.reason,
+            smartImpact: suggestion.impact,
+            smartDataPoints: suggestion.dataPoints,
+            smartPriority: suggestion.priority,
+            originalClass: suggestion.original.className,
+            originalTrainer: suggestion.original.trainer,
+            originalCheckIns: suggestion.original.currentCheckIns,
+            originalFillRate: suggestion.original.currentFillRate
+          } as ScheduleClass & {
+            isSmartOptimized: boolean;
+            smartConfidence: number;
+            smartReason: string;
+            smartImpact: string;
+            smartDataPoints: string[];
+            smartPriority: string;
+            originalClass: string;
+            originalTrainer: string;
+            originalCheckIns: number;
+            originalFillRate: number;
           };
         }
         return cls;
@@ -2551,7 +2863,7 @@ function ProScheduler() {
       }
       // Class filter - match against both original and replacement class
       if (filters.classes.length > 0) {
-        const isOptimized = (cls as any).isOptimizedReplacement || (cls as any).isAIOptimized;
+        const isOptimized = (cls as any).isOptimizedReplacement || (cls as any).isAIOptimized || (cls as any).isSmartOptimized;
         const originalClass = (cls as any).originalClass;
         if (!filters.classes.includes(cls.class) && 
             !(isOptimized && originalClass && filters.classes.includes(originalClass))) {
@@ -2567,7 +2879,7 @@ function ProScheduler() {
       }
       return true;
     });
-  }, [scheduleClasses, discontinuedClasses, showDiscontinued, filters, showHighPerformingOnly, locationAverages, optimizedSchedule, cachedOptimizedSchedule, aiOptimizationResult, appliedAIReplacements]);
+  }, [scheduleClasses, discontinuedClasses, showDiscontinued, filters, showHighPerformingOnly, locationAverages, optimizedSchedule, cachedOptimizedSchedule, aiOptimizationResult, appliedAIReplacements, smartOptimizationResult, appliedSmartSuggestions]);
 
   // PERFORMANCE: Get unique values from pre-computed indices (O(1) instead of O(n))
   const uniqueTrainers = useMemo(() => {
@@ -2828,10 +3140,19 @@ function ProScheduler() {
     const isOptimizedReplacement = (cls as any).isOptimizedReplacement || false;
     // Check if this is an AI-optimized class
     const isAIOptimized = (cls as any).isAIOptimized || false;
+    // Check if this is a Smart-optimized class (new system)
+    const isSmartOptimized = (cls as any).isSmartOptimized || false;
     const originalClass = (cls as any).originalClass;
     const originalTrainer = (cls as any).originalTrainer;
-    const optimizationReason = (cls as any).optimizationReason || (cls as any).aiReason;
-    const aiConfidence = (cls as any).aiConfidence;
+    const optimizationReason = (cls as any).optimizationReason || (cls as any).aiReason || (cls as any).smartReason;
+    const aiConfidence = (cls as any).aiConfidence || (cls as any).smartConfidence;
+    const smartPriority = (cls as any).smartPriority;
+    const smartImpact = (cls as any).smartImpact;
+    const smartDataPoints = (cls as any).smartDataPoints || [];
+    
+    // Check if there's a pending smart suggestion for this class
+    const pendingSuggestion = getSuggestionForClass(cls.id);
+    const hasPendingSuggestion = pendingSuggestion && !appliedSmartSuggestions.has(pendingSuggestion.id);
     
     const fillRateColor = cls.fillRate >= 80 
       ? 'from-green-500 to-emerald-500' 
@@ -2855,11 +3176,20 @@ function ProScheduler() {
 
     // Find matching format color - for optimized replacements use a special gradient
     const getFormatColor = () => {
+      if (isSmartOptimized) {
+        return smartPriority === 'high' 
+          ? 'from-amber-100 to-orange-200 border-orange-400 ring-2 ring-orange-300 ring-offset-1'
+          : 'from-cyan-100 to-blue-200 border-blue-400 ring-2 ring-blue-300 ring-offset-1';
+      }
       if (isAIOptimized) {
         return 'from-violet-100 to-purple-200 border-purple-400 ring-2 ring-purple-300 ring-offset-1';
       }
       if (isOptimizedReplacement) {
         return 'from-emerald-100 to-green-200 border-emerald-400 ring-2 ring-emerald-300';
+      }
+      // Show warning color if there's a pending suggestion
+      if (hasPendingSuggestion && pendingSuggestion.priority === 'high') {
+        return 'from-red-50 to-rose-100 border-red-300 ring-1 ring-red-200';
       }
       for (const [format, color] of Object.entries(formatColors)) {
         if (cls.class.toLowerCase().includes(format.toLowerCase())) {
@@ -2956,20 +3286,73 @@ function ProScheduler() {
               <Plus className="w-3 h-3" />
             </div>
           )}
-          {isOptimizedReplacement && (
+          {isOptimizedReplacement && !isSmartOptimized && (
             <div className="bg-emerald-600 text-white rounded-full p-1 shadow-md animate-pulse" title={`Optimized: Replaces ${originalClass} (${originalTrainer})\n${optimizationReason}`}>
               <Zap className="w-3 h-3" />
             </div>
           )}
-          {isAIOptimized && !isOptimizedReplacement && (
+          {isSmartOptimized && (
+            <div 
+              className={`text-white rounded-full p-1 shadow-md ${smartPriority === 'high' ? 'bg-gradient-to-r from-orange-500 to-amber-500' : 'bg-gradient-to-r from-cyan-500 to-blue-500'}`} 
+              title={`Smart Optimized (${aiConfidence}% confidence)\n${smartImpact}\n\nData: ${smartDataPoints.join(', ')}`}
+            >
+              <Wand2 className="w-3 h-3" />
+            </div>
+          )}
+          {isAIOptimized && !isOptimizedReplacement && !isSmartOptimized && (
             <div className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-full p-1 shadow-md" title={`AI Optimized (${aiConfidence}% confidence): Replaces ${originalClass}\n${optimizationReason}`}>
               <Sparkles className="w-3 h-3" />
             </div>
           )}
+          {/* Pending Suggestion Indicator */}
+          {hasPendingSuggestion && !isSmartOptimized && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                applySmartSuggestion(pendingSuggestion);
+              }}
+              className={`text-white rounded-full p-1 shadow-md transition-all hover:scale-110 ${
+                pendingSuggestion.priority === 'high' 
+                  ? 'bg-gradient-to-r from-red-500 to-rose-500 animate-pulse' 
+                  : 'bg-gradient-to-r from-amber-500 to-yellow-500'
+              }`}
+              title={`💡 Suggestion: ${pendingSuggestion.reason}\n\nClick to apply:\n→ ${pendingSuggestion.suggested.className} with ${pendingSuggestion.suggested.trainer}\n${pendingSuggestion.impact}`}
+            >
+              <Target className="w-3 h-3" />
+            </button>
+          )}
         </div>
 
+        {/* Smart Optimization Banner - NEW */}
+        {isSmartOptimized && (
+          <div className={`absolute top-0 left-0 right-0 text-white text-[8px] font-bold py-0.5 px-2 flex items-center justify-center gap-1 shadow-sm ${
+            smartPriority === 'high' 
+              ? 'bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600'
+              : 'bg-gradient-to-r from-cyan-500 via-blue-500 to-cyan-600'
+          }`}>
+            <Wand2 className="w-2.5 h-2.5" />
+            <span>SMART OPTIMIZED</span>
+            <span className="opacity-75">|</span>
+            <span className="font-normal opacity-90">{aiConfidence}%</span>
+            <span className="opacity-75">|</span>
+            <span className="font-normal opacity-90 truncate">was: {originalClass}</span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const suggestion = smartOptimizationResult?.suggestions.find(s => s.original.classId === cls.id);
+                if (suggestion) {
+                  applySmartSuggestion(suggestion);
+                }
+              }}
+              className="ml-1 bg-white/20 hover:bg-white/30 rounded px-1 text-[7px]"
+            >
+              Undo
+            </button>
+          </div>
+        )}
+
         {/* AI Optimization Banner */}
-        {isAIOptimized && !isOptimizedReplacement && (
+        {isAIOptimized && !isOptimizedReplacement && !isSmartOptimized && (
           <div className="absolute top-0 left-0 right-0 bg-gradient-to-r from-purple-600 via-violet-600 to-indigo-600 text-white text-[8px] font-bold py-0.5 px-2 flex items-center justify-center gap-1 shadow-sm">
             <Sparkles className="w-2.5 h-2.5" />
             <span>AI OPTIMIZED</span>
@@ -2981,7 +3364,7 @@ function ProScheduler() {
         )}
 
         {/* Optimization Banner - Show when class is optimized replacement */}
-        {isOptimizedReplacement && !isAIOptimized && (
+        {isOptimizedReplacement && !isAIOptimized && !isSmartOptimized && (
           <div className="absolute top-0 left-0 right-0 bg-gradient-to-r from-emerald-600 to-green-600 text-white text-[8px] font-bold py-0.5 px-2 flex items-center justify-center gap-1 shadow-sm">
             <Zap className="w-2.5 h-2.5" />
             <span>OPTIMIZED</span>
@@ -3511,38 +3894,47 @@ function ProScheduler() {
             <div className="text-xs font-bold">Optimize</div>
           </button>
           <button
-            onClick={() => setShowHighPerformingOnly(!showHighPerformingOnly)}
-            disabled={isCalculatingOptimization}
+            onClick={() => {
+              // Use startTransition to mark this as a non-urgent update
+              // This prevents the UI from blocking while heavy computation runs
+              startTransition(() => {
+                setShowHighPerformingOnly(!showHighPerformingOnly);
+              });
+            }}
+            disabled={isCalculatingOptimization || isPending}
             className={`p-3 rounded-xl border transition-all duration-300 ${
-              isCalculatingOptimization
+              isCalculatingOptimization || isPending
                 ? 'bg-gradient-to-br from-gray-400 to-gray-500 text-white border-gray-400/30 cursor-wait'
                 : showHighPerformingOnly
                 ? 'bg-gradient-to-br from-green-600 via-emerald-600 to-green-700 text-white border-green-500/30 shadow-lg scale-105'
                 : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-green-300 hover:bg-white/90 text-slate-700'
             }`}
           >
-            {isCalculatingOptimization ? (
+            {(isCalculatingOptimization || isPending) ? (
               <Loader2 className="w-4 h-4 mx-auto mb-1 animate-spin" />
             ) : (
               <Award className="w-4 h-4 mx-auto mb-1" />
             )}
-            <div className="text-xs font-bold">{isCalculatingOptimization ? 'Loading...' : 'Top Classes'}</div>
+            <div className="text-xs font-bold">{(isCalculatingOptimization || isPending) ? 'Loading...' : 'Top Classes'}</div>
           </button>
           {/* Regenerate button - only visible when Top Classes is active */}
           {showHighPerformingOnly && (
             <button
               onClick={() => {
                 // Generate new random seed for unique iteration
-                setOptimizationSettings(prev => ({
-                  ...prev,
-                  randomizationSeed: Date.now()
-                }));
+                startTransition(() => {
+                  setOptimizationSettings(prev => ({
+                    ...prev,
+                    randomizationSeed: Date.now()
+                  }));
+                });
               }}
-              className="p-3 rounded-xl border transition-all duration-300 bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-500 text-white border-indigo-500/30 shadow-lg hover:scale-105 animate-pulse"
+              disabled={isPending}
+              className={`p-3 rounded-xl border transition-all duration-300 ${isPending ? 'opacity-50 cursor-wait' : ''} bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-500 text-white border-indigo-500/30 shadow-lg hover:scale-105 animate-pulse`}
               title="Generate a new unique schedule iteration"
             >
-              <RefreshCw className="w-4 h-4 mx-auto mb-1" />
-              <div className="text-xs font-bold">Regenerate</div>
+              {isPending ? <Loader2 className="w-4 h-4 mx-auto mb-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mx-auto mb-1" />}
+              <div className="text-xs font-bold">{isPending ? 'Loading...' : 'Regenerate'}</div>
             </button>
           )}
           <button
@@ -3577,493 +3969,494 @@ function ProScheduler() {
             <Settings className="w-4 h-4 mx-auto mb-1" />
             <div className="text-xs font-bold">Rules</div>
           </button>
+          <button
+            onClick={handleSmartOptimization}
+            disabled={isSmartOptimizing}
+            className={`relative p-3 rounded-xl border transition-all duration-300 ${
+              showSmartInsights
+                ? 'bg-gradient-to-br from-violet-600 via-purple-600 to-indigo-600 text-white border-violet-500/30 shadow-lg scale-105'
+                : isSmartOptimizing
+                ? 'bg-violet-100 border-violet-300 text-violet-600'
+                : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-violet-300 hover:bg-violet-50 text-slate-700'
+            }`}
+          >
+            {isSmartOptimizing ? (
+              <Loader2 className="w-4 h-4 mx-auto mb-1 animate-spin" />
+            ) : (
+              <Wand2 className="w-4 h-4 mx-auto mb-1" />
+            )}
+            <div className="text-xs font-bold">Smart AI</div>
+            {smartOptimizationResult && smartOptimizationResult.suggestions.length > 0 && !showSmartInsights && (
+              <span className="absolute -top-1 -right-1 bg-gradient-to-r from-violet-500 to-purple-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-lg">
+                {smartOptimizationResult.suggestions.length}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
-      {/* Top Classes AI Optimization Panel */}
+      {/* Smart AI Insights Floating Panel */}
+      <AnimatePresence>
+        {showSmartInsights && smartOptimizationResult && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
+            className="mb-6 bg-gradient-to-br from-violet-50 via-purple-50 to-indigo-50 rounded-2xl border border-violet-200 shadow-xl overflow-hidden"
+          >
+            <div className="bg-gradient-to-r from-violet-600 via-purple-600 to-indigo-600 px-6 py-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-white/20 rounded-xl">
+                    <Wand2 className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Smart Schedule Intelligence</h2>
+                    <p className="text-white/80 text-sm">AI-powered optimization suggestions</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 bg-white/20 rounded-lg px-3 py-1.5">
+                    <Target className="w-4 h-4 text-white" />
+                    <span className="text-white font-medium text-sm">
+                      {smartOptimizationResult.suggestions.length} suggestions
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 bg-white/20 rounded-lg px-3 py-1.5">
+                    <TrendingUp className="w-4 h-4 text-white" />
+                    <span className="text-white font-medium text-sm">
+                      +{smartOptimizationResult.projectedImpact.avgFillRateIncrease.toFixed(1)}% fill rate
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setShowSmartInsights(false)}
+                    className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                  >
+                    <X className="w-5 h-5 text-white" />
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            <div className="p-6">
+              {/* Key Insights */}
+              <div className="mb-6">
+                <h3 className="text-sm font-semibold text-violet-800 mb-3 flex items-center gap-2">
+                  <Sparkles className="w-4 h-4" />
+                  Key Insights
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {smartOptimizationResult.insights.slice(0, 6).map((insight, idx) => (
+                    <div
+                      key={idx}
+                      className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-violet-100 hover:border-violet-300 transition-all hover:shadow-md"
+                    >
+                      <p className="text-sm text-slate-700">{insight}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Projected Impact */}
+              <div className="bg-white/60 backdrop-blur-sm rounded-xl p-4 border border-violet-100">
+                <h3 className="text-sm font-semibold text-violet-800 mb-3">Projected Impact if All Suggestions Applied</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-emerald-600">
+                      +{smartOptimizationResult.projectedImpact.avgFillRateIncrease.toFixed(1)}%
+                    </div>
+                    <div className="text-xs text-slate-600">Fill Rate</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-blue-600">
+                      +{smartOptimizationResult.projectedImpact.totalCheckInsIncrease}
+                    </div>
+                    <div className="text-xs text-slate-600">Attendance/Week</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-violet-600">
+                      +{smartOptimizationResult.projectedImpact.trainerUtilizationIncrease.toFixed(1)}%
+                    </div>
+                    <div className="text-xs text-slate-600">Trainer Utilization</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-violet-600">
+                      {appliedSmartSuggestions.size}/{smartOptimizationResult.suggestions.length}
+                    </div>
+                    <div className="text-xs text-slate-600">Applied</div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Quick Actions */}
+              <div className="mt-4 flex items-center justify-between">
+                <p className="text-sm text-slate-600">
+                  <span className="font-medium text-violet-700">Tip:</span> Look for purple badges on classes in the calendar to see specific suggestions
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      smartOptimizationResult.suggestions.forEach(s => {
+                        if (!appliedSmartSuggestions.has(s.id)) {
+                          applySmartSuggestion(s);
+                        }
+                      });
+                    }}
+                    className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium shadow-md hover:shadow-lg"
+                  >
+                    <Check className="w-4 h-4" />
+                    Apply All Suggestions
+                  </button>
+                  <button
+                    onClick={() => setAppliedSmartSuggestions(new Set())}
+                    className="flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg transition-all text-sm font-medium border border-slate-200"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Reset All
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* AI Error Alert */}
+      <AnimatePresence>
+        {aiOptimizationError && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="mb-6 bg-gradient-to-r from-red-50 via-rose-50 to-pink-50 rounded-2xl border border-red-200 shadow-lg overflow-hidden"
+          >
+            <div className="bg-gradient-to-r from-red-500 to-rose-500 px-6 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-white" />
+                <h2 className="text-lg font-bold text-white">AI Service Unavailable</h2>
+              </div>
+              <button
+                onClick={() => setAIOptimizationError(null)}
+                className="text-white/80 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-red-100 rounded-xl">
+                  <AlertCircle className="w-8 h-8 text-red-600" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-bold text-red-800 mb-2">
+                    {aiOptimizationError.code === 'API_UNAVAILABLE' && 'API Key Not Configured'}
+                    {aiOptimizationError.code === 'RATE_LIMITED' && 'Rate Limited'}
+                    {aiOptimizationError.code === 'TIMEOUT' && 'Request Timed Out'}
+                    {aiOptimizationError.code === 'INVALID_RESPONSE' && 'Invalid Response'}
+                    {aiOptimizationError.code === 'UNKNOWN' && 'Optimization Failed'}
+                  </h3>
+                  <p className="text-red-700 text-sm mb-4">{aiOptimizationError.message}</p>
+                  <div className="bg-white/60 rounded-lg p-4 border border-red-100">
+                    <h4 className="text-sm font-semibold text-red-800 mb-2">How to fix:</h4>
+                    <ul className="text-sm text-red-700 space-y-1">
+                      {aiOptimizationError.code === 'API_UNAVAILABLE' && (
+                        <>
+                          <li>1. Set <code className="bg-red-100 px-1 rounded">VITE_GOOGLE_AI_API_KEY</code> in your environment</li>
+                          <li>2. Ensure the API key is valid and has access to Gemini API</li>
+                          <li>3. Restart the development server after setting the key</li>
+                        </>
+                      )}
+                      {aiOptimizationError.code === 'RATE_LIMITED' && (
+                        <>
+                          <li>1. Wait a few minutes before trying again</li>
+                          <li>2. Consider upgrading your API quota</li>
+                        </>
+                      )}
+                      {aiOptimizationError.code === 'TIMEOUT' && (
+                        <>
+                          <li>1. Try optimizing individual days instead of the full schedule</li>
+                          <li>2. Check your network connection</li>
+                        </>
+                      )}
+                      {(aiOptimizationError.code === 'INVALID_RESPONSE' || aiOptimizationError.code === 'UNKNOWN') && (
+                        <>
+                          <li>1. Try again - the AI service may be temporarily overloaded</li>
+                          <li>2. If the issue persists, check the console for more details</li>
+                        </>
+                      )}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Top Classes Panel - Shows only top performers based on historic data */}
       {showHighPerformingOnly && (
-        <div className="bg-gradient-to-r from-emerald-50 via-green-50 to-teal-50 rounded-2xl border border-emerald-200 shadow-lg mb-6 overflow-hidden">
-          <div className="bg-gradient-to-r from-emerald-600 to-green-600 px-6 py-3 flex items-center justify-between">
+        <div className="bg-gradient-to-r from-amber-50 via-yellow-50 to-orange-50 rounded-2xl border border-amber-200 shadow-lg mb-6 overflow-hidden">
+          <div className="bg-gradient-to-r from-amber-500 to-orange-500 px-6 py-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Award className="w-5 h-5 text-white" />
-              <h2 className="text-lg font-bold text-white">AI Schedule Optimization</h2>
+              <Star className="w-5 h-5 text-white" />
+              <h2 className="text-lg font-bold text-white">Top Performing Classes</h2>
               <span className="bg-white/20 text-white text-xs px-2 py-1 rounded-full font-medium">
-                {optimizedSchedule?.summary.replacementsFound || 0} optimizations
+                {optimizedSchedule?.summary.highPerforming || 0} classes
               </span>
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setOptimizationSettings(prev => ({ ...prev, randomizationSeed: Date.now() }))}
+                onClick={() => setShowHighPerformingOnly(false)}
                 className="flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium"
               >
-                <RefreshCw className="w-4 h-4" />
-                Generate New Iteration
-              </button>
-              <button
-                onClick={handleAIOptimization}
-                disabled={isAIOptimizing}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${
-                  isAIOptimizing 
-                    ? 'bg-purple-400/50 text-white/70 cursor-not-allowed' 
-                    : 'bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white shadow-lg hover:shadow-xl'
-                }`}
-              >
-                {isAIOptimizing ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Analyzing...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4" />
-                    AI Optimize
-                  </>
-                )}
+                <X className="w-4 h-4" />
+                Close
               </button>
             </div>
           </div>
           
           <div className="p-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-              {/* Strategy Selector */}
-              <div>
-                <label className="block text-sm font-bold text-emerald-800 mb-2">Optimization Strategy</label>
-                <select
-                  value={optimizationSettings.strategy}
-                  onChange={(e) => setOptimizationSettings(prev => ({ 
-                    ...prev, 
-                    strategy: e.target.value as OptimizationStrategy,
-                    randomizationSeed: Date.now() // New seed when strategy changes
-                  }))}
-                  className="w-full p-2.5 border border-emerald-200 rounded-lg bg-white text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-                >
-                  <option value="balanced">⚖️ Balanced (All factors)</option>
-                  <option value="maximize_attendance">📈 Maximize Attendance</option>
-                  <option value="trainer_development">🌱 Trainer Development</option>
-                  <option value="format_diversity">🎨 Format Diversity</option>
-                  <option value="peak_optimization">⏰ Peak Time Focus</option>
-                  <option value="member_retention">❤️ Member Retention</option>
-                </select>
-                <p className="text-xs text-emerald-600 mt-1">
-                  {optimizationSettings.strategy === 'balanced' && 'Equal weight to all optimization factors'}
-                  {optimizationSettings.strategy === 'maximize_attendance' && 'Prioritize high-attendance predictions'}
-                  {optimizationSettings.strategy === 'trainer_development' && 'Focus on developing newer trainers'}
-                  {optimizationSettings.strategy === 'format_diversity' && 'Ensure varied format mix daily'}
-                  {optimizationSettings.strategy === 'peak_optimization' && 'Optimize peak hours (7-9am, 5-8pm)'}
-                  {optimizationSettings.strategy === 'member_retention' && 'Prioritize member preferences'}
-                </p>
+            <p className="text-amber-800 text-sm mb-4">
+              Showing only top-performing classes based on historic fill rate data. These are classes that consistently achieve above 70% fill rate or perform significantly above location average.
+            </p>
+            
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {/* Stats Cards */}
+              <div className="bg-white/70 rounded-xl p-4 border border-amber-100">
+                <div className="text-sm font-bold text-amber-800 mb-1">Total Classes</div>
+                <div className="text-2xl font-bold text-slate-800">{optimizedSchedule?.summary.totalClasses || 0}</div>
               </div>
-              
-              {/* Target Trainer Hours */}
-              <div>
-                <label className="block text-sm font-bold text-emerald-800 mb-2">Target Trainer Hours</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="range"
-                    min="10"
-                    max="18"
-                    value={optimizationSettings.targetTrainerHours}
-                    onChange={(e) => setOptimizationSettings(prev => ({ 
-                      ...prev, 
-                      targetTrainerHours: parseInt(e.target.value)
-                    }))}
-                    className="flex-1 h-2 bg-emerald-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <span className="text-sm font-bold text-emerald-700 w-12 text-center">
-                    {optimizationSettings.targetTrainerHours}hrs
-                  </span>
-                </div>
-                <p className="text-xs text-emerald-600 mt-1">Ideal weekly hours per trainer</p>
+              <div className="bg-white/70 rounded-xl p-4 border border-amber-100">
+                <div className="text-sm font-bold text-amber-800 mb-1">Top Performers</div>
+                <div className="text-2xl font-bold text-emerald-600">{optimizedSchedule?.summary.highPerforming || 0}</div>
               </div>
-              
-              {/* Max Trainer Hours */}
-              <div>
-                <label className="block text-sm font-bold text-emerald-800 mb-2">Max Trainer Hours</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="range"
-                    min="12"
-                    max="20"
-                    value={optimizationSettings.maxTrainerHours}
-                    onChange={(e) => setOptimizationSettings(prev => ({ 
-                      ...prev, 
-                      maxTrainerHours: parseInt(e.target.value)
-                    }))}
-                    className="flex-1 h-2 bg-emerald-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <span className="text-sm font-bold text-emerald-700 w-12 text-center">
-                    {optimizationSettings.maxTrainerHours}hrs
-                  </span>
-                </div>
-                <p className="text-xs text-emerald-600 mt-1">Maximum allowed per trainer</p>
+              <div className="bg-white/70 rounded-xl p-4 border border-amber-100">
+                <div className="text-sm font-bold text-amber-800 mb-1">Underperforming</div>
+                <div className="text-2xl font-bold text-red-500">{optimizedSchedule?.summary.underperforming || 0}</div>
               </div>
-              
-              {/* Quick Stats */}
-              <div className="bg-white/70 rounded-xl p-4 border border-emerald-100">
-                <div className="text-sm font-bold text-emerald-800 mb-2">Optimization Summary</div>
-                <div className="space-y-1.5 text-xs">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Total Classes</span>
-                    <span className="font-bold text-gray-800">{optimizedSchedule?.summary.totalClasses || 0}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">High Performing</span>
-                    <span className="font-bold text-emerald-600">{optimizedSchedule?.summary.highPerforming || 0}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Underperforming</span>
-                    <span className="font-bold text-amber-600">{optimizedSchedule?.summary.underperforming || 0}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Optimized</span>
-                    <span className="font-bold text-green-600">{optimizedSchedule?.summary.replacementsFound || 0}</span>
-                  </div>
+              <div className="bg-white/70 rounded-xl p-4 border border-amber-100">
+                <div className="text-sm font-bold text-amber-800 mb-1">Top Rate</div>
+                <div className="text-2xl font-bold text-amber-600">
+                  {((optimizedSchedule?.summary.highPerforming || 0) / Math.max(optimizedSchedule?.summary.totalClasses || 1, 1) * 100).toFixed(0)}%
                 </div>
               </div>
             </div>
             
-            {/* Advanced Options Toggle */}
-            <details className="mt-4">
-              <summary className="cursor-pointer text-sm font-medium text-emerald-700 hover:text-emerald-800">
-                ⚙️ Advanced Options
-              </summary>
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-white/50 rounded-xl">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={optimizationSettings.minimizeTrainersPerSlot}
-                    onChange={(e) => setOptimizationSettings(prev => ({ 
-                      ...prev, 
-                      minimizeTrainersPerSlot: e.target.checked
-                    }))}
-                    className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <span className="text-gray-700">Minimize trainers per time slot</span>
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={optimizationSettings.avoidMultiLocationDays}
-                    onChange={(e) => setOptimizationSettings(prev => ({ 
-                      ...prev, 
-                      avoidMultiLocationDays: e.target.checked
-                    }))}
-                    className="rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <span className="text-gray-700">Avoid multi-location days</span>
-                </label>
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="text-gray-700">Min days off:</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="3"
-                    value={optimizationSettings.minDaysOff}
-                    onChange={(e) => setOptimizationSettings(prev => ({ 
-                      ...prev, 
-                      minDaysOff: parseInt(e.target.value) || 2
-                    }))}
-                    className="w-16 p-1 border border-emerald-200 rounded text-center"
-                  />
-                </div>
+            {/* Optimization Actions */}
+            <div className="mt-6 flex items-center gap-4 p-4 bg-gradient-to-r from-slate-50 to-slate-100 rounded-xl border border-slate-200">
+              <div className="flex-1">
+                <h3 className="font-bold text-slate-800 mb-1">Want to optimize underperforming classes?</h3>
+                <p className="text-sm text-slate-600">Use the Optimize button to apply rule-based optimizations, or AI Optimize for intelligent suggestions.</p>
               </div>
-            </details>
-            
-            {/* AI Optimization Results Panel */}
-            {showAIResults && aiOptimizationResult && (
-              <div className="mt-6 bg-gradient-to-r from-purple-50 via-indigo-50 to-violet-50 rounded-xl border border-purple-200 overflow-hidden">
-                <div className="bg-gradient-to-r from-purple-600 to-indigo-600 px-5 py-3 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Brain className="w-5 h-5 text-white" />
-                    <h3 className="font-bold text-white">Gemini AI Analysis</h3>
-                    <span className="bg-white/20 text-white text-xs px-2 py-0.5 rounded-full">
-                      {appliedAIReplacements.size} applied to calendar
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        setAppliedAIReplacements(new Set());
-                        setAIOptimizationResult(null);
-                      }}
-                      className="text-white/70 hover:text-white text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded-lg transition-colors"
-                    >
-                      Reset All
-                    </button>
-                    <button
-                      onClick={() => setShowAIResults(false)}
-                      className="text-white/70 hover:text-white transition-colors"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-                
-                <div className="p-5 space-y-5">
-                  {/* Summary Stats */}
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="bg-white/70 rounded-lg p-3 text-center">
-                      <div className="text-2xl font-bold text-purple-700">{aiOptimizationResult.replacements.length}</div>
-                      <div className="text-xs text-gray-600">Optimizations Applied</div>
-                    </div>
-                    <div className="bg-white/70 rounded-lg p-3 text-center">
-                      <div className="text-2xl font-bold text-green-600">
-                        +{Math.round(aiOptimizationResult.replacements.reduce((sum, r) => sum + (r.replacement.projectedFillRate - r.original.fillRate), 0) / Math.max(1, aiOptimizationResult.replacements.length))}%
-                      </div>
-                      <div className="text-xs text-gray-600">Avg Fill Rate Increase</div>
-                    </div>
-                    <div className="bg-white/70 rounded-lg p-3 text-center">
-                      <div className="text-2xl font-bold text-indigo-600">
-                        {Math.round(aiOptimizationResult.replacements.reduce((sum, r) => sum + r.replacement.confidence, 0) / Math.max(1, aiOptimizationResult.replacements.length))}%
-                      </div>
-                      <div className="text-xs text-gray-600">Avg Confidence</div>
-                    </div>
-                  </div>
-
-                  {/* AI Insights */}
-                  {aiOptimizationResult.insights && aiOptimizationResult.insights.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-bold text-purple-800 mb-2 flex items-center gap-2">
-                        <Sparkles className="w-4 h-4" />
-                        AI Insights
-                      </h4>
-                      <div className="space-y-2">
-                        {aiOptimizationResult.insights.map((insight, idx) => (
-                          <div key={idx} className="flex items-start gap-2 text-sm text-purple-700 bg-white/60 rounded-lg p-3">
-                            <span className="text-purple-500">•</span>
-                            <span>{insight}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setIsOptimizationEnabled(true);
+                    setOptimizationSettings(prev => ({ ...prev, randomizationSeed: Date.now() }));
+                  }}
+                  disabled={isOptimizationEnabled}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                    isOptimizationEnabled
+                      ? 'bg-emerald-100 text-emerald-700 border border-emerald-300'
+                      : 'bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 text-white shadow-md'
+                  }`}
+                >
+                  {isOptimizationEnabled ? (
+                    <>
+                      <Check className="w-4 h-4" />
+                      Optimized
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-4 h-4" />
+                      Optimize
+                    </>
                   )}
-                  
-                  {/* Recommendations with Action Buttons */}
-                  {aiOptimizationResult.recommendations && aiOptimizationResult.recommendations.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-bold text-purple-800 mb-2 flex items-center gap-2">
-                        <Activity className="w-4 h-4" />
-                        Recommendations
-                      </h4>
-                      <div className="space-y-3">
-                        {aiOptimizationResult.recommendations.slice(0, 5).map((rec, idx) => (
-                          <div key={idx} className="bg-white/80 rounded-lg p-4 border border-purple-100">
-                            <div className="flex items-start justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                                  rec.type === 'add' ? 'bg-green-100 text-green-700' :
-                                  rec.type === 'remove' ? 'bg-red-100 text-red-700' :
-                                  rec.type === 'swap' ? 'bg-blue-100 text-blue-700' :
-                                  rec.type === 'trainer_change' ? 'bg-purple-100 text-purple-700' :
-                                  'bg-yellow-100 text-yellow-700'
-                                }`}>
-                                  {rec.type.replace('_', ' ').toUpperCase()}
-                                </span>
-                                <span className="font-bold text-purple-800">{rec.title}</span>
-                              </div>
-                              <span className="text-xs bg-purple-100 text-purple-600 px-2 py-0.5 rounded-full">
-                                {rec.confidence}% confidence
-                              </span>
-                            </div>
-                            <p className="text-sm text-gray-600 mb-2">{rec.description}</p>
-                            
-                            {/* Reasoning - data-backed explanation */}
-                            {(rec as any).reasoning && (
-                              <div className="bg-purple-50/50 rounded-lg p-2 mb-2">
-                                <div className="text-xs font-medium text-purple-700 mb-1">💡 Why this works:</div>
-                                <p className="text-xs text-purple-600">{(rec as any).reasoning}</p>
-                              </div>
-                            )}
-                            
-                            {/* Data Points */}
-                            {(rec as any).dataPoints && (rec as any).dataPoints.length > 0 && (
-                              <div className="mb-2">
-                                <div className="text-xs font-medium text-gray-500 mb-1">📊 Supporting Data:</div>
-                                <ul className="text-xs text-gray-600 space-y-0.5">
-                                  {(rec as any).dataPoints.slice(0, 4).map((dp: string, dpIdx: number) => (
-                                    <li key={dpIdx} className="flex items-start gap-1">
-                                      <span className="text-purple-400">•</span>
-                                      <span>{dp}</span>
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-                            
-                            <p className="text-xs text-purple-600 italic mb-3">📈 Expected Impact: {rec.impact}</p>
-                            
-                            {/* Alternatives */}
-                            {rec.alternatives && rec.alternatives.length > 0 && (
-                              <div className="mb-3">
-                                <div className="text-xs text-gray-500 mb-1">Alternative options:</div>
-                                <div className="flex flex-wrap gap-1">
-                                  {rec.alternatives.map((alt, altIdx) => (
-                                    <span key={altIdx} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full hover:bg-purple-100 hover:text-purple-600 cursor-pointer transition-colors">
-                                      {alt}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            
-                            {/* Action Buttons */}
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => {
-                                  if (rec.actionData && applyOptimization) {
-                                    applyOptimization([rec.actionData], []);
-                                    // Show success toast or visual feedback
-                                    const newSet = new Set(appliedAIReplacements);
-                                    // Add a key if we can derive one, or just rely on store update
-                                    setAppliedAIReplacements(newSet);
-                                  } else {
-                                    alert(`Action: ${rec.type} - ${rec.title}\n\nThis recommendation requires manual adjustment.`);
-                                  }
-                                }}
-                                className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-xs font-medium py-2 px-3 rounded-lg transition-colors"
-                              >
-                                Apply Recommendation
-                              </button>
-                              <button
-                                className="bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-medium py-2 px-3 rounded-lg transition-colors"
-                              >
-                                Dismiss
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                </button>
+                <button
+                  onClick={handleAIOptimization}
+                  disabled={isAIOptimizing}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                    isAIOptimizing 
+                      ? 'bg-purple-200 text-purple-600 cursor-not-allowed' 
+                      : 'bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white shadow-md'
+                  }`}
+                >
+                  {isAIOptimizing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Analyzing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      AI Optimize
+                    </>
                   )}
-                  
-                  {/* Format Mix Analysis */}
-                  {aiOptimizationResult.formatMixAnalysis && (
-                    <div>
-                      <h4 className="text-sm font-bold text-purple-800 mb-2 flex items-center gap-2">
-                        <Layers className="w-4 h-4" />
-                        Format Mix Analysis
-                      </h4>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        {Object.entries(aiOptimizationResult.formatMixAnalysis.current).slice(0, 8).map(([format, percentage]) => (
-                          <div key={format} className="bg-white/70 rounded-lg p-3 text-center">
-                            <div className="text-xs text-gray-600 mb-1">{format}</div>
-                            <div className="text-lg font-bold text-purple-700">{percentage}%</div>
-                            <div className="text-xs text-gray-500">
-                              Target: {aiOptimizationResult.formatMixAnalysis.recommended[format] || '—'}%
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      {aiOptimizationResult.formatMixAnalysis.adjustments.length > 0 && (
-                        <div className="mt-3 text-xs text-purple-600 bg-purple-50 rounded-lg p-3">
-                          <strong>Recommended Adjustments:</strong>
-                          <ul className="mt-1 space-y-1">
-                            {aiOptimizationResult.formatMixAnalysis.adjustments.slice(0, 3).map((adj, idx) => (
-                              <li key={idx}>• {adj}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  
-                  {/* Applied Replacements Summary */}
-                  {aiOptimizationResult.replacements.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-bold text-purple-800 mb-2 flex items-center gap-2">
-                        <ArrowRightLeft className="w-4 h-4" />
-                        Applied Class Replacements ({appliedAIReplacements.size})
-                      </h4>
-                      <div className="space-y-2 max-h-48 overflow-y-auto">
-                        {aiOptimizationResult.replacements.map((replacement, idx) => {
-                          const key = `${replacement.original.className}-${replacement.original.trainer}-${replacement.original.day}-${replacement.original.time}-${replacement.original.location}`;
-                          const isApplied = appliedAIReplacements.has(key);
-                          
-                          return (
-                            <div key={idx} className={`rounded-lg p-3 border ${isApplied ? 'bg-purple-50 border-purple-200' : 'bg-white/60 border-gray-200'}`}>
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2 flex-1">
-                                  <span className="text-red-500 line-through text-xs">{replacement.original.className}</span>
-                                  <ArrowRightLeft className="w-3 h-3 text-gray-400" />
-                                  <span className="text-green-600 font-bold text-xs">{replacement.replacement.className}</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                    replacement.replacement.confidence >= 80 ? 'bg-green-100 text-green-700' :
-                                    replacement.replacement.confidence >= 60 ? 'bg-yellow-100 text-yellow-700' :
-                                    'bg-gray-100 text-gray-600'
-                                  }`}>
-                                    {replacement.replacement.confidence}%
-                                  </span>
-                                  {isApplied ? (
-                                    <span className="text-xs bg-purple-600 text-white px-2 py-0.5 rounded-full flex items-center gap-1">
-                                      <Sparkles className="w-2.5 h-2.5" /> Applied
-                                    </span>
-                                  ) : (
-                                    <button
-                                      onClick={() => {
-                                        if (applyOptimization) {
-                                          applyOptimization([{
-                                            original: replacement.original,
-                                            replacement: replacement.replacement
-                                          }], []);
-                                          
-                                          const newSet = new Set(appliedAIReplacements);
-                                          newSet.add(key);
-                                          newSet.add(key.toLowerCase());
-                                          setAppliedAIReplacements(newSet);
-                                        }
-                                      }}
-                                      className="text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 px-2 py-0.5 rounded-full transition-colors"
-                                    >
-                                      Apply
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                              
-                              {/* Details row */}
-                              <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
-                                <span>📍 {replacement.original.location} • {replacement.original.day} {replacement.original.time}</span>
-                                <span className="flex items-center gap-2">
-                                  <span className="text-red-400">{replacement.original.fillRate}% →</span>
-                                  <span className="text-green-600 font-medium">{replacement.replacement.projectedFillRate}%</span>
-                                </span>
-                              </div>
-                              
-                              {/* Trainer change */}
-                              <div className="text-xs text-gray-500 mb-1">
-                                👤 {replacement.original.trainer} → <span className="text-purple-600 font-medium">{replacement.replacement.trainer}</span>
-                              </div>
-                              
-                              {/* Reason */}
-                              <div className="text-xs text-purple-600 bg-purple-50 rounded p-1.5 mt-1">
-                                💡 {replacement.replacement.reason}
-                              </div>
-                              
-                              {/* Data points if available */}
-                              {(replacement.replacement as any).dataPoints && (replacement.replacement as any).dataPoints.length > 0 && (
-                                <div className="mt-1.5 text-xs text-gray-500">
-                                  {(replacement.replacement as any).dataPoints.slice(0, 2).map((dp: string, dpIdx: number) => (
-                                    <div key={dpIdx} className="flex items-start gap-1">
-                                      <span className="text-purple-400">•</span>
-                                      <span>{dp}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                </button>
               </div>
-            )}
+            </div>
           </div>
         </div>
       )}
+
+      {/* AI Optimization Results Panel - Appears after AI Optimize is clicked */}
+      <AnimatePresence>
+        {modularAIResult && modularAIResult.success && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="mb-6 bg-gradient-to-r from-purple-50 via-indigo-50 to-violet-50 rounded-2xl border border-purple-200 shadow-lg overflow-hidden"
+          >
+            <div className="bg-gradient-to-r from-purple-600 to-indigo-600 px-6 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Brain className="w-5 h-5 text-white" />
+                <h2 className="text-lg font-bold text-white">AI Optimization Results</h2>
+                <span className="bg-white/20 text-white text-xs px-2 py-1 rounded-full font-medium">
+                  {modularAIResult.suggestions.length} suggestions
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    // Apply all suggestions
+                    const newApplied = new Set(appliedAIReplacements);
+                    modularAIResult.suggestions.forEach(s => newApplied.add(s.id));
+                    setAppliedAIReplacements(newApplied);
+                  }}
+                  className="flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium"
+                >
+                  <Check className="w-4 h-4" />
+                  Apply All
+                </button>
+                <button
+                  onClick={() => setModularAIResult(null)}
+                  className="text-white/80 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6">
+              {/* Key Insights */}
+              {modularAIResult.insights.length > 0 && (
+                <div className="mb-6">
+                  <h3 className="text-sm font-semibold text-purple-800 mb-3 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4" />
+                    AI Insights
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {modularAIResult.insights.map((insight, idx) => (
+                      <div key={idx} className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-purple-100">
+                        <p className="text-sm text-slate-700">{insight}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Suggestions */}
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {modularAIResult.suggestions.map((suggestion) => {
+                  const isApplied = appliedAIReplacements.has(suggestion.id);
+                  return (
+                    <div
+                      key={suggestion.id}
+                      className={`rounded-xl p-4 border transition-all ${
+                        isApplied
+                          ? 'bg-purple-50 border-purple-300'
+                          : 'bg-white/70 border-slate-200 hover:border-purple-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                              suggestion.type === 'replace_trainer' ? 'bg-blue-100 text-blue-700' :
+                              suggestion.type === 'replace_class' ? 'bg-amber-100 text-amber-700' :
+                              suggestion.type === 'add_class' ? 'bg-green-100 text-green-700' :
+                              suggestion.type === 'remove_class' ? 'bg-red-100 text-red-700' :
+                              'bg-slate-100 text-slate-700'
+                            }`}>
+                              {suggestion.type.replace('_', ' ')}
+                            </span>
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${
+                              suggestion.confidence >= 80 ? 'bg-green-100 text-green-700' :
+                              suggestion.confidence >= 60 ? 'bg-yellow-100 text-yellow-700' :
+                              'bg-slate-100 text-slate-600'
+                            }`}>
+                              {suggestion.confidence}% confidence
+                            </span>
+                          </div>
+                          <p className="text-sm text-slate-700 mb-2">{suggestion.reason}</p>
+                          <div className="text-xs text-slate-500">
+                            {suggestion.original.day} {suggestion.original.time} @ {suggestion.original.location}
+                          </div>
+                          {suggestion.dataPoints.length > 0 && (
+                            <div className="mt-2 text-xs text-purple-600">
+                              {suggestion.dataPoints.slice(0, 2).map((dp, i) => (
+                                <div key={i}>• {dp}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => {
+                            const newApplied = new Set(appliedAIReplacements);
+                            if (isApplied) {
+                              newApplied.delete(suggestion.id);
+                            } else {
+                              newApplied.add(suggestion.id);
+                            }
+                            setAppliedAIReplacements(newApplied);
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                            isApplied
+                              ? 'bg-purple-600 text-white'
+                              : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                          }`}
+                        >
+                          {isApplied ? 'Applied' : 'Apply'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              
+              {/* Projected Impact */}
+              <div className="mt-6 bg-white/60 backdrop-blur-sm rounded-xl p-4 border border-purple-100">
+                <h3 className="text-sm font-semibold text-purple-800 mb-3">Projected Impact</h3>
+                <div className="grid grid-cols-3 gap-4 text-center">
+                  <div>
+                    <div className="text-xl font-bold text-emerald-600">
+                      +{modularAIResult.projectedImpact.fillRateChange.toFixed(1)}%
+                    </div>
+                    <div className="text-xs text-slate-600">Fill Rate</div>
+                  </div>
+                  <div>
+                    <div className="text-xl font-bold text-blue-600">
+                      +{modularAIResult.projectedImpact.attendanceChange}
+                    </div>
+                    <div className="text-xs text-slate-600">Attendance/Week</div>
+                  </div>
+                  <div>
+                    <div className="text-xl font-bold text-purple-600">
+                      {appliedAIReplacements.size}/{modularAIResult.suggestions.length}
+                    </div>
+                    <div className="text-xs text-slate-600">Applied</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* REMOVED: Orphaned panel code cleaned up */}
 
       {/* Advanced Filters Panel */}
       {showAdvancedFilters && (
