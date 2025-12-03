@@ -36,7 +36,8 @@ import {
   Check,
   Target,
   RotateCcw,
-  AlertCircle
+  AlertCircle,
+  Dumbbell
 } from 'lucide-react';
 // aiService used for direct AI calls - keeping for future use
 // import { aiService } from '../services/aiService';
@@ -249,6 +250,13 @@ interface ScheduleClass {
   originalDay?: string;
   originalTime?: string;
   wasMoved?: boolean;
+  // Change tracking for discontinued classes display
+  changeType?: 'discontinued' | 'trainer_change' | 'time_change';
+  // New trainer/time for change display
+  newTrainer?: string;
+  newTime?: string;
+  oldTrainer?: string;
+  oldTime?: string;
   topTrainers: Array<{ 
     name: string; 
     sessions: number; 
@@ -1358,6 +1366,7 @@ function ProScheduler() {
   }, [activeClassesData, rawData, filters.dateFrom, filters.dateTo, filters.activeOnly, editedClasses, createdClasses]);
 
   // Calculate discontinued classes (classes from last week not in active list)
+  // Also includes classes whose trainer or time has changed
   // Helper function to normalize class names (removes minor variations)
   const normalizeClassName = (className: string): string => {
     if (!className) return '';
@@ -1378,6 +1387,12 @@ function ProScheduler() {
   const discontinuedClasses = useMemo(() => {
     const classes: ScheduleClass[] = [];
     
+    // Helper to check if class is hosted (should be excluded)
+    const isHostedClassName = (className: string): boolean => {
+      const lower = className.toLowerCase();
+      return lower.includes('hosted') || lower.includes('host') || lower.includes('guest');
+    };
+    
     // Get date range for last 2-3 weeks
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -1386,43 +1401,115 @@ function ProScheduler() {
     const lastWeekEnd = new Date(today);
     lastWeekEnd.setDate(lastWeekEnd.getDate() - 1);
     
-    // Get unique class combinations from last 2-3 weeks
+    // Get unique class combinations from last 2-3 weeks (EXCLUDE hosted classes)
     const recentSessions = rawData.filter((s: SessionData) => {
       const sessionDate = parseISO(s.Date);
+      // Exclude hosted classes from discontinued tracking
+      if (isHostedClassName(s.Class)) return false;
       return sessionDate >= threeWeeksAgo && sessionDate <= lastWeekEnd;
     });
     
-    // Group by day + time + normalized class + location
+    // Group by day + time + normalized class + location + trainer for change detection
     const recentClassMap = new Map<string, SessionData[]>();
     recentSessions.forEach((s: SessionData) => {
       const normalizedClass = normalizeClassName(s.Class);
-      const key = `${s.Day}_${s.Time?.substring(0, 5)}_${normalizedClass}_${s.Location}`.toLowerCase();
+      // Key includes trainer for detecting trainer changes
+      const key = `${s.Day}_${s.Time?.substring(0, 5)}_${normalizedClass}_${s.Location}_${s.Trainer}`.toLowerCase();
       const existing = recentClassMap.get(key) || [];
       existing.push(s);
       recentClassMap.set(key, existing);
     });
     
+    // Also track classes without trainer for time change detection
+    const recentClassByDayClassLocation = new Map<string, SessionData[]>();
+    recentSessions.forEach((s: SessionData) => {
+      const normalizedClass = normalizeClassName(s.Class);
+      const key = `${s.Day}_${normalizedClass}_${s.Location}`.toLowerCase();
+      const existing = recentClassByDayClassLocation.get(key) || [];
+      existing.push(s);
+      recentClassByDayClassLocation.set(key, existing);
+    });
+    
     // Check each recent class against active classes
     recentClassMap.forEach((sessions, key) => {
-      const [day, time, normalizedClass, location] = key.split('_');
+      const parts = key.split('_');
+      const day = parts[0];
+      const time = parts[1];
+      const normalizedClass = parts[2];
+      const location = parts[3];
+      const trainer = parts[4];
       
-      // Check if this class exists in active classes (with normalized comparison)
-      const isActive = scheduleClasses.some(cls => {
+      // Check if this EXACT class exists in active classes (same day, time, class, location, trainer)
+      const exactMatch = scheduleClasses.find(cls => {
         const normalizedActiveClass = normalizeClassName(cls.class);
         return cls.day.toLowerCase() === day &&
           cls.time === time &&
           normalizedActiveClass === normalizedClass &&
-          cls.location.toLowerCase() === location;
+          cls.location.toLowerCase() === location &&
+          cls.trainer.toLowerCase() === trainer;
       });
       
-      if (!isActive && sessions.length > 0) {
+      // Check if class exists but with different trainer (trainer change)
+      const sameSlotDifferentTrainer = scheduleClasses.find(cls => {
+        const normalizedActiveClass = normalizeClassName(cls.class);
+        return cls.day.toLowerCase() === day &&
+          cls.time === time &&
+          normalizedActiveClass === normalizedClass &&
+          cls.location.toLowerCase() === location &&
+          cls.trainer.toLowerCase() !== trainer;
+      });
+      
+      // Check if class exists but at different time (time change)
+      const sameDayDifferentTime = scheduleClasses.find(cls => {
+        const normalizedActiveClass = normalizeClassName(cls.class);
+        return cls.day.toLowerCase() === day &&
+          cls.time !== time &&
+          normalizedActiveClass === normalizedClass &&
+          cls.location.toLowerCase() === location &&
+          cls.trainer.toLowerCase() === trainer;
+      });
+      
+      // Determine the change type
+      let changeType: 'discontinued' | 'trainer_change' | 'time_change' | null = null;
+      let changeDetails: string = '';
+      let newTrainerName: string | undefined;
+      let newTimeValue: string | undefined;
+      
+      if (!exactMatch) {
+        if (sameSlotDifferentTrainer) {
+          changeType = 'trainer_change';
+          newTrainerName = sameSlotDifferentTrainer.trainer;
+          changeDetails = `👤 Trainer changed: ${sessions[0].Trainer} → ${newTrainerName}`;
+        } else if (sameDayDifferentTime) {
+          changeType = 'time_change';
+          newTimeValue = sameDayDifferentTime.time;
+          changeDetails = `⏰ Time changed: ${time} → ${newTimeValue}`;
+        } else {
+          // Check if class completely removed (not at this location/day at all)
+          const classExistsAnywhere = scheduleClasses.some(cls => {
+            const normalizedActiveClass = normalizeClassName(cls.class);
+            return cls.day.toLowerCase() === day &&
+              normalizedActiveClass === normalizedClass &&
+              cls.location.toLowerCase() === location;
+          });
+          
+          if (!classExistsAnywhere) {
+            changeType = 'discontinued';
+            changeDetails = `❌ Discontinued - Last seen in week of ${format(lastWeekEnd, 'MMM dd')}`;
+          }
+        }
+      }
+      
+      // Only add if there's a change
+      if (changeType && sessions.length > 0) {
         // Get ALL historical sessions for this class (not just recent ones) for accurate metrics
         const allHistoricalSessions = rawData.filter((s: SessionData) => {
           const sNormalizedClass = normalizeClassName(s.Class);
           return s.Day.toLowerCase() === day &&
             s.Time?.substring(0, 5) === time &&
             sNormalizedClass === normalizedClass &&
-            s.Location.toLowerCase() === location;
+            s.Location.toLowerCase() === location &&
+            s.Trainer.toLowerCase() === trainer;
         });
         
         // Calculate metrics using ALL historical data
@@ -1444,21 +1531,17 @@ function ProScheduler() {
         const cancellationRate = totalBooked > 0 ? (totalLateCancelled / totalBooked) * 100 : 0;
         const revenuePerCheckIn = totalCheckIns > 0 ? totalRevenue / totalCheckIns : 0;
         
-        // Get most frequent trainer
-        const trainerCounts = new Map<string, number>();
-        allHistoricalSessions.forEach(s => {
-          const count = trainerCounts.get(s.Trainer) || 0;
-          trainerCounts.set(s.Trainer, count + 1);
-        });
-        const mostFrequentTrainer = Array.from(trainerCounts.entries())
-          .sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown';
+        // Determine status label based on change type
+        const statusLabel = changeType === 'discontinued' ? 'Discontinued' :
+                          changeType === 'trainer_change' ? 'Trainer Changed' :
+                          changeType === 'time_change' ? 'Time Changed' : 'Changed';
         
         classes.push({
           id: `discontinued_${key}`,
           day: day.charAt(0).toUpperCase() + day.slice(1),
           time: time,
           class: sessions[0].Class, // Use original class name from recent session
-          trainer: mostFrequentTrainer,
+          trainer: sessions[0].Trainer, // Use the OLD trainer (before change)
           location: sessions[0].Location,
           capacity: Math.round(totalCapacity / sessionCount),
           avgCheckIns: Math.round(avgCheckIns * 10) / 10,
@@ -1477,7 +1560,7 @@ function ProScheduler() {
           cancellationRate: Math.round(cancellationRate * 10) / 10,
           waitlistRate: totalCapacity > 0 ? Math.round((totalWaitlisted / totalCapacity) * 1000) / 10 : 0,
           revenuePerCheckIn: Math.round(revenuePerCheckIn),
-          status: 'Discontinued',
+          status: statusLabel,
           avgComplimentary: Math.round(totalComplimentary / sessionCount * 10) / 10,
           complimentaryRate: totalCheckIns > 0 ? Math.round((totalComplimentary / totalCheckIns) * 1000) / 10 : 0,
           avgMemberships: Math.round(totalMemberships / sessionCount * 10) / 10,
@@ -1485,18 +1568,228 @@ function ProScheduler() {
           avgIntroOffers: Math.round(totalIntroOffers / sessionCount * 10) / 10,
           avgSingleClasses: Math.round(totalSingleClasses / sessionCount * 10) / 10,
           bookingToCheckInRate: totalBooked > 0 ? (totalCheckIns / totalBooked) * 100 : 0,
-          conflicts: [`❌ Discontinued - Last seen in week of ${format(lastWeekEnd, 'MMM dd')}`],
-          recommendations: [],
+          conflicts: [changeDetails],
+          recommendations: changeType === 'trainer_change' && sameSlotDifferentTrainer ? 
+            [`New trainer: ${sameSlotDifferentTrainer.trainer}`] :
+            changeType === 'time_change' && sameDayDifferentTime ?
+            [`New time: ${sameDayDifferentTime.time}`] : [],
           topTrainers: [],
           consistency: 0,
           trend: 'neutral',
-          isDiscontinued: true
+          isDiscontinued: true,
+          changeType: changeType, // Store change type for UI display
+          // Store old/new values for display
+          oldTrainer: sessions[0].Trainer,
+          newTrainer: newTrainerName,
+          oldTime: time,
+          newTime: newTimeValue
         });
       }
     });
     
     return classes;
   }, [rawData, scheduleClasses]);
+
+  // ========== CONFLICT DETECTION ==========
+  // Detect scheduling conflicts: trainer conflicts, location conflicts, wrong trainers, hour violations
+  const scheduleConflicts = useMemo(() => {
+    const conflicts: Array<{
+      id: string;
+      type: 'trainer_conflict' | 'location_conflict' | 'wrong_trainer' | 'hour_violation';
+      severity: 'high' | 'medium' | 'low';
+      description: string;
+      affectedClasses: ScheduleClass[];
+      trainer?: string;
+      day?: string;
+      time?: string;
+      location?: string;
+      details: string;
+    }> = [];
+    
+    // 1. TRAINER CONFLICTS - Same trainer scheduled at same day/time in different locations
+    const trainerTimeSlots = new Map<string, ScheduleClass[]>();
+    scheduleClasses.forEach(cls => {
+      const key = `${cls.trainer}_${cls.day}_${cls.time}`;
+      const existing = trainerTimeSlots.get(key) || [];
+      existing.push(cls);
+      trainerTimeSlots.set(key, existing);
+    });
+    
+    trainerTimeSlots.forEach((classes, key) => {
+      if (classes.length > 1) {
+        // Same trainer in multiple places at same time
+        const locations = [...new Set(classes.map(c => c.location))];
+        if (locations.length > 1) {
+          const [trainer, day, time] = key.split('_');
+          conflicts.push({
+            id: `trainer_conflict_${key}`,
+            type: 'trainer_conflict',
+            severity: 'high',
+            description: `${trainer} is double-booked`,
+            affectedClasses: classes,
+            trainer,
+            day,
+            time,
+            details: `Trainer "${trainer}" is scheduled at ${time} on ${day} in ${locations.length} locations: ${locations.join(', ')}`
+          });
+        }
+      }
+    });
+    
+    // 2. LOCATION CONFLICTS - Too many parallel classes at same location/time
+    const locationTimeSlots = new Map<string, ScheduleClass[]>();
+    scheduleClasses.forEach(cls => {
+      const key = `${cls.location}_${cls.day}_${cls.time}`;
+      const existing = locationTimeSlots.get(key) || [];
+      existing.push(cls);
+      locationTimeSlots.set(key, existing);
+    });
+    
+    locationTimeSlots.forEach((classes, key) => {
+      const [location] = key.split('_');
+      const maxParallel = optimizationSettings.locationConstraints[location]?.maxParallelClasses || 3;
+      
+      if (classes.length > maxParallel) {
+        const [, day, time] = key.split('_');
+        conflicts.push({
+          id: `location_conflict_${key}`,
+          type: 'location_conflict',
+          severity: 'medium',
+          description: `${location} is overbooked`,
+          affectedClasses: classes,
+          location,
+          day,
+          time,
+          details: `${classes.length} classes scheduled at ${location} at ${time} on ${day} (max allowed: ${maxParallel})`
+        });
+      }
+    });
+    
+    // 3. WRONG TRAINER ASSIGNMENTS - Trainer teaching a format they shouldn't
+    // Check against newTrainers (allowed formats) and formatPriorities (priority trainers)
+    scheduleClasses.forEach(cls => {
+      // Check if trainer has restricted formats
+      const trainerConfig = optimizationSettings.newTrainers.find(
+        t => t.name.toLowerCase() === cls.trainer.toLowerCase()
+      );
+      
+      if (trainerConfig && trainerConfig.allowedFormats && trainerConfig.allowedFormats.length > 0) {
+        // Normalize class name for comparison
+        const classNameLower = cls.class.toLowerCase();
+        const isAllowed = trainerConfig.allowedFormats.some(format => 
+          classNameLower.includes(format.toLowerCase())
+        );
+        
+        if (!isAllowed) {
+          conflicts.push({
+            id: `wrong_trainer_${cls.id}`,
+            type: 'wrong_trainer',
+            severity: 'medium',
+            description: `${cls.trainer} teaching unauthorized format`,
+            affectedClasses: [cls],
+            trainer: cls.trainer,
+            day: cls.day,
+            time: cls.time,
+            location: cls.location,
+            details: `"${cls.trainer}" is assigned to "${cls.class}" but is only allowed to teach: ${trainerConfig.allowedFormats.join(', ')}`
+          });
+        }
+      }
+      
+      // Check if blocked trainers are assigned
+      if (optimizationSettings.blockedTrainers.some(
+        blocked => blocked.toLowerCase() === cls.trainer.toLowerCase()
+      )) {
+        conflicts.push({
+          id: `blocked_trainer_${cls.id}`,
+          type: 'wrong_trainer',
+          severity: 'high',
+          description: `${cls.trainer} is blocked but scheduled`,
+          affectedClasses: [cls],
+          trainer: cls.trainer,
+          day: cls.day,
+          time: cls.time,
+          location: cls.location,
+          details: `"${cls.trainer}" is in the blocked trainers list but is assigned to "${cls.class}" at ${cls.time} on ${cls.day}`
+        });
+      }
+    });
+    
+    // 4. TRAINER HOUR VIOLATIONS - Trainers with more than 15 hours per week
+    const trainerHours = new Map<string, { hours: number; classes: ScheduleClass[] }>();
+    scheduleClasses.forEach(cls => {
+      const existing = trainerHours.get(cls.trainer) || { hours: 0, classes: [] };
+      existing.hours += 1; // Assuming 1 hour per class
+      existing.classes.push(cls);
+      trainerHours.set(cls.trainer, existing);
+    });
+    
+    const maxHours = optimizationSettings.maxTrainerHours || 15;
+    trainerHours.forEach((data, trainer) => {
+      if (data.hours > maxHours) {
+        conflicts.push({
+          id: `hour_violation_${trainer}`,
+          type: 'hour_violation',
+          severity: data.hours > 20 ? 'high' : 'medium',
+          description: `${trainer} exceeds ${maxHours}hr limit`,
+          affectedClasses: data.classes,
+          trainer,
+          details: `"${trainer}" is scheduled for ${data.hours} hours/week (limit: ${maxHours}). Classes: ${data.classes.map(c => `${c.class} (${c.day} ${c.time})`).slice(0, 5).join(', ')}${data.classes.length > 5 ? ` +${data.classes.length - 5} more` : ''}`
+        });
+      }
+    });
+    
+    // 5. TIME RESTRICTIONS - Classes scheduled during blocked hours
+    scheduleClasses.forEach(cls => {
+      const classHour = parseInt(cls.time.split(':')[0]);
+      const classMinutes = parseInt(cls.time.split(':')[1] || '0');
+      const classTime = classHour + classMinutes / 60;
+      
+      // Check noClassesBefore
+      if (optimizationSettings.noClassesBefore) {
+        const [beforeHour, beforeMin] = optimizationSettings.noClassesBefore.split(':').map(Number);
+        const beforeTime = beforeHour + (beforeMin || 0) / 60;
+        if (classTime < beforeTime) {
+          conflicts.push({
+            id: `time_before_${cls.id}`,
+            type: 'wrong_trainer',
+            severity: 'low',
+            description: `Class before allowed time`,
+            affectedClasses: [cls],
+            day: cls.day,
+            time: cls.time,
+            location: cls.location,
+            details: `"${cls.class}" at ${cls.time} is before the allowed start time of ${optimizationSettings.noClassesBefore}`
+          });
+        }
+      }
+      
+      // Check noClassesAfter
+      if (optimizationSettings.noClassesAfter) {
+        const [afterHour, afterMin] = optimizationSettings.noClassesAfter.split(':').map(Number);
+        const afterTime = afterHour + (afterMin || 0) / 60;
+        if (classTime >= afterTime) {
+          conflicts.push({
+            id: `time_after_${cls.id}`,
+            type: 'wrong_trainer',
+            severity: 'low',
+            description: `Class after allowed time`,
+            affectedClasses: [cls],
+            day: cls.day,
+            time: cls.time,
+            location: cls.location,
+            details: `"${cls.class}" at ${cls.time} is after the allowed end time of ${optimizationSettings.noClassesAfter}`
+          });
+        }
+      }
+    });
+    
+    // Sort by severity: high first, then medium, then low
+    return conflicts.sort((a, b) => {
+      const severityOrder = { high: 0, medium: 1, low: 2 };
+      return severityOrder[a.severity] - severityOrder[b.severity];
+    });
+  }, [scheduleClasses, optimizationSettings]);
 
   // Revenue formatter utility (K/L/Cr with 1 decimal)
   const formatRevenue = (amount: number): string => {
@@ -2850,6 +3143,10 @@ function ProScheduler() {
     }
     
     return classesToFilter.filter(cls => {
+      // ALWAYS exclude hosted classes from ALL views
+      const lower = cls.class.toLowerCase();
+      if (lower.includes('hosted') || lower.includes('host') || lower.includes('guest')) return false;
+      
       // Location filter
       if (filters.locations.length > 0 && !filters.locations.includes(cls.location)) return false;
       // Trainer filter - match against both original and replacement trainer
@@ -3206,6 +3503,14 @@ function ProScheduler() {
     const isEdited = editedClasses.has(cls.id);
     const isNewlyCreated = createdClasses.has(cls.id);
     const isDiscontinued = cls.isDiscontinued || false;
+    const changeType = cls.changeType;
+    
+    // Get card style based on change type for discontinued classes - ALL grayed out
+    const getDiscontinuedCardStyle = () => {
+      if (!isDiscontinued) return '';
+      // All discontinued/changed cards are grayed out
+      return 'from-gray-200 to-gray-300 border-gray-400 opacity-60';
+    };
     
     // Native drag handlers
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
@@ -3256,8 +3561,49 @@ function ProScheduler() {
         onMouseEnter={() => setHoveredClassId(cls.id)}
         onMouseLeave={() => setHoveredClassId(null)}
         style={{ userSelect: 'none', WebkitUserSelect: 'none', cursor: isDiscontinued ? 'not-allowed' : 'grab' }}
-        className={`bg-gradient-to-br ${isDiscontinued ? 'from-gray-200 to-gray-300 border-gray-400 opacity-70' : cardColor} border rounded-xl shadow-sm hover:shadow-md overflow-hidden group relative ${isDiscontinued ? 'grayscale' : ''} ${draggedClass?.id === cls.id ? 'opacity-40 scale-95' : ''}`}
+        className={`bg-gradient-to-br ${isDiscontinued ? getDiscontinuedCardStyle() : cardColor} border rounded-xl shadow-sm hover:shadow-md overflow-hidden group relative ${isDiscontinued ? 'grayscale-[70%]' : ''} ${draggedClass?.id === cls.id ? 'opacity-40 scale-95' : ''}`}
       >
+        {/* Discontinued/Changed Banner - Icon only */}
+        {isDiscontinued && (
+          <div 
+            className={`absolute top-0 left-0 right-0 text-white text-[9px] font-bold py-1 px-2 flex items-center justify-center gap-1.5 shadow-sm ${
+              changeType === 'trainer_change' 
+                ? 'bg-gradient-to-r from-purple-600 to-purple-700'
+                : changeType === 'time_change'
+                ? 'bg-gradient-to-r from-amber-600 to-amber-700'
+                : 'bg-gradient-to-r from-gray-600 to-gray-700'
+            }`}
+            title={changeType === 'trainer_change' 
+              ? `Trainer changed: ${cls.oldTrainer || cls.trainer} → ${cls.newTrainer || 'Unknown'}`
+              : changeType === 'time_change'
+              ? `Time changed: ${cls.oldTime || cls.time} → ${cls.newTime || 'Unknown'}`
+              : 'Class discontinued'
+            }
+          >
+            {changeType === 'trainer_change' && (
+              <>
+                <Users className="w-3 h-3" />
+                <span className="truncate max-w-[60px]">{cls.oldTrainer || cls.trainer}</span>
+                <span>→</span>
+                <span className="truncate max-w-[60px] font-bold">{cls.newTrainer}</span>
+              </>
+            )}
+            {changeType === 'time_change' && (
+              <>
+                <Clock className="w-3 h-3" />
+                <span>{cls.oldTime || cls.time}</span>
+                <span>→</span>
+                <span className="font-bold">{cls.newTime}</span>
+              </>
+            )}
+            {(!changeType || changeType === 'discontinued') && (
+              <>
+                <Ban className="w-3 h-3" />
+              </>
+            )}
+          </div>
+        )}
+        
         {/* Status Indicators - Top Right */}
         <div className="absolute top-1.5 right-1.5 flex gap-1 z-10">
           {isEdited && !isDiscontinued && (
@@ -3382,19 +3728,13 @@ function ProScheduler() {
         )}
 
         {/* Collapsed View - Beautiful & Clean with Key Metrics */}
-        <div className={`p-2.5 ${isAIOptimized || isOptimizedReplacement || (cls.wasMoved && cls.originalDay) ? 'pt-5' : ''}`}>
+        <div className={`p-2.5 ${isDiscontinued || isAIOptimized || isOptimizedReplacement || isSmartOptimized || (cls.wasMoved && cls.originalDay) ? 'pt-5' : ''}`}>
           {/* Header with Class Name and Icons */}
           <div className="flex items-center justify-between mb-1.5">
-            <div className="font-bold text-sm text-slate-900 truncate flex-1 mr-2">
+            <div className="font-bold text-sm text-slate-900 flex-1 mr-2 break-words" title={cls.class}>
               {cls.class}
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {isDiscontinued && (
-                <div className="flex items-center gap-1 bg-gray-500 text-white rounded-md px-2 py-1" title="Discontinued Class">
-                  <AlertTriangle className="w-3 h-3" />
-                  <span className="text-[10px] font-bold">Discontinued</span>
-                </div>
-              )}
               {!isDiscontinued && isHighPerformance && (
                 <div className="bg-emerald-500 text-white rounded-full p-0.5" title="High performance">
                   <Star className="w-2.5 h-2.5" />
@@ -3873,13 +4213,23 @@ function ProScheduler() {
           </button>
           <button
             onClick={() => setShowConflictResolver(!showConflictResolver)}
-            className={`p-3 rounded-xl border transition-all duration-300 ${
+            className={`p-3 rounded-xl border transition-all duration-300 relative ${
               showConflictResolver
                 ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white border-blue-500/30 shadow-lg scale-105'
+                : scheduleConflicts.length > 0
+                ? 'bg-gradient-to-br from-red-50 to-rose-100 border-red-300 hover:border-red-400 text-red-700'
                 : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-red-300 hover:bg-white/90 text-slate-700'
             }`}
+            title={scheduleConflicts.length > 0 
+              ? `${scheduleConflicts.filter(c => c.type === 'trainer_conflict').length} Trainer Conflicts\n${scheduleConflicts.filter(c => c.type === 'location_conflict').length} Location Conflicts\n${scheduleConflicts.filter(c => c.type === 'wrong_trainer').length} Wrong Assignments\n${scheduleConflicts.filter(c => c.type === 'hour_violation').length} Hour Violations`
+              : 'No conflicts detected'}
           >
-            <AlertTriangle className="w-4 h-4 mx-auto mb-1" />
+            {scheduleConflicts.length > 0 && !showConflictResolver && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold rounded-full w-5 h-5 flex items-center justify-center animate-pulse">
+                {scheduleConflicts.length}
+              </span>
+            )}
+            <AlertTriangle className={`w-4 h-4 mx-auto mb-1 ${scheduleConflicts.length > 0 && !showConflictResolver ? 'animate-pulse' : ''}`} />
             <div className="text-xs font-bold">Conflicts</div>
           </button>
           <button
@@ -3944,9 +4294,10 @@ function ProScheduler() {
                 ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-800 text-white border-blue-500/30 shadow-lg scale-105'
                 : 'bg-white/70 backdrop-blur-sm border-slate-200 hover:border-gray-400 hover:bg-white/90 text-slate-700'
             }`}
+            title={`Show changed/discontinued classes:\n• ${discontinuedClasses.filter(c => c.changeType === 'discontinued').length} Discontinued\n• ${discontinuedClasses.filter(c => c.changeType === 'trainer_change').length} Trainer Changed\n• ${discontinuedClasses.filter(c => c.changeType === 'time_change').length} Time Changed`}
           >
             <X className="w-4 h-4 mx-auto mb-1" />
-            <div className="text-xs font-bold">Discontinued</div>
+            <div className="text-xs font-bold">Changes</div>
             {discontinuedClasses.length > 0 && (
               <div className="text-[9px] text-center mt-0.5">({discontinuedClasses.length})</div>
             )}
@@ -4458,6 +4809,215 @@ function ProScheduler() {
 
       {/* REMOVED: Orphaned panel code cleaned up */}
 
+      {/* Conflicts Panel */}
+      {showConflictResolver && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-lg mb-6 overflow-hidden">
+          <div className="bg-gradient-to-r from-red-50 via-rose-50 to-orange-50 px-6 py-4 border-b border-red-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-red-100 rounded-lg">
+                  <AlertTriangle className="w-5 h-5 text-red-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Schedule Conflicts</h2>
+                  <p className="text-sm text-gray-500">
+                    {scheduleConflicts.length === 0 
+                      ? '✅ No conflicts detected' 
+                      : `⚠️ ${scheduleConflicts.length} conflict${scheduleConflicts.length > 1 ? 's' : ''} found`}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {/* Conflict type filters */}
+                <div className="flex gap-1 text-xs">
+                  <span className={`px-2 py-1 rounded-full ${scheduleConflicts.filter(c => c.type === 'trainer_conflict').length > 0 ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-400'}`}>
+                    👤 {scheduleConflicts.filter(c => c.type === 'trainer_conflict').length}
+                  </span>
+                  <span className={`px-2 py-1 rounded-full ${scheduleConflicts.filter(c => c.type === 'location_conflict').length > 0 ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-400'}`}>
+                    📍 {scheduleConflicts.filter(c => c.type === 'location_conflict').length}
+                  </span>
+                  <span className={`px-2 py-1 rounded-full ${scheduleConflicts.filter(c => c.type === 'wrong_trainer').length > 0 ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-400'}`}>
+                    ❌ {scheduleConflicts.filter(c => c.type === 'wrong_trainer').length}
+                  </span>
+                  <span className={`px-2 py-1 rounded-full ${scheduleConflicts.filter(c => c.type === 'hour_violation').length > 0 ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-400'}`}>
+                    ⏰ {scheduleConflicts.filter(c => c.type === 'hour_violation').length}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setShowConflictResolver(false)}
+                  className="p-2 hover:bg-red-100 rounded-lg transition-colors"
+                >
+                  <X className="w-4 h-4 text-gray-500" />
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <div className="p-4 max-h-[500px] overflow-y-auto">
+            {scheduleConflicts.length === 0 ? (
+              <div className="text-center py-12">
+                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Check className="w-8 h-8 text-green-600" />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">All Clear!</h3>
+                <p className="text-gray-500">No scheduling conflicts detected in your current schedule.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {/* Legend */}
+                <div className="flex flex-wrap gap-3 p-3 bg-gray-50 rounded-lg text-xs mb-4">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-full bg-red-500"></span>
+                    <span className="text-gray-600">Trainer Double-Booked</span>
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-full bg-orange-500"></span>
+                    <span className="text-gray-600">Location Overbooked</span>
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-full bg-purple-500"></span>
+                    <span className="text-gray-600">Wrong Assignment</span>
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-full bg-amber-500"></span>
+                    <span className="text-gray-600">Hour Limit Exceeded</span>
+                  </span>
+                </div>
+                
+                {scheduleConflicts.map((conflict) => (
+                  <div
+                    key={conflict.id}
+                    className={`p-4 rounded-xl border-l-4 ${
+                      conflict.type === 'trainer_conflict' 
+                        ? 'bg-red-50 border-red-500' 
+                        : conflict.type === 'location_conflict'
+                        ? 'bg-orange-50 border-orange-500'
+                        : conflict.type === 'wrong_trainer'
+                        ? 'bg-purple-50 border-purple-500'
+                        : 'bg-amber-50 border-amber-500'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          {/* Icon based on type */}
+                          {conflict.type === 'trainer_conflict' && (
+                            <span className="p-1.5 bg-red-100 rounded-lg">
+                              <Users className="w-4 h-4 text-red-600" />
+                            </span>
+                          )}
+                          {conflict.type === 'location_conflict' && (
+                            <span className="p-1.5 bg-orange-100 rounded-lg">
+                              <MapPin className="w-4 h-4 text-orange-600" />
+                            </span>
+                          )}
+                          {conflict.type === 'wrong_trainer' && (
+                            <span className="p-1.5 bg-purple-100 rounded-lg">
+                              <AlertTriangle className="w-4 h-4 text-purple-600" />
+                            </span>
+                          )}
+                          {conflict.type === 'hour_violation' && (
+                            <span className="p-1.5 bg-amber-100 rounded-lg">
+                              <Clock className="w-4 h-4 text-amber-600" />
+                            </span>
+                          )}
+                          
+                          <div>
+                            <span className={`text-sm font-semibold ${
+                              conflict.severity === 'high' ? 'text-red-800' :
+                              conflict.severity === 'medium' ? 'text-orange-800' : 'text-gray-800'
+                            }`}>
+                              {conflict.description}
+                            </span>
+                            <span className={`ml-2 text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                              conflict.severity === 'high' ? 'bg-red-200 text-red-700' :
+                              conflict.severity === 'medium' ? 'bg-orange-200 text-orange-700' : 'bg-gray-200 text-gray-700'
+                            }`}>
+                              {conflict.severity.toUpperCase()}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        <p className="text-sm text-gray-600 mb-3">{conflict.details}</p>
+                        
+                        {/* Affected Classes */}
+                        <div className="flex flex-wrap gap-2">
+                          {conflict.affectedClasses.slice(0, 5).map((cls, idx) => (
+                            <button
+                              key={idx}
+                              onClick={() => {
+                                setSelectedClass(cls);
+                                setShowDrilldown(true);
+                              }}
+                              className="text-xs px-2 py-1 bg-white rounded-lg border border-gray-200 hover:border-gray-400 hover:bg-gray-50 transition-colors flex items-center gap-1"
+                            >
+                              <span className="font-medium">{cls.class}</span>
+                              <span className="text-gray-400">•</span>
+                              <span className="text-gray-500">{cls.day} {cls.time}</span>
+                            </button>
+                          ))}
+                          {conflict.affectedClasses.length > 5 && (
+                            <span className="text-xs px-2 py-1 bg-gray-100 rounded-lg text-gray-500">
+                              +{conflict.affectedClasses.length - 5} more
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {/* Quick Actions */}
+                      <div className="flex flex-col gap-1">
+                        {conflict.type === 'trainer_conflict' && conflict.affectedClasses.length > 0 && (
+                          <button
+                            onClick={() => {
+                              setSelectedClass(conflict.affectedClasses[0]);
+                              setIsEditing(true);
+                              setShowDrilldown(true);
+                            }}
+                            className="text-xs px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                          >
+                            Resolve
+                          </button>
+                        )}
+                        {conflict.type === 'hour_violation' && conflict.trainer && (
+                          <button
+                            onClick={() => {
+                              // Filter to show only this trainer's classes
+                              setFilters(prev => ({
+                                ...prev,
+                                trainers: [conflict.trainer!]
+                              }));
+                            }}
+                            className="text-xs px-3 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                          >
+                            View Classes
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          
+          {/* Summary Footer */}
+          {scheduleConflicts.length > 0 && (
+            <div className="px-6 py-4 bg-gradient-to-r from-gray-50 to-slate-50 border-t border-gray-200">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-600">
+                  <span className="font-semibold text-red-600">{scheduleConflicts.filter(c => c.severity === 'high').length}</span> high priority • 
+                  <span className="font-semibold text-orange-600 ml-1">{scheduleConflicts.filter(c => c.severity === 'medium').length}</span> medium • 
+                  <span className="font-semibold text-gray-600 ml-1">{scheduleConflicts.filter(c => c.severity === 'low').length}</span> low
+                </div>
+                <div className="text-xs text-gray-500">
+                  Click on a class to edit and resolve conflicts
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Advanced Filters Panel */}
       {showAdvancedFilters && (
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm mb-6">
@@ -4691,127 +5251,251 @@ function ProScheduler() {
         </div>
       )}
 
-      {/* Trainer Analytics Panel */}
+      {/* Trainer Analytics Panel - Enhanced Design */}
       {showTrainerAnalytics && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-lg mb-6">
-          <div className="bg-gradient-to-r from-slate-50 to-slate-100 px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="bg-slate-700 p-2 rounded-lg">
-                <Users className="w-5 h-5 text-white" />
+        <div className="bg-gradient-to-br from-white via-slate-50 to-blue-50/30 rounded-3xl border border-slate-200/80 shadow-xl mb-6 overflow-hidden">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-600 px-8 py-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="bg-white/20 backdrop-blur-sm p-3 rounded-xl">
+                  <Users className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-white">Trainer Analytics</h2>
+                  <p className="text-blue-100 text-sm">Complete performance breakdown by location & format</p>
+                </div>
               </div>
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">Trainer Analytics</h2>
-                <p className="text-slate-600 text-xs">Performance metrics and schedule breakdown</p>
+              <div className="flex items-center gap-4">
+                <div className="bg-white/10 backdrop-blur-sm px-5 py-3 rounded-xl border border-white/20">
+                  <div className="text-3xl font-bold text-white">{Object.keys(trainerAnalytics).length}</div>
+                  <div className="text-xs uppercase tracking-wider text-blue-100">Active Trainers</div>
+                </div>
               </div>
-            </div>
-            <div className="bg-slate-700 text-white px-4 py-2 rounded-lg">
-              <div className="text-xl font-bold">{Object.keys(trainerAnalytics).length}</div>
-              <div className="text-[10px] uppercase tracking-wide opacity-80">Trainers</div>
             </div>
           </div>
+          
           <div className="p-8">
-            <div className="space-y-8">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               {Object.entries(trainerAnalytics).map(([trainerName, analytics]) => {
-                const workloadColors = {
-                  Light: 'bg-slate-100 text-slate-700',
-                  Medium: 'bg-slate-200 text-slate-800',
-                  Heavy: 'bg-slate-300 text-slate-900',
-                  Overloaded: 'bg-slate-400 text-white'
+                const workloadConfig = {
+                  Light: { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-200', icon: '✓' },
+                  Medium: { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-200', icon: '●' },
+                  Heavy: { bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-200', icon: '▲' },
+                  Overloaded: { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-200', icon: '!' }
                 };
+                const workloadStyle = workloadConfig[analytics.workload];
                 
-                // Calculate location/day breakdown (exclude discontinued classes)
+                // Calculate location/day/format breakdown (exclude discontinued classes)
                 const trainerClasses = filteredClasses.filter(c => c.trainer === trainerName && !c.isDiscontinued);
-                const locationDayMap = new Map<string, Map<string, number>>();
+                
+                // Group by location with formats and day info
+                const locationData = new Map<string, {
+                  dayMap: Map<string, number>;
+                  formats: Map<string, { count: number; avgFill: number; totalCheckins: number; totalCapacity: number }>;
+                  totalClasses: number;
+                }>();
                 
                 trainerClasses.forEach(cls => {
-                  if (!locationDayMap.has(cls.location)) {
-                    locationDayMap.set(cls.location, new Map());
+                  if (!locationData.has(cls.location)) {
+                    locationData.set(cls.location, {
+                      dayMap: new Map(),
+                      formats: new Map(),
+                      totalClasses: 0
+                    });
                   }
-                  const dayMap = locationDayMap.get(cls.location)!;
-                  dayMap.set(cls.day, (dayMap.get(cls.day) || 0) + 1);
+                  const locData = locationData.get(cls.location)!;
+                  locData.totalClasses += 1;
+                  
+                  // Track days
+                  locData.dayMap.set(cls.day, (locData.dayMap.get(cls.day) || 0) + 1);
+                  
+                  // Track formats with metrics
+                  const formatName = cls.class || 'Unknown';
+                  if (!locData.formats.has(formatName)) {
+                    locData.formats.set(formatName, { count: 0, avgFill: 0, totalCheckins: 0, totalCapacity: 0 });
+                  }
+                  const formatData = locData.formats.get(formatName)!;
+                  formatData.count += 1;
+                  formatData.totalCheckins += cls.totalCheckIns || 0;
+                  formatData.totalCapacity += cls.capacity || 0;
                 });
                 
+                // Calculate avg fill for each format
+                locationData.forEach(locData => {
+                  locData.formats.forEach(formatData => {
+                    formatData.avgFill = formatData.totalCapacity > 0 
+                      ? Math.round((formatData.totalCheckins / formatData.totalCapacity) * 100) 
+                      : 0;
+                  });
+                });
+                
+                // Format colors for badges
+                const formatColors = [
+                  'bg-violet-100 text-violet-700 border-violet-200',
+                  'bg-cyan-100 text-cyan-700 border-cyan-200',
+                  'bg-rose-100 text-rose-700 border-rose-200',
+                  'bg-amber-100 text-amber-700 border-amber-200',
+                  'bg-emerald-100 text-emerald-700 border-emerald-200',
+                  'bg-indigo-100 text-indigo-700 border-indigo-200',
+                  'bg-pink-100 text-pink-700 border-pink-200',
+                  'bg-teal-100 text-teal-700 border-teal-200',
+                ];
+                
                 return (
-                  <div key={trainerName} className="bg-gradient-to-br from-white via-gray-50/50 to-blue-50/30 rounded-2xl p-6 border-2 border-gray-200 shadow-lg hover:shadow-2xl hover:border-green-300 transition-all duration-300 transform hover:-translate-y-1">
-                    {/* Header */}
-                    <div className="flex items-center justify-between mb-5 pb-5 border-b-2 border-gray-200">
-                      <div className="flex items-center gap-3">
-                        {(() => {
-                          const img = findTrainerImage(trainerName);
-                          const pct = Math.min((analytics.totalHours / 15) * 100, 100);
-                          const color = getWorkloadColor(analytics.totalHours);
-                          return (
-                            <div className="flex items-center gap-3">
-                              <div className="self-start">
-                                <CircularAvatar percent={pct} color={color} size={56} stroke={4} imgSrc={img} initials={trainerName.split(' ').map(n=>n[0]).join('').substring(0,2).toUpperCase()} />
+                  <div key={trainerName} className="bg-white rounded-2xl border border-slate-200 shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden">
+                    {/* Trainer Header Card */}
+                    <div className="bg-gradient-to-r from-slate-800 via-slate-700 to-slate-800 p-5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          {(() => {
+                            const img = findTrainerImage(trainerName);
+                            const pct = Math.min((analytics.totalHours / 15) * 100, 100);
+                            const color = getWorkloadColor(analytics.totalHours);
+                            return (
+                              <div className="relative">
+                                <CircularAvatar percent={pct} color={color} size={64} stroke={5} imgSrc={img} initials={trainerName.split(' ').map(n=>n[0]).join('').substring(0,2).toUpperCase()} />
                               </div>
-                              <div>
-                                <div className="font-bold text-gray-900 text-lg">{trainerName}</div>
-                                <div className="text-xs text-gray-500">{analytics.totalClasses} classes • {analytics.totalHours}h/week</div>
-                              </div>
-                            </div>
-                          );
-                        })()}
-                      </div>
-                      <span className={`px-3 py-1.5 text-sm font-bold rounded-full ${workloadColors[analytics.workload]}`}>
-                        {analytics.workload}
-                      </span>
-                    </div>
-                    
-                    {/* Quick Stats */}
-                    <div className="grid grid-cols-4 gap-3 mb-4">
-                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                        <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Avg Fill</div>
-                        <div className="text-xl font-bold text-slate-900">{Math.round(analytics.avgFillRate)}%</div>
-                      </div>
-                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                        <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Revenue</div>
-                        <div className="text-base font-bold text-slate-900">₹{Math.round(analytics.totalRevenue/100).toLocaleString()}</div>
-                      </div>
-                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                        <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Locations</div>
-                        <div className="text-xl font-bold text-slate-900">{analytics.locations.length}</div>
-                      </div>
-                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                        <div className="text-[10px] text-slate-500 font-semibold mb-1 uppercase tracking-wide">Formats</div>
-                        <div className="text-xl font-bold text-slate-900">{analytics.classTypes.length}</div>
-                      </div>
-                    </div>
-                    
-                    {/* Location/Day Breakdown */}
-                    <div className="mt-4">
-                      <div className="text-xs font-semibold text-slate-600 mb-3 flex items-center gap-2 px-1 uppercase tracking-wide">
-                        <MapPin className="w-4 h-4 text-slate-500" />
-                        Weekly Schedule
-                      </div>
-                      <div className="space-y-4">
-                        {Array.from(locationDayMap.entries()).map(([location, dayMap]) => (
-                          <div key={location} className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                            <div className="font-medium text-xs text-slate-700 mb-2">
-                              {location}
-                            </div>
-                            <div className="grid grid-cols-7 gap-1.5">
-                              {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(fullDay => {
-                                const count = dayMap.get(fullDay) || 0;
-                                const shortDay = fullDay.substring(0, 1);
-                                return (
-                                  <div
-                                    key={fullDay}
-                                    className={`text-center rounded py-1.5 text-[11px] font-semibold transition-colors ${
-                                      count > 0
-                                        ? 'bg-slate-700 text-white'
-                                        : 'bg-slate-200 text-slate-400'
-                                    }`}
-                                    title={`${fullDay}: ${count} class${count !== 1 ? 'es' : ''}`}
-                                  >
-                                    <div>{shortDay}</div>
-                                    {count > 0 && <div className="text-[9px] mt-0.5 opacity-90">{count}</div>}
-                                  </div>
-                                );
-                              })}
+                            );
+                          })()}
+                          <div>
+                            <div className="font-bold text-white text-lg">{trainerName}</div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-slate-300 text-sm">{analytics.totalClasses} classes</span>
+                              <span className="text-slate-500">•</span>
+                              <span className={`text-sm font-semibold ${analytics.totalHours > 15 ? 'text-red-400' : analytics.totalHours >= 12 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                {analytics.totalHours}h/week
+                              </span>
                             </div>
                           </div>
-                        ))}
+                        </div>
+                        <div className={`px-4 py-2 rounded-lg border ${workloadStyle.bg} ${workloadStyle.text} ${workloadStyle.border}`}>
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">{workloadStyle.icon}</span>
+                            <span className="font-bold text-sm">{analytics.workload}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="p-5">
+                      {/* Performance Metrics Row */}
+                      <div className="grid grid-cols-4 gap-2 mb-5">
+                        <div className="bg-gradient-to-br from-emerald-50 to-emerald-100/50 rounded-xl p-3 border border-emerald-200/50">
+                          <div className="text-[10px] text-emerald-600 font-semibold uppercase tracking-wide">Fill Rate</div>
+                          <div className="text-2xl font-bold text-emerald-700">{Math.round(analytics.avgFillRate)}%</div>
+                        </div>
+                        <div className="bg-gradient-to-br from-blue-50 to-blue-100/50 rounded-xl p-3 border border-blue-200/50">
+                          <div className="text-[10px] text-blue-600 font-semibold uppercase tracking-wide">Revenue</div>
+                          <div className="text-lg font-bold text-blue-700">₹{Math.round(analytics.totalRevenue/100).toLocaleString()}</div>
+                        </div>
+                        <div className="bg-gradient-to-br from-violet-50 to-violet-100/50 rounded-xl p-3 border border-violet-200/50">
+                          <div className="text-[10px] text-violet-600 font-semibold uppercase tracking-wide">Locations</div>
+                          <div className="text-2xl font-bold text-violet-700">{analytics.locations.length}</div>
+                        </div>
+                        <div className="bg-gradient-to-br from-amber-50 to-amber-100/50 rounded-xl p-3 border border-amber-200/50">
+                          <div className="text-[10px] text-amber-600 font-semibold uppercase tracking-wide">Formats</div>
+                          <div className="text-2xl font-bold text-amber-700">{analytics.classTypes.length}</div>
+                        </div>
+                      </div>
+                      
+                      {/* All Formats Summary */}
+                      <div className="mb-5">
+                        <div className="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide flex items-center gap-2">
+                          <Dumbbell className="w-3.5 h-3.5" />
+                          All Formats Taught
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {analytics.classTypes.map((format, idx) => (
+                            <span 
+                              key={format} 
+                              className={`px-2.5 py-1 rounded-full text-xs font-medium border ${formatColors[idx % formatColors.length]}`}
+                            >
+                              {format}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      {/* Location Breakdown with Formats */}
+                      <div>
+                        <div className="text-xs font-semibold text-slate-500 mb-3 uppercase tracking-wide flex items-center gap-2">
+                          <MapPin className="w-3.5 h-3.5" />
+                          Schedule by Location
+                        </div>
+                        <div className="space-y-3">
+                          {Array.from(locationData.entries()).map(([location, locData], locIdx) => (
+                            <div key={location} className="bg-gradient-to-r from-slate-50 to-slate-100/50 rounded-xl border border-slate-200 overflow-hidden">
+                              {/* Location Header */}
+                              <div className="bg-slate-100 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <div className={`w-2.5 h-2.5 rounded-full ${['bg-blue-500', 'bg-emerald-500', 'bg-violet-500', 'bg-amber-500'][locIdx % 4]}`}></div>
+                                  <span className="font-semibold text-slate-800 text-sm">{location}</span>
+                                </div>
+                                <span className="text-xs text-slate-500 bg-white px-2 py-0.5 rounded-full border border-slate-200">
+                                  {locData.totalClasses} classes
+                                </span>
+                              </div>
+                              
+                              <div className="p-4">
+                                {/* Weekly Grid */}
+                                <div className="mb-4">
+                                  <div className="text-[10px] text-slate-400 font-medium mb-1.5 uppercase">Weekly Schedule</div>
+                                  <div className="grid grid-cols-7 gap-1">
+                                    {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((shortDay, dayIdx) => {
+                                      const fullDay = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][dayIdx];
+                                      const count = locData.dayMap.get(fullDay) || 0;
+                                      return (
+                                        <div
+                                          key={fullDay}
+                                          className={`text-center rounded-lg py-2 text-[10px] font-semibold transition-all ${
+                                            count > 0
+                                              ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-sm'
+                                              : 'bg-slate-100 text-slate-400'
+                                          }`}
+                                          title={`${fullDay}: ${count} class${count !== 1 ? 'es' : ''}`}
+                                        >
+                                          <div>{shortDay}</div>
+                                          {count > 0 && <div className="text-[10px] font-bold mt-0.5">{count}</div>}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                                
+                                {/* Formats at this location */}
+                                <div>
+                                  <div className="text-[10px] text-slate-400 font-medium mb-2 uppercase">Formats at this location</div>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    {Array.from(locData.formats.entries())
+                                      .sort((a, b) => b[1].count - a[1].count)
+                                      .map(([formatName, formatData], fIdx) => (
+                                      <div 
+                                        key={formatName} 
+                                        className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-slate-200 hover:border-blue-300 hover:shadow-sm transition-all"
+                                      >
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <div className={`w-1.5 h-6 rounded-full ${['bg-violet-500', 'bg-cyan-500', 'bg-rose-500', 'bg-amber-500', 'bg-emerald-500'][fIdx % 5]}`}></div>
+                                          <span className="text-xs font-medium text-slate-700 truncate">{formatName}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 flex-shrink-0">
+                                          <span className="text-[10px] text-slate-400">{formatData.count}×</span>
+                                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                            formatData.avgFill >= 75 ? 'bg-emerald-100 text-emerald-700' :
+                                            formatData.avgFill >= 50 ? 'bg-amber-100 text-amber-700' :
+                                            'bg-red-100 text-red-700'
+                                          }`}>
+                                            {formatData.avgFill}%
+                                          </span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -7593,25 +8277,106 @@ function ProScheduler() {
                   <select
                     value={addModalData.className}
                     onChange={(e) => setAddModalData({...addModalData, className: e.target.value})}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                   >
                     <option value="">Select class type...</option>
-                    {uniqueClasses.map(className => {
-                      const classStats = rawData.filter(s => s.Class === className);
-                      const avgFill = classStats.length > 0 ? 
-                        classStats.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / classStats.length * 100 : 0;
-                      return (
-                        <option key={className} value={className}>
-                          {className} ({Math.round(avgFill)}% avg fill)
+                    {(() => {
+                      const slotDay = selectedTimeSlot.day;
+                      const slotTime = selectedTimeSlot.time;
+                      const slotLocation = addModalData.location;
+                      
+                      return uniqueClasses.map(className => {
+                        const allSessions = rawData.filter(s => s.Class === className);
+                        const overallAvgFill = allSessions.length > 0 ? 
+                          allSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / allSessions.length * 100 : 0;
+                        const overallAvgAttendance = allSessions.length > 0 ?
+                          allSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / allSessions.length : 0;
+                        
+                        // Stats at this time slot
+                        const slotSessions = rawData.filter(s => 
+                          s.Class === className && 
+                          s.Day?.toLowerCase() === slotDay?.toLowerCase() &&
+                          s.Time?.substring(0, 5) === slotTime
+                        );
+                        const slotAvgFill = slotSessions.length > 0
+                          ? slotSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / slotSessions.length * 100
+                          : null;
+                        
+                        // Stats at selected location (if any)
+                        const locationSessions = slotLocation ? rawData.filter(s => 
+                          s.Class === className && 
+                          s.Location?.toLowerCase() === slotLocation?.toLowerCase()
+                        ) : [];
+                        const locationAvgFill = locationSessions.length > 0
+                          ? locationSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / locationSessions.length * 100
+                          : null;
+                        
+                        return {
+                          name: className,
+                          overallAvgFill,
+                          overallAvgAttendance,
+                          slotAvgFill,
+                          locationAvgFill,
+                          slotSessions: slotSessions.length
+                        };
+                      })
+                      .sort((a, b) => {
+                        if (a.slotSessions > 0 && b.slotSessions === 0) return -1;
+                        if (b.slotSessions > 0 && a.slotSessions === 0) return 1;
+                        if (a.slotAvgFill !== null && b.slotAvgFill !== null) return b.slotAvgFill - a.slotAvgFill;
+                        return b.overallAvgFill - a.overallAvgFill;
+                      })
+                      .map(c => (
+                        <option key={c.name} value={c.name}>
+                          {c.name} • {c.overallAvgFill.toFixed(0)}% fill • {c.overallAvgAttendance.toFixed(1)} avg
+                          {c.slotAvgFill !== null ? ` • ${c.slotAvgFill.toFixed(0)}% at ${slotDay} ${slotTime}` : ''}
                         </option>
-                      );
-                    })}
+                      ));
+                    })()}
                   </select>
-                  {addModalData.className && (
-                    <div className="text-xs text-gray-600 mt-1">
-                      💡 This class type averages {Math.round(rawData.filter(s => s.Class === addModalData.className).reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / rawData.filter(s => s.Class === addModalData.className).length * 100)}% fill rate
-                    </div>
-                  )}
+                  {addModalData.className && (() => {
+                    const className = addModalData.className;
+                    const slotSessions = rawData.filter(s => 
+                      s.Class === className && 
+                      s.Day?.toLowerCase() === selectedTimeSlot.day?.toLowerCase() &&
+                      s.Time?.substring(0, 5) === selectedTimeSlot.time
+                    );
+                    const locationSessions = addModalData.location ? rawData.filter(s => 
+                      s.Class === className && 
+                      s.Location?.toLowerCase() === addModalData.location?.toLowerCase()
+                    ) : [];
+                    const allSessions = rawData.filter(s => s.Class === className);
+                    
+                    return (
+                      <div className="mt-2 p-2 bg-blue-50 rounded-lg border border-blue-200 text-xs space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-blue-600">📊 Overall:</span>
+                          <span className="font-semibold text-blue-800">
+                            {(allSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / allSessions.length).toFixed(1)} avg • {(allSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / allSessions.length * 100).toFixed(0)}% fill
+                          </span>
+                        </div>
+                        {slotSessions.length > 0 && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-blue-600">⏰ At {selectedTimeSlot.day} {selectedTimeSlot.time}:</span>
+                            <span className="font-semibold text-emerald-700">
+                              {(slotSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / slotSessions.length).toFixed(1)} avg • {(slotSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / slotSessions.length * 100).toFixed(0)}% fill
+                            </span>
+                          </div>
+                        )}
+                        {locationSessions.length > 0 && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-blue-600">📍 At {addModalData.location}:</span>
+                            <span className="font-semibold text-violet-700">
+                              {(locationSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / locationSessions.length).toFixed(1)} avg • {(locationSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / locationSessions.length * 100).toFixed(0)}% fill
+                            </span>
+                          </div>
+                        )}
+                        {slotSessions.length === 0 && (
+                          <div className="text-amber-600">💡 No history at this time slot - consider proven formats</div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 
                 <div>
@@ -7619,39 +8384,135 @@ function ProScheduler() {
                   <select
                     value={addModalData.trainer}
                     onChange={(e) => setAddModalData({...addModalData, trainer: e.target.value})}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                   >
                     <option value="">Select trainer...</option>
-                    {uniqueTrainers.map(trainer => {
-                      const analytics = trainerAnalytics[trainer];
-                      const workloadIcon = {
-                        Light: '🟢',
-                        Medium: '🟡', 
-                        Heavy: '🟠',
-                        Overloaded: '🔴'
-                      }[analytics?.workload || 'Light'];
-                      return (
-                        <option key={trainer} value={trainer}>
-                          {trainer} {workloadIcon} ({analytics?.totalHours || 0}h/week)
+                    {(() => {
+                      const slotDay = selectedTimeSlot.day;
+                      const slotTime = selectedTimeSlot.time;
+                      const slotLocation = addModalData.location;
+                      
+                      return uniqueTrainers.map(trainer => {
+                        // Weekly scheduled classes
+                        const weeklyClasses = scheduleClasses.filter(c => c.trainer === trainer && !c.isDiscontinued).length;
+                        const analytics = trainerAnalytics[trainer];
+                        
+                        // Overall stats
+                        const allSessions = rawData.filter(s => s.Trainer === trainer);
+                        const overallAvgFill = allSessions.length > 0
+                          ? allSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / allSessions.length * 100
+                          : 0;
+                        
+                        // Stats at this time slot
+                        const slotSessions = rawData.filter(s => 
+                          s.Trainer === trainer && 
+                          s.Day?.toLowerCase() === slotDay?.toLowerCase() &&
+                          s.Time?.substring(0, 5) === slotTime
+                        );
+                        const slotAvgFill = slotSessions.length > 0
+                          ? slotSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / slotSessions.length * 100
+                          : null;
+                        const slotAvgAttendance = slotSessions.length > 0
+                          ? slotSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / slotSessions.length
+                          : null;
+                        
+                        // Stats at selected location
+                        const locationSessions = slotLocation ? rawData.filter(s => 
+                          s.Trainer === trainer && 
+                          s.Location?.toLowerCase() === slotLocation?.toLowerCase()
+                        ) : [];
+                        const locationAvgFill = locationSessions.length > 0
+                          ? locationSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / locationSessions.length * 100
+                          : null;
+                        
+                        const workloadIcon = {
+                          Light: '🟢',
+                          Medium: '🟡', 
+                          Heavy: '🟠',
+                          Overloaded: '🔴'
+                        }[analytics?.workload || 'Light'];
+                        
+                        return {
+                          name: trainer,
+                          weeklyClasses,
+                          overallAvgFill,
+                          slotAvgFill,
+                          slotAvgAttendance,
+                          locationAvgFill,
+                          slotSessions: slotSessions.length,
+                          workload: analytics?.workload || 'Light',
+                          workloadIcon,
+                          totalHours: analytics?.totalHours || 0
+                        };
+                      })
+                      .sort((a, b) => {
+                        // Prioritize trainers with slot experience
+                        if (a.slotSessions > 0 && b.slotSessions === 0) return -1;
+                        if (b.slotSessions > 0 && a.slotSessions === 0) return 1;
+                        if (a.slotAvgFill !== null && b.slotAvgFill !== null) return b.slotAvgFill - a.slotAvgFill;
+                        return b.overallAvgFill - a.overallAvgFill;
+                      })
+                      .map(t => (
+                        <option key={t.name} value={t.name}>
+                          {t.workloadIcon} {t.name} • {t.weeklyClasses} cls/wk • {t.overallAvgFill.toFixed(0)}% fill
+                          {t.slotAvgFill !== null ? ` • ${t.slotAvgFill.toFixed(0)}% at ${slotDay} ${slotTime}` : ''}
                         </option>
-                      );
-                    })}
+                      ));
+                    })()}
                   </select>
-                  {addModalData.trainer && trainerAnalytics[addModalData.trainer] && (
-                    <div className="text-xs mt-1">
-                      <span className={`px-2 py-1 rounded-full text-xs ${
-                        trainerAnalytics[addModalData.trainer].workload === 'Overloaded' ? 'bg-red-100 text-red-800' :
-                        trainerAnalytics[addModalData.trainer].workload === 'Heavy' ? 'bg-orange-100 text-orange-800' :
-                        trainerAnalytics[addModalData.trainer].workload === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-green-100 text-green-800'
-                      }`}>
-                        {trainerAnalytics[addModalData.trainer].workload} workload
-                      </span>
-                      <span className="ml-2 text-gray-600">
-                        Avg fill: {Math.round(trainerAnalytics[addModalData.trainer].avgFillRate)}%
-                      </span>
-                    </div>
-                  )}
+                  {addModalData.trainer && (() => {
+                    const trainer = addModalData.trainer;
+                    const analytics = trainerAnalytics[trainer];
+                    const weeklyClasses = scheduleClasses.filter(c => c.trainer === trainer && !c.isDiscontinued).length;
+                    const slotSessions = rawData.filter(s => 
+                      s.Trainer === trainer && 
+                      s.Day?.toLowerCase() === selectedTimeSlot.day?.toLowerCase() &&
+                      s.Time?.substring(0, 5) === selectedTimeSlot.time
+                    );
+                    const locationSessions = addModalData.location ? rawData.filter(s => 
+                      s.Trainer === trainer && 
+                      s.Location?.toLowerCase() === addModalData.location?.toLowerCase()
+                    ) : [];
+                    
+                    return (
+                      <div className="mt-2 p-2 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-600">📅 Weekly Schedule:</span>
+                          <span className="font-semibold text-slate-800">{weeklyClasses} classes ({analytics?.totalHours || 0}h)</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-600">📈 Workload:</span>
+                          <span className={`font-semibold px-2 py-0.5 rounded-full text-xs ${
+                            analytics?.workload === 'Overloaded' ? 'bg-red-100 text-red-800' :
+                            analytics?.workload === 'Heavy' ? 'bg-orange-100 text-orange-800' :
+                            analytics?.workload === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-green-100 text-green-800'
+                          }`}>
+                            {analytics?.workload || 'Light'}
+                          </span>
+                        </div>
+                        {slotSessions.length > 0 && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-600">⏰ At {selectedTimeSlot.day} {selectedTimeSlot.time}:</span>
+                            <span className="font-semibold text-blue-700">
+                              {(slotSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / slotSessions.length).toFixed(1)} avg • {(slotSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / slotSessions.length * 100).toFixed(0)}% fill
+                            </span>
+                          </div>
+                        )}
+                        {locationSessions.length > 0 && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-600">📍 At {addModalData.location}:</span>
+                            <span className="font-semibold text-green-700">
+                              {(locationSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / locationSessions.length).toFixed(1)} avg • {(locationSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / locationSessions.length * 100).toFixed(0)}% fill
+                            </span>
+                          </div>
+                        )}
+                        {slotSessions.length === 0 && locationSessions.length === 0 && (
+                          <div className="text-amber-600">⚠️ No history at this slot/location</div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 
                 <div>
@@ -7950,67 +8811,255 @@ function ProScheduler() {
             </div>
             
             <div className="space-y-4">
-              {/* Class Name with Analytics */}
+              {/* Class Name with Contextual Analytics */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Class Name</label>
                 <select
                   value={editingClass.class}
                   onChange={(e) => setEditingClass({ ...editingClass, class: e.target.value })}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                 >
                   {(() => {
-                    // Calculate analytics for each class type
-                    const classOptions = [...new Set(rawData.map(s => s.Class))].map(className => {
-                      const classSessions = rawData.filter(s => s.Class === className);
-                      const avgFillRate = classSessions.length > 0 
-                        ? classSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / classSessions.length * 100
+                    // Calculate contextual analytics for each class type
+                    const slotDay = editingClass.day;
+                    const slotTime = editingClass.time;
+                    const slotLocation = editingClass.location;
+                    
+                    const classOptions = [...new Set(rawData.map(s => s.Class))].filter(Boolean).map(className => {
+                      // Overall class stats
+                      const allClassSessions = rawData.filter(s => s.Class === className);
+                      const overallAvgFill = allClassSessions.length > 0 
+                        ? allClassSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / allClassSessions.length * 100
                         : 0;
-                      const avgRevenue = classSessions.length > 0
-                        ? classSessions.reduce((sum, s) => sum + (s.Revenue || 0), 0) / classSessions.length
+                      const overallAvgAttendance = allClassSessions.length > 0
+                        ? allClassSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / allClassSessions.length
                         : 0;
-                      return { name: className, avgFillRate, avgRevenue, sessionCount: classSessions.length };
+                      
+                      // Stats at this time slot (same day + time)
+                      const slotSessions = rawData.filter(s => 
+                        s.Class === className && 
+                        s.Day?.toLowerCase() === slotDay?.toLowerCase() &&
+                        s.Time?.substring(0, 5) === slotTime
+                      );
+                      const slotAvgFill = slotSessions.length > 0
+                        ? slotSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / slotSessions.length * 100
+                        : null;
+                      const slotAvgAttendance = slotSessions.length > 0
+                        ? slotSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / slotSessions.length
+                        : null;
+                      
+                      // Stats at this location
+                      const locationSessions = rawData.filter(s => 
+                        s.Class === className && 
+                        s.Location?.toLowerCase() === slotLocation?.toLowerCase()
+                      );
+                      const locationAvgFill = locationSessions.length > 0
+                        ? locationSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / locationSessions.length * 100
+                        : null;
+                      
+                      return { 
+                        name: className, 
+                        overallAvgFill,
+                        overallAvgAttendance,
+                        slotAvgFill,
+                        slotAvgAttendance,
+                        locationAvgFill,
+                        slotSessions: slotSessions.length,
+                        locationSessions: locationSessions.length,
+                        totalSessions: allClassSessions.length
+                      };
                     });
                     
+                    // Sort: has slot experience → slot fill → overall fill
                     return classOptions
-                      .sort((a, b) => b.avgFillRate - a.avgFillRate)
-                      .map(({ name, avgFillRate, avgRevenue, sessionCount }) => (
-                        <option key={name} value={name}>
-                          {name} ({avgFillRate.toFixed(0)}% fill • {formatCurrency(avgRevenue)} avg • {sessionCount} sessions)
+                      .sort((a, b) => {
+                        if (a.slotSessions > 0 && b.slotSessions === 0) return -1;
+                        if (b.slotSessions > 0 && a.slotSessions === 0) return 1;
+                        if (a.slotAvgFill !== null && b.slotAvgFill !== null) {
+                          return b.slotAvgFill - a.slotAvgFill;
+                        }
+                        return b.overallAvgFill - a.overallAvgFill;
+                      })
+                      .map(c => (
+                        <option key={c.name} value={c.name}>
+                          {c.name} • {c.overallAvgFill.toFixed(0)}% fill • {c.overallAvgAttendance.toFixed(1)} avg
+                          {c.slotAvgFill !== null ? ` • ${c.slotAvgFill.toFixed(0)}% at slot` : ''}
                         </option>
                       ));
                   })()}
                 </select>
+                {/* Show detailed class metrics below dropdown */}
+                {editingClass.class && (() => {
+                  const className = editingClass.class;
+                  const slotSessions = rawData.filter(s => 
+                    s.Class === className && 
+                    s.Day?.toLowerCase() === editingClass.day?.toLowerCase() &&
+                    s.Time?.substring(0, 5) === editingClass.time
+                  );
+                  const locationSessions = rawData.filter(s => 
+                    s.Class === className && 
+                    s.Location?.toLowerCase() === editingClass.location?.toLowerCase()
+                  );
+                  const allSessions = rawData.filter(s => s.Class === className);
+                  
+                  return (
+                    <div className="mt-2 p-2 bg-blue-50 rounded-lg border border-blue-200 text-xs space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-blue-600">📊 Overall:</span>
+                        <span className="font-semibold text-blue-800">
+                          {(allSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / allSessions.length).toFixed(1)} avg • {(allSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / allSessions.length * 100).toFixed(0)}% fill
+                        </span>
+                      </div>
+                      {slotSessions.length > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-blue-600">⏰ At {editingClass.day} {editingClass.time}:</span>
+                          <span className="font-semibold text-emerald-700">
+                            {(slotSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / slotSessions.length).toFixed(1)} avg • {(slotSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / slotSessions.length * 100).toFixed(0)}% fill ({slotSessions.length} sessions)
+                          </span>
+                        </div>
+                      )}
+                      {locationSessions.length > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-blue-600">📍 At {editingClass.location}:</span>
+                          <span className="font-semibold text-violet-700">
+                            {(locationSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / locationSessions.length).toFixed(1)} avg • {(locationSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / locationSessions.length * 100).toFixed(0)}% fill
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
               
-              {/* Trainer with Analytics */}
+              {/* Trainer with Contextual Analytics */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Trainer</label>
                 <select
                   value={editingClass.trainer}
                   onChange={(e) => setEditingClass({ ...editingClass, trainer: e.target.value })}
-                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                 >
                   {(() => {
-                    // Calculate analytics for each trainer
-                    const trainerOptions = [...new Set(rawData.map(s => s.Trainer))].map(trainer => {
-                      const trainerSessions = rawData.filter(s => s.Trainer === trainer);
-                      const avgFillRate = trainerSessions.length > 0
-                        ? trainerSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / trainerSessions.length * 100
+                    // Calculate contextual analytics for each trainer
+                    // Context: editing class's day, time, location
+                    const slotDay = editingClass.day;
+                    const slotTime = editingClass.time;
+                    const slotLocation = editingClass.location;
+                    
+                    const trainerOptions = [...new Set(rawData.map(s => s.Trainer))].filter(Boolean).map(trainer => {
+                      // Overall trainer stats
+                      const allTrainerSessions = rawData.filter(s => s.Trainer === trainer);
+                      const overallAvgFill = allTrainerSessions.length > 0
+                        ? allTrainerSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / allTrainerSessions.length * 100
                         : 0;
-                      const totalClasses = trainerSessions.length;
-                      const workload = totalClasses >= 25 ? 'Overloaded' : totalClasses >= 20 ? 'Heavy' : totalClasses >= 15 ? 'Medium' : 'Light';
-                      return { name: trainer, avgFillRate, sessionCount: totalClasses, workload };
+                      
+                      // Weekly scheduled classes (from active schedule)
+                      const weeklyClasses = scheduleClasses.filter(c => c.trainer === trainer && !c.isDiscontinued).length;
+                      
+                      // Stats for THIS specific time slot (same day + time)
+                      const slotSessions = rawData.filter(s => 
+                        s.Trainer === trainer && 
+                        s.Day?.toLowerCase() === slotDay?.toLowerCase() &&
+                        s.Time?.substring(0, 5) === slotTime
+                      );
+                      const slotAvgFill = slotSessions.length > 0
+                        ? slotSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / slotSessions.length * 100
+                        : null;
+                      const slotAvgAttendance = slotSessions.length > 0
+                        ? slotSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / slotSessions.length
+                        : null;
+                      
+                      // Stats for THIS location
+                      const locationSessions = rawData.filter(s => 
+                        s.Trainer === trainer && 
+                        s.Location?.toLowerCase() === slotLocation?.toLowerCase()
+                      );
+                      const locationAvgFill = locationSessions.length > 0
+                        ? locationSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / locationSessions.length * 100
+                        : null;
+                      
+                      // Workload category
+                      const workload = weeklyClasses >= 20 ? 'Overloaded' : weeklyClasses >= 15 ? 'Heavy' : weeklyClasses >= 10 ? 'Medium' : 'Light';
+                      const workloadIcon = { Light: '🟢', Medium: '🟡', Heavy: '🟠', Overloaded: '🔴' }[workload];
+                      
+                      return { 
+                        name: trainer, 
+                        overallAvgFill,
+                        weeklyClasses,
+                        slotAvgFill,
+                        slotAvgAttendance,
+                        locationAvgFill,
+                        slotSessions: slotSessions.length,
+                        locationSessions: locationSessions.length,
+                        workload,
+                        workloadIcon
+                      };
                     });
                     
+                    // Sort by: has slot experience → slot fill rate → overall fill rate
                     return trainerOptions
-                      .sort((a, b) => b.avgFillRate - a.avgFillRate)
-                      .map(({ name, avgFillRate, sessionCount, workload }) => (
-                        <option key={name} value={name}>
-                          {name} ({avgFillRate.toFixed(0)}% fill • {sessionCount} classes • {workload})
+                      .sort((a, b) => {
+                        // Prioritize trainers with experience at this slot
+                        if (a.slotSessions > 0 && b.slotSessions === 0) return -1;
+                        if (b.slotSessions > 0 && a.slotSessions === 0) return 1;
+                        // Then by slot fill rate
+                        if (a.slotAvgFill !== null && b.slotAvgFill !== null) {
+                          return b.slotAvgFill - a.slotAvgFill;
+                        }
+                        // Finally by overall fill rate
+                        return b.overallAvgFill - a.overallAvgFill;
+                      })
+                      .map(t => (
+                        <option key={t.name} value={t.name}>
+                          {t.workloadIcon} {t.name} • {t.weeklyClasses} cls/wk • {t.overallAvgFill.toFixed(0)}% fill
+                          {t.slotAvgFill !== null ? ` • ${t.slotAvgFill.toFixed(0)}% at ${slotDay} ${slotTime}` : ''}
+                          {t.locationAvgFill !== null && t.slotAvgFill === null ? ` • ${t.locationAvgFill.toFixed(0)}% at ${slotLocation}` : ''}
                         </option>
                       ));
                   })()}
                 </select>
+                {/* Show detailed trainer metrics below dropdown */}
+                {editingClass.trainer && (() => {
+                  const trainer = editingClass.trainer;
+                  const weeklyClasses = scheduleClasses.filter(c => c.trainer === trainer && !c.isDiscontinued).length;
+                  const slotSessions = rawData.filter(s => 
+                    s.Trainer === trainer && 
+                    s.Day?.toLowerCase() === editingClass.day?.toLowerCase() &&
+                    s.Time?.substring(0, 5) === editingClass.time
+                  );
+                  const locationSessions = rawData.filter(s => 
+                    s.Trainer === trainer && 
+                    s.Location?.toLowerCase() === editingClass.location?.toLowerCase()
+                  );
+                  
+                  return (
+                    <div className="mt-2 p-2 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-600">📅 Weekly Schedule:</span>
+                        <span className="font-semibold text-slate-800">{weeklyClasses} classes</span>
+                      </div>
+                      {slotSessions.length > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-600">⏰ At {editingClass.day} {editingClass.time}:</span>
+                          <span className="font-semibold text-blue-700">
+                            {(slotSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / slotSessions.length).toFixed(1)} avg • {(slotSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / slotSessions.length * 100).toFixed(0)}% fill
+                          </span>
+                        </div>
+                      )}
+                      {locationSessions.length > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-600">📍 At {editingClass.location}:</span>
+                          <span className="font-semibold text-green-700">
+                            {(locationSessions.reduce((sum, s) => sum + (s.CheckedIn || 0), 0) / locationSessions.length).toFixed(1)} avg • {(locationSessions.reduce((sum, s) => sum + ((s.CheckedIn || 0) / (s.Capacity || 1)), 0) / locationSessions.length * 100).toFixed(0)}% fill
+                          </span>
+                        </div>
+                      )}
+                      {slotSessions.length === 0 && locationSessions.length === 0 && (
+                        <div className="text-amber-600">⚠️ No history at this slot/location</div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
               
               {/* Location with Analytics */}
